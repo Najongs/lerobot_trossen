@@ -1,4 +1,5 @@
 import logging
+import math
 import threading
 import time
 from typing import Any
@@ -17,6 +18,31 @@ logger = logging.getLogger(__name__)
 # This is used for passive recording of base movement
 _base_velocity_lock = threading.Lock()
 _latest_base_velocity = {"x.vel": 0.0, "theta.vel": 0.0}
+
+# Sanity bounds for base velocity readings. The SLATE base maxes out at 1.0 m/s
+# linear; these limits are generous but far below the garbage magnitudes (~1e28)
+# produced when trossen_slate returns uninitialized/stale serial buffer bytes
+# reinterpreted as float.
+_MAX_BASE_LINEAR_VEL = 5.0  # m/s
+_MAX_BASE_ANGULAR_VEL = 10.0  # rad/s
+
+
+def _sanitize_base_velocity(x_vel: float, theta_vel: float) -> tuple[float, float]:
+    """Replace non-finite or out-of-range base velocities with 0.0.
+
+    Guards against corrupted readings from ``TrossenSlate.get_vel()`` (notably the
+    first read of an episode), which would otherwise poison dataset stats and bake
+    NaN into the policy normalizer.
+    """
+    if not math.isfinite(x_vel) or abs(x_vel) > _MAX_BASE_LINEAR_VEL:
+        logger.warning(f"Discarding invalid base x.vel reading: {x_vel!r} -> 0.0")
+        x_vel = 0.0
+    if not math.isfinite(theta_vel) or abs(theta_vel) > _MAX_BASE_ANGULAR_VEL:
+        logger.warning(
+            f"Discarding invalid base theta.vel reading: {theta_vel!r} -> 0.0"
+        )
+        theta_vel = 0.0
+    return x_vel, theta_vel
 
 
 def get_latest_base_velocity() -> dict[str, float]:
@@ -113,14 +139,21 @@ class MobileAIRobot(Robot):
         arms_obs = self.arms.get_observation()
         obs_dict.update(arms_obs)
 
-        # Get base observations
+        # Get base observations. Refresh the cached chassis state first so get_vel()
+        # does not return a stale/uninitialized buffer (the cause of garbage base
+        # velocities on the first frame of an episode), then sanity-check the result.
+        if not self.base.update_state():
+            logger.warning(
+                "Failed to refresh Mobile AI base state; using last cached velocity."
+            )
         base_obs = self.base.get_vel()
-        obs_dict.update({"x.vel": base_obs[0], "theta.vel": base_obs[1]})
+        x_vel, theta_vel = _sanitize_base_velocity(base_obs[0], base_obs[1])
+        obs_dict.update({"x.vel": x_vel, "theta.vel": theta_vel})
 
         # Update shared state
         with _base_velocity_lock:
-            _latest_base_velocity["x.vel"] = base_obs[0]
-            _latest_base_velocity["theta.vel"] = base_obs[1]
+            _latest_base_velocity["x.vel"] = x_vel
+            _latest_base_velocity["theta.vel"] = theta_vel
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
