@@ -94,8 +94,9 @@ class MobileAIRobot(Robot):
     @property
     def observation_features(self) -> dict[str, type | tuple]:
         # Arm features (flag-aware: .pos plus optional .vel/.eff/.ext_eff) come from the bimanual
-        # arms, plus the mobile base velocity and the shared cameras.
-        return {**self.arms.observation_features, **self._base_ft, **self._cameras_ft}
+        # arms, plus the mobile base velocity (optional) and the shared cameras.
+        base_ft = self._base_ft if self.config.include_base_in_state else {}
+        return {**self.arms.observation_features, **base_ft, **self._cameras_ft}
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -148,12 +149,18 @@ class MobileAIRobot(Robot):
             )
         base_obs = self.base.get_vel()
         x_vel, theta_vel = _sanitize_base_velocity(base_obs[0], base_obs[1])
-        obs_dict.update({"x.vel": x_vel, "theta.vel": theta_vel})
 
-        # Update shared state
+        # Update shared state (always, so the teleoperator can passively record base
+        # movement even when base velocity is excluded from the observation).
         with _base_velocity_lock:
             _latest_base_velocity["x.vel"] = x_vel
             _latest_base_velocity["theta.vel"] = theta_vel
+
+        # Expose base velocity as an observation feature only when configured. The
+        # _nobasestate policies expect a 14-dim observation.state (arms only); adding
+        # base here would make it 16-dim and break the policy normalizer.
+        if self.config.include_base_in_state:
+            obs_dict.update({"x.vel": x_vel, "theta.vel": theta_vel})
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
