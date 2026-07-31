@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import threading
 import time
 from typing import Any
@@ -48,6 +49,93 @@ def _sanitize_base_velocity(x_vel: float, theta_vel: float) -> tuple[float, floa
 def get_latest_base_velocity() -> dict[str, float]:
     with _base_velocity_lock:
         return _latest_base_velocity.copy()
+
+
+# Control-loop rate meter. send_action() runs exactly once per record/eval loop
+# iteration, and the base velocity command set there is held until the *next*
+# send_action(), so the wall-clock interval between consecutive calls is exactly
+# the integration window that turns a base velocity command into rotation. A loop
+# running at 15 Hz instead of the target 30 Hz therefore doubles every base
+# rotation (the "~2x over-rotation" symptom). lerobot 0.4.0's record loop does
+# NOT warn on slowdown -- busy_wait() with a negative argument just returns -- so
+# we surface the real rate here instead.
+#
+# Opt-in diagnostic: set LEROBOT_LOOP_HZ_LOG=1 to enable. Off by default so normal
+# operation has no extra logging and no accumulation overhead.
+_LOOP_HZ_LOG_ENABLED = os.getenv("LEROBOT_LOOP_HZ_LOG", "").strip().lower() not in (
+    "",
+    "0",
+    "false",
+    "no",
+)
+_LOOP_HZ_WINDOW = 30  # frames per summary line (~1 s at 30 fps)
+_LOOP_HZ_RESET_GAP_S = 1.0  # gaps longer than this (episode reset) are not counted
+# "sec" accumulates per-loop-section wall time (seconds) over the window so the
+# summary can pinpoint *where* a slow loop spends its time (arms read/write vs
+# base I/O vs camera reads) in a single run, instead of black-box camera-drop trials.
+_loop_hz_meter = {"prev_t": None, "count": 0, "sum_dt": 0.0, "max_dt": 0.0, "sec": {}}
+
+
+def _add_loop_section(name: str, seconds: float) -> None:
+    """Accumulate wall time for a named loop section (see _record_loop_tick)."""
+    if not _LOOP_HZ_LOG_ENABLED:
+        return
+    sec = _loop_hz_meter["sec"]
+    sec[name] = sec.get(name, 0.0) + seconds
+
+
+def _reset_loop_window() -> None:
+    _loop_hz_meter["count"] = 0
+    _loop_hz_meter["sum_dt"] = 0.0
+    _loop_hz_meter["max_dt"] = 0.0
+    _loop_hz_meter["sec"] = {}
+
+
+def _record_loop_tick() -> None:
+    """Measure and periodically log the real control-loop rate.
+
+    Called once per iteration from ``send_action``. Emits a summary every
+    ``_LOOP_HZ_WINDOW`` frames with the mean and min instantaneous Hz over the
+    window, plus the mean time spent in each instrumented section. ``target_fps /
+    mean_hz`` is the base over-rotation multiplier: a mean near the target fps
+    rules the loop-slowdown hypothesis out, a mean near half confirms it. The
+    section breakdown (arms/base/cameras) says which I/O is the bottleneck.
+    """
+    if not _LOOP_HZ_LOG_ENABLED:
+        return
+    m = _loop_hz_meter
+    now = time.perf_counter()
+    prev = m["prev_t"]
+    m["prev_t"] = now
+    if prev is None:
+        return
+    dt = now - prev
+    if dt > _LOOP_HZ_RESET_GAP_S:
+        # Episode boundary / reset pause: drop the partial window so a long idle
+        # gap does not masquerade as a slow loop.
+        _reset_loop_window()
+        return
+    m["count"] += 1
+    m["sum_dt"] += dt
+    m["max_dt"] = max(m["max_dt"], dt)
+    if m["count"] >= _LOOP_HZ_WINDOW:
+        mean_hz = m["count"] / m["sum_dt"]
+        min_hz = 1.0 / m["max_dt"]
+        sections = "  ".join(
+            f"{name}={m['sec'][name] / m['count'] * 1e3:.0f}ms"
+            for name in sorted(m["sec"])
+        )
+        # "other" = loop time not inside any instrumented section (policy
+        # select_action/preprocessing, dataset.add_frame, processors, busy_wait).
+        other_s = m["sum_dt"] - sum(m["sec"].values())
+        other = f"other={other_s / m['count'] * 1e3:.0f}ms"
+        logger.info(
+            f"Control loop rate over last {m['count']} frames: "
+            f"mean={mean_hz:.1f} Hz, min={min_hz:.1f} Hz "
+            f"(target_fps / mean_hz = base over-rotation multiplier)"
+            + (f" | per-frame: {sections}  {other}" if sections else "")
+        )
+        _reset_loop_window()
 
 
 class MobileAIRobot(Robot):
@@ -137,17 +225,21 @@ class MobileAIRobot(Robot):
         obs_dict = {}
 
         # Get arm observations
+        _t = time.perf_counter()
         arms_obs = self.arms.get_observation()
+        _add_loop_section("arms_read", time.perf_counter() - _t)
         obs_dict.update(arms_obs)
 
         # Get base observations. Refresh the cached chassis state first so get_vel()
         # does not return a stale/uninitialized buffer (the cause of garbage base
         # velocities on the first frame of an episode), then sanity-check the result.
+        _t = time.perf_counter()
         if not self.base.update_state():
             logger.warning(
                 "Failed to refresh Mobile AI base state; using last cached velocity."
             )
         base_obs = self.base.get_vel()
+        _add_loop_section("base_read", time.perf_counter() - _t)
         x_vel, theta_vel = _sanitize_base_velocity(base_obs[0], base_obs[1])
 
         # Update shared state (always, so the teleoperator can passively record base
@@ -166,18 +258,28 @@ class MobileAIRobot(Robot):
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
             obs_dict[cam_key] = cam.async_read()
-            dt_ms = (time.perf_counter() - start) * 1e3
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+            dt_s = time.perf_counter() - start
+            _add_loop_section(f"cam:{cam_key}", dt_s)
+            logger.debug(f"{self} read {cam_key}: {dt_s * 1e3:.1f}ms")
 
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        # Record the real control-loop period (see _record_loop_tick): the base
+        # velocity command below is held until the next call, so a slow loop
+        # over-rotates the base proportionally.
+        _record_loop_tick()
+
+        _t = time.perf_counter()
         send_action_arms = self.arms.send_action(
             {k: v for k, v in action.items() if k in self.arms.action_features}
         )
+        _add_loop_section("arms_write", time.perf_counter() - _t)
         action_base_x_vel = action.get("x.vel", 0.0)
         action_base_theta_vel = action.get("theta.vel", 0.0)
+        _t = time.perf_counter()
         self.base.set_cmd_vel(action_base_x_vel, action_base_theta_vel)
+        _add_loop_section("base_write", time.perf_counter() - _t)
 
         return {
             **send_action_arms,
