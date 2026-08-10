@@ -4,3 +4,9 @@ from .config_widowxai_follower import WidowXAIFollowerConfig
 from .widowxai_follower import WidowXAIFollower
 from .mobileai import MobileAIRobot
 from .config_mobileai import MobileAIRobotConfig
+from .fast_obs_patch import apply_fast_observation_patch
+
+# No-op unless LEROBOT_FAST_OBS is set. lerobot imports this package on startup
+# (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is early enough
+# to rebind the inference path before any policy runs.
+apply_fast_observation_patch()
