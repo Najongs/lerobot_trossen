@@ -33,6 +33,13 @@ instead of the 21.5 Hz recording rate integrates every rotation ~2.4x too far.
 Dtype conversion, permute and device placement all commute here, so reordering
 them changes throughput, not results. See the equivalence note below.
 
+Confirmed on hardware (2026-08-10, same ACT checkpoint and 3-camera setup): the
+eval loop went from 9.7 Hz to 20.7 Hz and the meter's ``other=`` term from ~56 ms
+to 3-4 ms, against a teleop recording baseline of 21.5 Hz -- an over-rotation
+multiplier of 1.04 where it had been 2.2. The residual 42 ms of base serial I/O
+(``base_read``/``base_write``) is common to both loops and does not contribute to
+the multiplier.
+
 Upstream status
 ---------------
 This is the same fix as huggingface/lerobot PR #4339 ("perf(policies): move
@@ -50,7 +57,10 @@ Off by default. Enable per run::
     LEROBOT_FAST_OBS=1 uv run lerobot-record ...
 
 Combine with ``LEROBOT_LOOP_HZ_LOG=1`` (see ``mobileai.py``) to read the achieved
-rate straight out of the log and confirm the improvement.
+rate straight out of the log and confirm the improvement. To check the patch took
+effect::
+
+    grep LEROBOT_FAST_OBS <run log>
 """
 
 import inspect
@@ -62,6 +72,13 @@ logger = logging.getLogger(__name__)
 
 _ENV_VAR = "LEROBOT_FAST_OBS"
 _FUNC_NAME = "prepare_observation_for_inference"
+
+# The patch is applied from this package's import, which lerobot triggers while
+# parsing the config (``@parser.wrap()``) -- i.e. *before* ``record()`` calls
+# ``init_logging()``. An INFO record emitted at that point is discarded, so the
+# confirmation the operator greps for would never reach the log. Announce again
+# on the first patched call instead, which happens well after logging is set up.
+_announced = False
 
 
 def _enabled() -> bool:
@@ -89,8 +106,19 @@ def fast_prepare_observation_for_inference(
       longer gets divided by 255 a second time. lerobot 0.4.0 divides
       unconditionally; upstream ``main`` added the same guard. The Mobile AI
       cameras always produce uint8, so this path is unreachable here.
+
+    Logs a one-off confirmation on the first call so the operator can verify from
+    the run log that the patch is actually in effect (see ``_announced``).
     """
     import torch
+
+    global _announced
+    if not _announced:
+        _announced = True
+        logger.info(
+            f"{_ENV_VAR}=1: GPU-side observation preprocessing is active "
+            "(converting images on the device instead of the CPU)."
+        )
 
     for name in observation:
         tensor = torch.from_numpy(observation[name]).unsqueeze(0).to(device)
