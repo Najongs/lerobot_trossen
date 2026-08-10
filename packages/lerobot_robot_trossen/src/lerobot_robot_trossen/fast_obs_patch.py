@@ -1,4 +1,4 @@
-"""Opt-in patch: keep eval-time image preprocessing off the CPU.
+"""Keep eval-time image preprocessing off the CPU (on by default, opt out).
 
 Why this exists
 ---------------
@@ -52,13 +52,13 @@ lerobot release** -- ``apply_fast_observation_patch`` already no-ops in that cas
 
 Usage
 -----
-Off by default. Enable per run::
+On by default since the hardware results above. Opt out for an A/B comparison or
+if it is ever suspected of causing trouble::
 
-    LEROBOT_FAST_OBS=1 uv run lerobot-record ...
+    LEROBOT_FAST_OBS=0 uv run lerobot-record ...
 
 Combine with ``LEROBOT_LOOP_HZ_LOG=1`` (see ``mobileai.py``) to read the achieved
-rate straight out of the log and confirm the improvement. To check the patch took
-effect::
+rate straight out of the log. To check which path a run took::
 
     grep LEROBOT_FAST_OBS <run log>
 """
@@ -82,7 +82,14 @@ _announced = False
 
 
 def _enabled() -> bool:
-    return os.getenv(_ENV_VAR, "").strip().lower() not in ("", "0", "false", "no")
+    """True unless the operator explicitly opts out.
+
+    Enabled by default: the reordering is hardware-verified (140 measurement
+    windows across four eval runs, all 20.4-21.3 Hz) and equivalent to one ULP,
+    so making it opt-out removes the failure mode where the flag is forgotten and
+    the loop silently runs at half rate.
+    """
+    return os.getenv(_ENV_VAR, "").strip().lower() not in ("0", "false", "no")
 
 
 def fast_prepare_observation_for_inference(
@@ -116,8 +123,8 @@ def fast_prepare_observation_for_inference(
     if not _announced:
         _announced = True
         logger.info(
-            f"{_ENV_VAR}=1: GPU-side observation preprocessing is active "
-            "(converting images on the device instead of the CPU)."
+            "GPU-side observation preprocessing is active (converting images on "
+            f"the device instead of the CPU). Disable with {_ENV_VAR}=0."
         )
 
     for name in observation:
@@ -171,7 +178,7 @@ def apply_fast_observation_patch(force: bool = False) -> bool:
         original = getattr(policies_utils, _FUNC_NAME, None)
         if original is None:
             logger.warning(
-                f"{_ENV_VAR} is set but lerobot.policies.utils.{_FUNC_NAME} is missing; "
+                f"lerobot.policies.utils.{_FUNC_NAME} is missing ({_ENV_VAR}); "
                 "leaving observation preprocessing untouched."
             )
             return False
@@ -179,8 +186,8 @@ def apply_fast_observation_patch(force: bool = False) -> bool:
             return True
         if _converts_on_device(original):
             logger.info(
-                f"{_ENV_VAR} is set but this lerobot already converts images on the "
-                "device; skipping patch (this module can be removed)."
+                f"This lerobot already converts images on the device; skipping the "
+                f"{_ENV_VAR} patch (this module can be removed)."
             )
             return False
 
@@ -198,7 +205,7 @@ def apply_fast_observation_patch(force: bool = False) -> bool:
                 continue
 
         logger.info(
-            f"{_ENV_VAR}=1: patched {_FUNC_NAME} to convert images on the device "
+            f"Patched {_FUNC_NAME} to convert images on the device ({_ENV_VAR}) "
             f"(rebound in: {', '.join(rebound) if rebound else 'lerobot.policies.utils only'})."
         )
         return True

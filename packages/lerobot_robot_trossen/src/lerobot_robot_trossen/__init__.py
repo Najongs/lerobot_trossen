@@ -6,7 +6,7 @@ from .mobileai import MobileAIRobot
 from .config_mobileai import MobileAIRobotConfig
 from .fast_obs_patch import apply_fast_observation_patch
 
-# No-op unless LEROBOT_FAST_OBS is set. lerobot imports this package on startup
-# (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is early enough
-# to rebind the inference path before any policy runs.
+# On by default; set LEROBOT_FAST_OBS=0 to opt out. lerobot imports this package
+# on startup (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is
+# early enough to rebind the inference path before any policy runs.
 apply_fast_observation_patch()
