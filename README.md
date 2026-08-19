@@ -329,6 +329,26 @@ Verified against lerobot 0.4.0–0.4.4 (this fork pins 0.4.0). From 0.6.0 policy
 moves to `lerobot-rollout` and `lerobot-record` refuses `--policy.path`, but the
 type-from-checkpoint rule still holds there.
 
+**`--policy.path` has to point at the directory that holds `config.json`.** A checkpoint pushed
+by `lerobot-train --policy.repo_id=...` puts those files at the repo root, so the bare Hub repo
+id works. A checkpoint uploaded as a whole directory instead nests them under
+`pretrained_model/` (next to `training_state/`), and the repo id then resolves to a directory
+with no `config.json`. `--policy.path` cannot address a subfolder of a Hub repo, so fetch it
+first and point at the subdirectory:
+
+```shell
+POLICY=$(uv run python -c "
+from huggingface_hub import snapshot_download
+print(snapshot_download('${HF_USER}/<repo>', allow_patterns=['pretrained_model/*']))
+" | tail -1)/pretrained_model
+
+uv run lerobot-record ... --policy.path="$POLICY"
+```
+
+Check the file list on the Hub before a run; the two layouts are indistinguishable from the
+repo name. The same rule applies to local training output, where the loadable directory is
+`outputs/.../checkpoints/<step>/pretrained_model`, not the checkpoint directory above it.
+
 ```shell
 uv run lerobot-record \
   --robot.type=mobileai_robot \
@@ -355,6 +375,14 @@ uv run lerobot-record \
 > off the base ignores them. **Nothing errors** — the arms behave and the base silently stays
 > put, which is easy to misread as the policy having learned no base motion. The flag is applied
 > once in `connect()`, so it has to be on the command line from the start.
+
+**A leader arm can stay connected during eval.** Add the `--teleop.*` block from the
+[Record Script](#record-script). The policy still drives every episode - `lerobot-record`
+picks the driver by the presence of `--policy.path`, not by whether a teleoperator is
+configured - and the leader is there for the reset window, where an operator sets the next
+episode's start pose and grasp by hand. That handoff used to kill the process; it is paced now,
+see [Joint Velocity Pacing](#joint-velocity-pacing). The example above omits the block simply
+because it is the minimal form.
 
 ### Replay Script
 
