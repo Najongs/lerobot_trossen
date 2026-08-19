@@ -24,10 +24,25 @@ class WidowXAIFollowerConfig(RobotConfig):
     min_time_to_move_multiplier: float = 3.0
 
     # Safety factor in (0, 1] applied to the controller's hard joint velocity
-    # limits when pacing a large position jump. The limit is not a safe target:
-    # a command computed to land exactly on it was logged overshooting it by
-    # 2-4% (9.42 -> 9.63 rad/s), so leave headroom.
-    velocity_safety_factor: float = 0.8
+    # limits when pacing a large position jump.
+    #
+    # The controller enforces the limit on the *peak* of the trajectory it
+    # generates, but this factor scales the *average* velocity we command. On
+    # hardware (2026-08-19/20, joint_3, both arms) the peak was measured at
+    # 2.05-2.07x the commanded average, so the usable ceiling is 1/2.07 = 0.483:
+    #
+    #   sf=0.8  peak 15.6 rad/s vs the 9.4248 limit               -> trips
+    #   sf=0.5  peak 9.75 rad/s (reported 9.501832 / 9.750916)    -> trips
+    #   sf=0.4  peak 7.8 rad/s, 83% of the limit                  -> no trip
+    #
+    # sf=0.4 survived 12 phase transitions with jumps up to 1.53 rad, and pacing
+    # engaged on only 12 of 2165 policy-driven frames (0.6%), so the tracking
+    # cost is negligible.
+    #
+    # The 2.07 figure was measured at a ~20 Hz control loop. It depends on the
+    # ratio of the loop period to goal_time, so re-measure it if the loop rate
+    # changes -- notably after the base I/O bottleneck is addressed.
+    velocity_safety_factor: float = 0.4
 
     # Control loop rate in Hz
     loop_rate: int = 30

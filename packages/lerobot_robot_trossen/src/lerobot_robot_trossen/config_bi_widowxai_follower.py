@@ -26,8 +26,9 @@ class BiWidowXAIFollowerRobotConfig(RobotConfig):
     min_time_to_move_multiplier: float = 3.0
 
     # Safety factor in (0, 1] applied to the hard joint velocity limits when
-    # pacing large position jumps (shared between both arms).
-    velocity_safety_factor: float = 0.8
+    # pacing large position jumps (shared between both arms). See
+    # WidowXAIFollowerConfig for the hardware measurements behind this default.
+    velocity_safety_factor: float = 0.4
 
     # Expected control loop rate in Hz (shared between both arms).
     loop_rate: int = 30
