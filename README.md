@@ -10,7 +10,9 @@ This package contains LeRobot integrations for the Trossen AI series of robots.
 
 | Change | What it does | Where |
 | ------ | ------------ | ----- |
-| **Mobile-base velocity sanitisation** | `mobileai.py` refreshes the base state before reading it and zeroes out garbage velocity readings left in stale serial buffers. Without it, policies trained on the recorded data fault with `Joint 0 ... contains NaN` at inference. Always on. | [#2](https://github.com/kiro-ai-division/lerobot_trossen/pull/2) |
+| **Mobile-base velocity sanitisation** | `mobileai.py` refreshes the base state before reading it and zeroes out garbage velocity readings left in stale serial buffers. Without it, policies trained on the recorded data fault with `Joint 0 ... contains NaN` at inference. Read path only; always on. | [#2](https://github.com/kiro-ai-division/lerobot_trossen/pull/2) |
+| **Base command guard** | Non-finite base velocity *commands* are zeroed and clamped to +/-1.0 m/s before they reach the base. Without it a NaN from the policy arrives as full-speed reverse. Always on. | [below](#base-command-guard) - [#20](https://github.com/kiro-ai-division/lerobot_trossen/pull/20) |
+| **Joint velocity pacing** | Stretches `goal_time` so no joint is commanded past its hard velocity limit, which is what used to kill the process at the policy/teleop handoff. `velocity_safety_factor` defaults to `0.4`; `LEROBOT_PACING_LOG` logs the decision per frame. | [below](#joint-velocity-pacing) - [#16](https://github.com/kiro-ai-division/lerobot_trossen/pull/16) |
 | **`include_base_in_state` flag** | Drops the base velocity from `observation.state` so 14-dim policies can be evaluated. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4) |
 | **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
 | **`LEROBOT_LOOP_HZ_LOG`** | Opt-in control-loop rate and per-section timing meter. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6) |
@@ -181,12 +183,73 @@ uv run lerobot-record \
   --policy.path=${HF_USER}/act-mobileai-nobasestate
 ```
 
+### Joint Velocity Pacing
+
+A single `set_all_positions` moves the arm over a fixed window
+(`min_time_to_move_multiplier / loop_rate`, 0.1 s by default). A large position jump squeezed
+into that window asks for a velocity the controller refuses:
+
+```
+[ERROR] Joint 3 velocity limit exceeded: expected [-9.424778, 9.424778], reported 9.633699. Setting to idle.
+[ERROR] Joint 0 mode mismatch: 1 != 0
+trossen_arm.RuntimeError: Robot input with modes different than configured modes received
+```
+
+The controller drops the offending joint to `idle` (mode 0) while the driver keeps sending
+position commands (mode 1), so the next write is rejected and the process dies with no
+in-session recovery. Two things produce such a jump: the **policy/teleop handoff** at episode
+reset (observed in both directions) and a discontinuous **policy chunk boundary**.
+
+`send_action` therefore paces every move:
+
+```
+goal_time = max( min_time_to_move,  max_j( |delta_j| / (velocity_safety_factor * velocity_max_j) ) )
+```
+
+`velocity_max` is cached once in `configure()` from `get_joint_limits()` (joints 3-5: 3*pi ~
+9.4248 rad/s, joints 0-2: 2*pi, gripper 0.25 m/s). `blocking=False` is unchanged, so the
+following loop iterations simply catch up. This supersedes `max_relative_target`, which caps
+the delta but guarantees nothing about velocity.
+
+| Config field | Default | Effect |
+| ------------ | ------- | ------ |
+| `velocity_safety_factor` | `0.4` | Fraction of each joint's hard velocity limit the pacing model may command. Lower is slower and safer. Pass as `--robot.velocity_safety_factor=<x>`. |
+
+**Do not raise the default without re-measuring.** The controller enforces its limit on the
+*peak* of the trajectory it generates, while this factor scales the *average* we command. On
+hardware the peak measured **2.05-2.07x** the commanded average (joint_3, both arms, ~20 Hz
+loop), so `0.8` and `0.5` both tripped and only `0.4` survived - 12 phase transitions with
+jumps up to 1.53 rad. The tracking cost is negligible: pacing engaged on **12 of 2165**
+policy-driven frames (0.6%). That 2.07 figure depends on the ratio of loop period to
+`goal_time`, so re-measure it if the loop rate changes.
+
+Raising `min_time_to_move_multiplier` instead is the worse trade: it stretches *every* frame
+and blurs the whole trajectory, whereas pacing is a selective brake that only fires on the jump.
+
+With this in place a leader arm can stay connected during eval, which is what makes staged
+evaluation possible - the operator sets the next episode's start pose and grasp by hand during
+the reset window, and the policy drives the episode itself.
+
+### Base Command Guard
+
+Base velocity *commands* are checked for non-finite values and clamped to +/-1.0 m/s before
+they reach `set_cmd_vel()`. The read path has been sanitised since the base velocity NaN
+incident ([#2](https://github.com/kiro-ai-division/lerobot_trossen/pull/2)); the command path was not, and the asymmetry was backwards - a
+corrupted reading poisons a dataset, a corrupted command drives the robot.
+
+The hardware clamp inside `TrossenSlate::set_cmd_vel` is `min(MAX, max(-MAX, v))`. NaN compares
+false against everything, so `max(-MAX, NaN)` returns `-MAX`: a NaN action reached the base as
+**full-speed reverse**, and eval runs with `enable_base_motor_torque=True`, so that command was
+actually executed. Verified in the installed `trossen_slate` 0.0.3 binary. Failed writes are
+now reported rather than swallowed, throttled to one warning per second per channel.
+
 ### Environment Variables
 
 | Variable | Default | Effect |
 | -------- | ------- | ------ |
 | `LEROBOT_FAST_OBS` | `1` (on) | Converts camera frames to float32 and permutes HWC→CHW **on the GPU** instead of the CPU. Set `0` to fall back to the stock lerobot path. |
 | `LEROBOT_LOOP_HZ_LOG` | unset (off) | Set `1` to log the achieved control-loop rate and a per-frame section breakdown. |
+| `LEROBOT_PACING_LOG` | unset (off) | Set `1` to log the joint velocity pacing decision on *every* frame. Frames where pacing actually fired are logged either way. |
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
 camera frames CPU-side and only then copies them to the GPU, shipping 4× the bytes over PCIe
@@ -216,6 +279,20 @@ which I/O is responsible; `other` is loop time outside any instrumented section 
 `select_action`, preprocessing, `dataset.add_frame`, processors, `busy_wait`). Episode-reset
 gaps longer than 1 s are dropped so an idle pause cannot masquerade as a slow loop. Combine
 with `LEROBOT_FAST_OBS=0` for an A/B comparison.
+
+**`LEROBOT_PACING_LOG`** - the controller log tells you *that* a velocity limit was tripped but
+never what was commanded, so `send_action` logs its own pacing decision:
+
+```
+pacing[192.168.1.4] FIRED goal_time=101.8ms max_delta=0.4797@joint_3 avg_v=4.712 deltas=[...]
+```
+
+`FIRED` lines - the ones where `goal_time` was stretched past `min_time_to_move` - are always
+emitted, because the event is rare and is usually what you are chasing. Setting this variable
+adds an `idle` line for every other frame, which is what separates "pacing never fired" from
+"pacing fired and was not enough". `avg_v` is the average velocity the pacing model believes it
+commanded; compare it against that joint's `velocity_max`, and remember the measured peak runs
+about twice the average.
 
 ### Dataset Visualization
 
