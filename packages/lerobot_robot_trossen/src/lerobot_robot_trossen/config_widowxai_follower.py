@@ -23,6 +23,12 @@ class WidowXAIFollowerConfig(RobotConfig):
     # A recommended starting value is 3.0.
     min_time_to_move_multiplier: float = 3.0
 
+    # Safety factor in (0, 1] applied to the controller's hard joint velocity
+    # limits when pacing a large position jump. The limit is not a safe target:
+    # a command computed to land exactly on it was logged overshooting it by
+    # 2-4% (9.42 -> 9.63 rad/s), so leave headroom.
+    velocity_safety_factor: float = 0.8
+
     # Control loop rate in Hz
     loop_rate: int = 30
 

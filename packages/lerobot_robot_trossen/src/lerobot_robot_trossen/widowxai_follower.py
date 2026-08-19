@@ -30,6 +30,9 @@ class WidowXAIFollower(Robot):
         self.min_time_to_move = (
             config.min_time_to_move_multiplier / self.config.loop_rate
         )
+        # Per-joint hard velocity limits, cached in configure() once the driver
+        # is connected. Empty until then, which disables velocity pacing.
+        self._joint_velocity_max: list[float] = []
 
     @property
     def _joint_ft(self) -> dict[str, type]:
@@ -113,6 +116,12 @@ class WidowXAIFollower(Robot):
             goal_time=2.0,
             blocking=True,
         )
+        # Cache the per-joint hard velocity limits (rad/s for the arm joints,
+        # m/s for the gripper carriage) so send_action can pace large position
+        # jumps below the controller's limit.
+        self._joint_velocity_max = [
+            jl.velocity_max for jl in self.driver.get_joint_limits()
+        ]
 
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
@@ -202,16 +211,19 @@ class WidowXAIFollower(Robot):
             if key.endswith(".pos")
         }
 
-        # Cap goal position when too far away from present position.
+        # Read the present positions once and reuse them for both the
+        # relative-target clamp and the velocity pacing below.
         # /!\ Slower fps expected due to reading from the follower.
-        if self.config.max_relative_target is not None:
-            present_pos = dict(
-                zip(
-                    self.config.joint_names,
-                    self.driver.get_all_positions(),
-                    strict=True,
-                )
+        present_pos = dict(
+            zip(
+                self.config.joint_names,
+                self.driver.get_all_positions(),
+                strict=True,
             )
+        )
+
+        # Cap goal position when too far away from present position.
+        if self.config.max_relative_target is not None:
             goal_present_pos = {
                 key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()
             }
@@ -219,12 +231,30 @@ class WidowXAIFollower(Robot):
                 goal_present_pos, self.config.max_relative_target
             )
 
+        # Pace the move so that no joint is asked to exceed its hard velocity
+        # limit. A large position jump -- the policy->teleop handoff at episode
+        # reset, or a discontinuous policy chunk -- commanded into the fixed
+        # ~0.1 s window can exceed the controller's limit (joints 3 and 4:
+        # 3*pi ~ 9.42 rad/s). The controller then drops that joint to idle and
+        # the next set_all_positions fails with "modes different than
+        # configured modes", killing the process with no in-session recovery.
+        # Stretching goal_time keeps the commanded velocity within limits;
+        # blocking=False means the following loop iterations simply catch up.
+        goal_time = self.min_time_to_move
+        for joint_name, v_max in zip(
+            self.config.joint_names, self._joint_velocity_max, strict=True
+        ):
+            safe_v = v_max * self.config.velocity_safety_factor
+            if safe_v > 0:
+                delta = abs(goal_pos[joint_name] - present_pos[joint_name])
+                goal_time = max(goal_time, delta / safe_v)
+
         # Send goal position to the arm
         self.driver.set_all_positions(
             goal_positions=[
                 goal_pos[joint_name] for joint_name in self.config.joint_names
             ],
-            goal_time=self.min_time_to_move,
+            goal_time=goal_time,
             blocking=False,
         )
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}

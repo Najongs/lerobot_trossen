@@ -203,6 +203,7 @@ class MobileAIRobot(Robot):
             left_arm_max_relative_target=config.left_arm_max_relative_target,
             right_arm_max_relative_target=config.right_arm_max_relative_target,
             min_time_to_move_multiplier=config.min_time_to_move_multiplier,
+            velocity_safety_factor=config.velocity_safety_factor,
             loop_rate=config.loop_rate,
             include_velocity=config.include_velocity,
             include_effort=config.include_effort,
