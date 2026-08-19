@@ -384,6 +384,35 @@ episode's start pose and grasp by hand. That handoff used to kill the process; i
 see [Joint Velocity Pacing](#joint-velocity-pacing). The example above omits the block simply
 because it is the minimal form.
 
+```shell
+uv run lerobot-record \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --robot.cameras="{
+    cam_high: {type: intelrealsense, serial_number_or_name: "<cam_high_serial>", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "<cam_left_wrist_serial>", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "<cam_right_wrist_serial>", width: 640, height: 480, fps: 30}
+  }" \
+  --robot.enable_base_motor_torque=true \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --dataset.repo_id=${HF_USER}/eval-mobileai-cube-pickup \
+  --dataset.num_episodes=2 \
+  --dataset.reset_time_s=90 \
+  --dataset.single_task="Grab the cube" \
+  --policy.path=${HF_USER}/act-mobileai-cube-pickup
+```
+
+Use the first example when every episode starts from the staged pose, and this one when the
+episodes need a start pose the robot cannot reach on its own - a grasped object, a mid-task
+configuration. `--dataset.reset_time_s` is raised because the reset window now carries posing
+and scene setup, not just scene setup; end it early with the right arrow key when it is done.
+
+
 ### Replay Script
 
 Replay episode 3 of a cube pickup task with a Mobile AI robot.
