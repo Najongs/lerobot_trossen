@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from typing import Any
 
@@ -11,6 +12,17 @@ from lerobot.robots.utils import ensure_safe_goal_position
 from lerobot_robot_trossen.config_widowxai_follower import WidowXAIFollowerConfig
 
 logger = logging.getLogger(__name__)
+
+# Opt-in per-frame pacing diagnostics. The controller log tells us *that* a
+# velocity limit was tripped but never what was commanded, so this prints the
+# per-joint delta and the resulting goal_time on every send_action.
+# Same on/off convention as LEROBOT_LOOP_HZ_LOG in mobileai.py.
+_PACING_LOG_ENABLED = os.getenv("LEROBOT_PACING_LOG", "").strip().lower() not in (
+    "",
+    "0",
+    "false",
+    "no",
+)
 
 
 class WidowXAIFollower(Robot):
@@ -122,6 +134,19 @@ class WidowXAIFollower(Robot):
         self._joint_velocity_max = [
             jl.velocity_max for jl in self.driver.get_joint_limits()
         ]
+        # Log them once: the pacing math assumes these equal the limits the
+        # motor interface actually enforces, and that has never been checked
+        # against the range quoted in a "velocity limit exceeded" error.
+        logger.info(
+            f"{self.config.ip_address} joint velocity_max "
+            "(rad/s; m/s for the gripper carriage): "
+            + ", ".join(
+                f"{name}={v_max:.6f}"
+                for name, v_max in zip(
+                    self.config.joint_names, self._joint_velocity_max, strict=True
+                )
+            )
+        )
 
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
@@ -241,13 +266,32 @@ class WidowXAIFollower(Robot):
         # Stretching goal_time keeps the commanded velocity within limits;
         # blocking=False means the following loop iterations simply catch up.
         goal_time = self.min_time_to_move
+        deltas: list[float] = []
         for joint_name, v_max in zip(
             self.config.joint_names, self._joint_velocity_max, strict=True
         ):
+            delta = abs(goal_pos[joint_name] - present_pos[joint_name])
+            deltas.append(delta)
             safe_v = v_max * self.config.velocity_safety_factor
             if safe_v > 0:
-                delta = abs(goal_pos[joint_name] - present_pos[joint_name])
                 goal_time = max(goal_time, delta / safe_v)
+
+        # Diagnostic. A stretched window is the event under investigation and is
+        # rare, so it is always logged; LEROBOT_PACING_LOG=1 additionally logs
+        # every frame, which is what distinguishes "pacing never fired" from
+        # "pacing fired and was not enough". avg_v is the velocity the pacing
+        # model believes it commanded -- compare it against velocity_max above.
+        paced = goal_time > self.min_time_to_move
+        if deltas and (paced or _PACING_LOG_ENABLED):
+            i_max = max(range(len(deltas)), key=deltas.__getitem__)
+            logger.info(
+                f"pacing[{self.config.ip_address}] "
+                f"{'FIRED' if paced else 'idle'} "
+                f"goal_time={goal_time * 1e3:.1f}ms "
+                f"max_delta={deltas[i_max]:.4f}@{self.config.joint_names[i_max]} "
+                f"avg_v={deltas[i_max] / goal_time:.3f} "
+                "deltas=[" + ",".join(f"{d:.4f}" for d in deltas) + "]"
+            )
 
         # Send goal position to the arm
         self.driver.set_all_positions(
