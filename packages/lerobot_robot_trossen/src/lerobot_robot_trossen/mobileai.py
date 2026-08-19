@@ -46,6 +46,53 @@ def _sanitize_base_velocity(x_vel: float, theta_vel: float) -> tuple[float, floa
     return x_vel, theta_vel
 
 
+# Hardware clamp bounds enforced inside TrossenSlate::set_cmd_vel. Verified in
+# the installed trossen_slate 0.0.3 binary: the clamp is
+# min(MAX, max(-MAX, v)) against the constants at .rodata 0x3e9f0 (-1.0f) and
+# 0x3e9f4 (+1.0f). NaN compares false against everything, so max(-MAX, NaN)
+# returns -MAX -- a NaN command reaches the base as full-speed reverse, and eval
+# runs with enable_base_motor_torque=True, so that command is actually executed.
+_MAX_BASE_CMD_LINEAR_VEL = 1.0  # m/s
+_MAX_BASE_CMD_ANGULAR_VEL = 1.0  # rad/s
+
+# A failing serial link would emit one warning per control-loop iteration
+# (~20/s) and bury everything else, so base warnings are throttled per key.
+_BASE_WARN_INTERVAL_S = 1.0
+_last_base_warn: dict[str, float] = {}
+
+
+def _warn_throttled(key: str, message: str) -> None:
+    """Emit a warning at most once per ``_BASE_WARN_INTERVAL_S`` per key."""
+    now = time.monotonic()
+    last = _last_base_warn.get(key)
+    if last is None or now - last >= _BASE_WARN_INTERVAL_S:
+        _last_base_warn[key] = now
+        logger.warning(message)
+
+
+def _sanitize_base_command(x_vel: float, theta_vel: float) -> tuple[float, float]:
+    """Clamp base velocity commands and replace non-finite values with 0.0.
+
+    The read path has had this guard since the base velocity NaN incident
+    (:func:`_sanitize_base_velocity`); the command path did not. The asymmetry
+    was backwards: a corrupted reading poisons a dataset, a corrupted command
+    drives the robot.
+    """
+    if not math.isfinite(x_vel):
+        _warn_throttled("cmd_x", f"Non-finite base x.vel command {x_vel!r} -> 0.0")
+        x_vel = 0.0
+    if not math.isfinite(theta_vel):
+        _warn_throttled(
+            "cmd_theta", f"Non-finite base theta.vel command {theta_vel!r} -> 0.0"
+        )
+        theta_vel = 0.0
+    x_vel = max(-_MAX_BASE_CMD_LINEAR_VEL, min(_MAX_BASE_CMD_LINEAR_VEL, x_vel))
+    theta_vel = max(
+        -_MAX_BASE_CMD_ANGULAR_VEL, min(_MAX_BASE_CMD_ANGULAR_VEL, theta_vel)
+    )
+    return x_vel, theta_vel
+
+
 def get_latest_base_velocity() -> dict[str, float]:
     with _base_velocity_lock:
         return _latest_base_velocity.copy()
@@ -275,10 +322,20 @@ class MobileAIRobot(Robot):
             {k: v for k, v in action.items() if k in self.arms.action_features}
         )
         _add_loop_section("arms_write", time.perf_counter() - _t)
-        action_base_x_vel = action.get("x.vel", 0.0)
-        action_base_theta_vel = action.get("theta.vel", 0.0)
+        action_base_x_vel, action_base_theta_vel = _sanitize_base_command(
+            action.get("x.vel", 0.0), action.get("theta.vel", 0.0)
+        )
         _t = time.perf_counter()
-        self.base.set_cmd_vel(action_base_x_vel, action_base_theta_vel)
+        # set_cmd_vel carries the read half of the same Modbus transaction, so a
+        # failure means both that the command may not have been applied and that
+        # the cached state get_vel() returns is now stale -- the driver leaves the
+        # cache untouched on failure and never recovers on its own.
+        if not self.base.set_cmd_vel(action_base_x_vel, action_base_theta_vel):
+            _warn_throttled(
+                "base_write",
+                "Mobile AI base transaction failed: the velocity command may not "
+                "have been applied and the cached base velocity is now stale.",
+            )
         _add_loop_section("base_write", time.perf_counter() - _t)
 
         return {
