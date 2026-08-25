@@ -9,7 +9,7 @@
 
 ## 0. 설치
 
-로봇 PC·`sandia`·DGX-1 = `~/lerobot_trossen`. **`cd ~/lerobot_trossen`부터.**
+로봇 PC·`sandia`·DGX-1에 이미 세팅 완료 = `~/lerobot_trossen`. **`cd ~/lerobot_trossen`부터.**
 
 새 기기만:
 
@@ -27,7 +27,7 @@ uv run hf auth login          # kiroaiseoul org write 토큰
 
 ## 1. 데이터 취득
 
-### 1-1. Teleoperation
+### 1-1. Teleoperation (작동 확인)
 
 ```shell
 uv run lerobot-teleoperate \
@@ -82,14 +82,26 @@ uv run lerobot-record \
 
 ## 2. 학습
 
-`sandia`·DGX-1 동일 — 잡을 장만 기기별로.
+`sandia`·DGX-1 동일 — 잡을 GPU만 기기, 상황별로 다르게. 
+
+### 2-0. GPU 고르기
+
+```shell
+tmux new -s acttrain-<본인이름>
+cd ~/lerobot_trossen
+
+nvidia-smi                            # 하단 Processes 표가 빈 GPU를 고른다
+export CUDA_VISIBLE_DEVICES=0,1,2,3   # 고른 GPU 번호로
+```
+
+2-1 ~ 2-3은 **이 셸에서** 이어 실행. 새 셸을 열면 2-0부터 다시.
 
 ### 2-1. 스모크런 (본 학습 전 필수)
 
 ```shell
-cd ~/lerobot_trossen && rm -rf outputs/_smoke_<본인이름>
+rm -rf outputs/_smoke_<본인이름>
 
-CUDA_VISIBLE_DEVICES=0 uv run accelerate launch \
+uv run accelerate launch \
   --num_processes=1 \
   -m lerobot.scripts.lerobot_train \
   --policy.type=act \
@@ -106,12 +118,6 @@ CUDA_VISIBLE_DEVICES=0 uv run accelerate launch \
 ### 2-2. 본 학습
 
 ```shell
-tmux new -s acttrain-<본인이름>
-cd ~/lerobot_trossen
-
-nvidia-smi --query-compute-apps=pid,used_memory --format=csv   # 프로세스 없는 장 확인
-export CUDA_VISIBLE_DEVICES=<위에서 고른 4장>
-
 uv run accelerate launch \
   --multi_gpu \
   --num_processes=4 \
@@ -133,10 +139,9 @@ uv run accelerate launch \
 ### 2-3. 중단·재개
 
 ```shell
-cd ~/lerobot_trossen
-export CUDA_VISIBLE_DEVICES=<비어 있는 장>
-
-uv run accelerate launch --multi_gpu --num_processes=4 \
+uv run accelerate launch \
+  --multi_gpu \
+  --num_processes=4 \
   -m lerobot.scripts.lerobot_train \
   --config_path=outputs/<본인_이름>/<본인_단계>/checkpoints/last/pretrained_model/train_config.json \
   --resume=true
@@ -156,6 +161,37 @@ uv run accelerate launch --multi_gpu --num_processes=4 \
 
 - `<체크포인트>` → [`모델 체크포인트` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) · `<본인 단계 지시문>` → [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)
 - `--dataset.repo_id` = `eval_` + 회차 식별자 → [eval 함정](#eval-함정)
+- 실행 중 뜨는 ERROR·경고 → [무해한 로그](#무해한-로그)
+
+### 3-1. 연결 점검
+
+팔 4개와 카메라 3개가 붙어 있는지 먼저 본다 — 안 붙은 채로 돌리면 에피소드 중간에 죽는다.
+
+```shell
+for ip in 192.168.1.5 192.168.1.4 192.168.1.3 192.168.1.2; do
+  ping -c1 -W1 $ip >/dev/null 2>&1 && echo "OK $ip" || echo "NG $ip"; done
+uv run python -c "import pyrealsense2 as rs; [print(d.get_info(rs.camera_info.serial_number)) for d in rs.context().devices]"
+```
+
+`OK` 4줄 + 아래 명령의 시리얼 3개와 같은 값이면 통과. **베이스 비상정지 버튼도 돌려 빼 둔다** — 걸린 채면 `RuntimeError: Failed to check base state.`로 즉사.
+
+### 3-2. 체크포인트 경로 잡기
+
+`--policy.path`는 **`config.json`이 있는 디렉터리**를 가리켜야 하는데, 그 위치가 repo마다 다르다(허브 26개 중 루트 11 : `pretrained_model/` 하위 15). 아래 한 블록이 둘 다 처리한다.
+
+```shell
+POLICY=$(uv run python -c "
+from huggingface_hub import snapshot_download
+from pathlib import Path
+d = Path(snapshot_download('kiroaiseoul/<체크포인트>'))
+print(d if (d/'config.json').exists() else d/'pretrained_model')
+" | tail -1)
+echo "$POLICY"
+```
+
+로컬 학습 산출물이면 받을 것 없이 `POLICY=outputs/<본인_이름>/<본인_단계>/checkpoints/<스텝>/pretrained_model`.
+
+### 3-3. ACT + 리더암
 
 ```shell
 uv run lerobot-record \
@@ -176,21 +212,13 @@ uv run lerobot-record \
   --display_data=true \
   --dataset.repo_id=kiroaiseoul/eval_act_<단계>_<회차> \
   --dataset.single_task="<본인 단계 지시문>" \
-  --policy.path=kiroaiseoul/<체크포인트> \
+  --policy.path="$POLICY" \
   --dataset.episode_time_s=120 \
   --dataset.reset_time_s=90 \
   --dataset.num_episodes=10
 ```
 
 - 리셋 구간 = 리더암으로 시작 자세·파지, 끝나면 `→`. 에피소드 구간은 정책 구동.
-
-**돌리기 전 점검**
-
-```shell
-for ip in 192.168.1.5 192.168.1.4 192.168.1.3 192.168.1.2; do
-  ping -c1 -W1 $ip >/dev/null 2>&1 && echo "OK $ip" || echo "NG $ip"; done
-uv run python -c "import pyrealsense2 as rs; [print(d.get_info(rs.camera_info.serial_number)) for d in rs.context().devices]"
-```
 
 ---
 
@@ -255,21 +283,12 @@ uv run lerobot-replay \
 
 eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취득(teleop 시연)과 eval(정책 구동)을 가른다.** Record와 달라지는 것만 적는다.
 
-- `--policy.path` — 학습된 정책 경로. **`config.json`이 있는 디렉터리**를 가리켜야 한다. `lerobot-train --policy.repo_id=…`가 올린 체크포인트는 repo 루트에 그 파일들이 있어 bare repo id가 그대로 먹지만, 디렉터리째 업로드된 체크포인트는 `pretrained_model/` 아래에 중첩되고 **이름으로는 구별되지 않는다.** 후자는 먼저 받아서 그 하위를 준다:
-
-	```shell
-	POLICY=$(uv run python -c "
-	from huggingface_hub import snapshot_download
-	print(snapshot_download('kiroaiseoul/<repo>', allow_patterns=['pretrained_model/*']))
-	" | tail -1)/pretrained_model
-	```
-
-	로컬 학습 산출물도 같다 — 로드 가능한 경로는 `outputs/…/checkpoints/<스텝>/pretrained_model`이지 그 위 디렉터리가 아니다.
+- `--policy.path` — **`config.json`이 있는 디렉터리**. `lerobot-train --policy.repo_id=…`가 올린 체크포인트는 repo 루트에 그 파일들이 있어 bare repo id가 그대로 먹지만, 디렉터리째 업로드된 것은 `pretrained_model/` 아래에 중첩된다. **이름으로는 구별되지 않으므로** 레이아웃을 따지지 말고 [3-2](#3-2-체크포인트-경로-잡기)를 쓴다. bare repo id를 그냥 주면 중첩형에서 로드에 실패한다.
 - **정책 종류는 명령에 안 쓴다** — `lerobot-record`가 체크포인트의 `config.json` `type`에서 정책 종류와 입출력 차원을 읽는다. **`--policy.type`은 주지 말 것** — `--policy.path`와 같이 주면 `Cannot specify both …`로 죽고, 혼자 주면 **경고 없이 랜덤 가중치 정책이 로봇을 구동한다**(`lerobot-eval`엔 있는 경고가 `lerobot-record`엔 없다). `--policy.path`가 안 먹으면 위 중첩 레이아웃부터 의심할 것.
 - `--robot.enable_base_motor_torque` — **eval에선 `true`가 필수이고 기본값이 아니다.** 끄면 정책의 `x.vel`·`theta.vel`이 base에 도달해도 무시되는데 **아무 에러도 안 난다** — 팔만 움직이고 base가 가만있는 것이 "base 동작을 못 배웠다"로 오독된다. `connect()`에서 한 번 적용되므로 처음부터 명령줄에 있어야 한다.
 - `--dataset.repo_id` — **반드시 `eval_`로 시작**한다(정책을 주면서 아니면 즉시 `ValueError`). 반대로 **취득용 repo는 `eval_`로 시작하면 안 된다.**
 - `--dataset.single_task` — 정책 종류와 무관하게 **필수**지만 쓰임이 갈린다. **pi0는 언어조건부**라 학습 때와 같은 문구를 줘야 하고, **ACT는 이 문자열을 정책 입력으로 쓰지 않아**(토크나이저 단계가 없다) 데이터셋 라벨로만 기록된다.
-- `--teleop.*` — 리셋 구간에서 리더암으로 시작 자세·파지를 만들기 위한 것. 에피소드 구간은 `--policy.path`가 있으므로 정책이 구동한다. 리더암을 붙인 채로 돌 수 있게 된 근거 → [Joint Velocity Pacing](#joint-velocity-pacing)
+- `--teleop.*` — 리셋 구간에서 리더암으로 시작 자세·파지를 만들기 위한 것. 에피소드 구간은 `--policy.path`가 있으므로 정책이 구동한다. **리더암이 필요한 이유** = staged 자세 이동이 `connect()` 때 한 번뿐이라 **2번째 에피소드부터는 아무것도 자세를 되돌려 주지 않는다.** 리더암을 붙인 채로 돌 수 있게 된 근거 → [Joint Velocity Pacing](#joint-velocity-pacing)
 - `--robot.velocity_safety_factor` — **기본값 `0.4`를 올리지 말 것.** `0.8`·`0.5`는 둘 다 실기에서 트립했다(조건은 `sf ≤ 1/2.07 = 0.483`) → [Joint Velocity Pacing](#joint-velocity-pacing)
 - `--dataset.reset_time_s` — 리셋 구간이 자세 잡기까지 맡으므로 upstream 기본값 60이 아니라 **90**.
 - `--robot.include_base_in_state` — 체크포인트의 state 차원과 짝을 맞춘다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
@@ -280,6 +299,21 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 
 - 🛑 **eval repo 이름이 겹치면 즉사한다** — `LeRobotDataset.create()`가 `root.mkdir(exist_ok=False)`라 같은 이름이 있으면 덮지 않고 `FileExistsError`로 죽는다. 중단된 빈 런이 자리를 잡고 있는 경우가 흔하고, 로봇 PC 캐시엔 `eval_*`이 이미 수십 개 있어 단계별 기본 이름은 대부분 선점됐다.
 - ⚠️ **`| tail`을 붙여 돌리지 말 것** — 파이프의 마지막 명령 종료코드가 잡혀 **실패가 `exit 0`으로 보고된다.** 위 `FileExistsError`가 「정상 종료」로 올라온 적이 있다.
+- 🛑 **`Joint 0 position input contains NaN`은 그 관절 문제가 아니다** — 정책 normalizer stats가 손상된 것(학습 데이터에 base 속도 garbage가 섞여 `std=NaN`이 되고 전 출력으로 전파된다). **코드로 못 고친다** — 손상 에피소드를 지우고 **재학습**해야 한다. 취득 쪽 차단은 [취득 후 점검](#취득-후-점검).
+- ⚠️ **`Feature mismatch … Missing/Extra features`** — 체크포인트가 학습 때 쓴 카메라 키·해상도가 지금 로봇과 다르다. `--rename_map`으로 맞춘다. ⚠ **이름만 검사한다** — 해상도·채널 순서·fps가 달라도 **조용히 통과**하므로 「에러가 안 났다」가 「맞게 돌고 있다」의 증거가 못 된다.
+- ⚠️ **관절이 `idle`로 떨어져 죽으면 세션 안에서 회복이 안 된다** — 프로세스를 다시 띄워야 `configure(clear_error=True)`가 걸린다.
+
+### 무해한 로그
+
+아래 셋은 **정상**이다. 실패로 읽지 말 것.
+
+| 뜨는 것 | 정체 |
+| --- | --- |
+| 종료 시 Rerun `transport error`·`gracefully disconnected`·`channel closed` (ERROR 3~4줄) | 뷰어 gRPC 스트림이 닫히는 한 사건을 세 층에서 본 것. 저장은 정상(로컬·Hub 프레임 수 일치 확인) |
+| 리셋 구간의 `No policy or teleoperator provided, skipping action generation…` 대량 출력 | 리셋 구간은 정책·teleop 없이 도는 것이 정상 |
+| `Record loop is running slower (21.4 Hz) than the target FPS (30 Hz)` | 취득 파이프라인의 천장(카메라 USB 대역·base 시리얼). **기존 환경도 같은 값** |
+
+- 🛑 반대로 **`→`·`←`·`ESC`가 아무 반응이 없는데 에러도 없으면** 세션이 Wayland다. `echo $XDG_SESSION_TYPE`으로 확인하고 "GNOME on Xorg"로 재로그인 → [Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide#작업-pc-준비)
 
 ## 학습
 
@@ -323,7 +357,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 
 ### 공유 서버
 
-- 실행 전 **프로세스 단위로** 점유를 확인하고(`nvidia-smi --query-compute-apps=pid,used_memory --format=csv`) **비어 있는 장만** 잡는다. 빈 메모리 수치가 아니라 프로세스 유무로 판단할 것. `sandia`는 RTX 3090 ×4가 전부이고 DGX-1은 V100 ×8이다.
+- 실행 전 `nvidia-smi` 하단 **Processes 표**로 점유를 확인하고 **프로세스가 없는 장만** 잡는다. 빈 메모리 수치가 아니라 프로세스 유무로 판단할 것(`--query-compute-apps=pid,used_memory --format=csv`는 스크립트가 파싱할 때 쓰는 형태). `sandia`는 RTX 3090 ×4가 전부이고 DGX-1은 V100 ×8이다.
 - `--output_dir`·tmux 세션명에 **본인 이름**을 넣는다 — 공유 계정이라 그게 누구 런인지 남는 유일한 기록이다.
 - 남의 프로세스·tmux 세션은 건드리지 않는다.
 
