@@ -10,8 +10,16 @@ dependencies = [
   "lerobot_robot_trossen>=0.1.0",
   "lerobot_teleoperator_trossen>=0.1.0",
   "trossen-slate>=0.0.3",
-  "torch>=2.7.0",
-  "torchvision>=0.22.0",
+  # cu128 wheels ship Volta (sm_70) only in torch 2.8.0-2.10.0.
+  # 2.7.x never had it and 2.11.0 dropped it again (CuDNN 9.15.1).
+  # This range is the only one covering V100, Ampere and Blackwell.
+  "torch>=2.8,<2.11",
+  "torchvision>=0.23,<0.26",
+  # torchcodec is ABI-bound to torch but declares no torch dependency,
+  # so the resolver cannot pair them. Official table: 0.10 <-> torch 2.10.
+  # PyPI ships 0.10.0 (and later); its wheel links no NPP, so keep it
+  # on PyPI rather than routing to the CUDA index.
+  "torchcodec>=0.10,<0.11",
 ]
 
 [[tool.uv.index]]
