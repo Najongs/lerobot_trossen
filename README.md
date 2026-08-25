@@ -1,34 +1,33 @@
 # LeRobot Trossen Integration
 
-[`TrossenRobotics/lerobot_trossen`](https://github.com/TrossenRobotics/lerobot_trossen)의 **KIRO fork.** Mobile AI 양팔 플랫폼의 **데이터 취득 → 학습 → eval** 명령 정본.
+[`TrossenRobotics/lerobot_trossen`](https://github.com/TrossenRobotics/lerobot_trossen)의 **KIRO fork.** Mobile AI 양팔 플랫폼 **데이터 취득 → 학습 → eval** 명령 정본.
 
-- 로봇 조작·취득 단계의 시작·종료 기준 → [Mobile AI Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide)
+- 로봇 조작·취득 단계 시작·종료 기준 → [Mobile AI Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide)
 - 인자 설명·함정 → [인자 레퍼런스](#인자-레퍼런스) · fork 변경점 → [Fork reference](#fork-reference)
 
 ---
 
 ## 0. 설치
 
-로봇 PC에는 `~/lerobot_trossen`으로 설치돼 있다 — **`cd ~/lerobot_trossen`부터 시작한다.** `sandia`·DGX-1은 같은 경로로 세팅 중이니 시작 전에 경로를 확인한다.
+로봇 PC·`sandia`·DGX-1 = `~/lerobot_trossen`. **`cd ~/lerobot_trossen`부터.**
+
+새 기기만:
 
 ```shell
 git clone https://github.com/kiro-ai-division/lerobot_trossen.git
 cd lerobot_trossen
 uv sync
-uv run hf auth login          # kiroaiseoul org write 권한 토큰
+uv run hf auth login          # kiroaiseoul org write 토큰
 ```
 
-⚠️ **`sandia`·DGX-1엔 GitHub 자격증명이 없어 위 `git clone`이 죽는다**(비공개 repo). 그 두 대는 로컬에서 `rsync -az --exclude=.venv --exclude=outputs <로컬repo>/ <서버>:~/lerobot_trossen/`로 넣는다.
-
-🛑 **`.python-version`(3.11)을 지우거나 3.12로 올리지 말 것** — 락이 3.12를 경계로 갈려 있어 3.12에서는 lerobot 0.6.1이 잡히고, 그러면 §3 Eval의 `--policy.path`가 거부된다.
-
-카메라 시리얼(KIRO Mobile AI) — `cam_high` `230422273501` / `cam_left_wrist` `230422271234` / `cam_right_wrist` `230322274369`
+- 서버 반입·인터프리터 고정 → [설치 함정](#설치-함정)
+- 카메라 시리얼 — `cam_high` `230422273501` / `cam_left_wrist` `230422271234` / `cam_right_wrist` `230322274369`
 
 ---
 
 ## 1. 데이터 취득
 
-### 1-1. Teleoperation — 작동 확인
+### 1-1. Teleoperation
 
 ```shell
 uv run lerobot-teleoperate \
@@ -50,7 +49,7 @@ uv run lerobot-teleoperate \
 
 ### 1-2. Record
 
-`<…>` 두 곳은 **공유 시트 [`데이터 취득 현황`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557) 탭이 정본**이다 — 본인 행의 `데이터셋 이름 (dataset.repo_id)`과 `language instruction (dataset.single_task)`을 그대로 복사한다.
+`<본인_단계_repo>`·`<본인 단계 지시문>` → [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)
 
 ```shell
 uv run lerobot-record \
@@ -75,18 +74,17 @@ uv run lerobot-record \
   --dataset.single_task="<본인 단계 지시문>"
 ```
 
-- 이어 찍기 — 마지막 줄 끝에 `\`를 붙이고 `--resume=true` 추가. `--dataset.num_episodes`는 **이번에 추가로 찍을 개수**다(누적 목표 아님)
-- 녹화 중 키 — `→` 구간 조기 종료 · `←` 현재 에피소드 취소·재취득 · `ESC` 중단·저장
-- 취득 직후 확인 → [4. 데이터셋 확인·편집](#4-데이터셋-확인편집)
-- **자가점검** — `meta/stats.json`의 base 차원(state/action dim 14·15) `std`가 유한한지 본다. NaN·거대값이면 garbage 혼입이고 **사후 복구가 안 된다.**
+- 이어 찍기 = 마지막 줄 끝에 `\` + `--resume=true` → [Record](#record)
+- 녹화 키 — `→` 구간 조기 종료 · `←` 현재 에피소드 재취득 · `ESC` 중단·저장
+- 취득 직후 QC → [4. 데이터셋 확인·편집](#4-데이터셋-확인편집) · 오염 자가점검 → [취득 후 점검](#취득-후-점검)
 
 ---
 
 ## 2. 학습
 
-`sandia`·DGX-1이 **인자는 같고 두 줄만 다르다** — 잡을 장(`CUDA_VISIBLE_DEVICES`)과 `--wandb.enable`(DGX-1은 로그인이 없어 `false`).
+`sandia`·DGX-1 동일 — 잡을 장만 기기별로.
 
-### 2-1. 스모크런 — 본 학습 전에 반드시
+### 2-1. 스모크런 (본 학습 전 필수)
 
 ```shell
 cd ~/lerobot_trossen && rm -rf outputs/_smoke_<본인이름>
@@ -103,7 +101,7 @@ CUDA_VISIBLE_DEVICES=0 uv run accelerate launch \
   --wandb.enable=false
 ```
 
-`outputs/_smoke_<본인이름>/checkpoints/000010/pretrained_model/model.safetensors`가 수백 MB로 생기면 통과.
+통과 기준 — `outputs/_smoke_<본인이름>/checkpoints/000010/pretrained_model/model.safetensors` 수백 MB.
 
 ### 2-2. 본 학습
 
@@ -111,7 +109,7 @@ CUDA_VISIBLE_DEVICES=0 uv run accelerate launch \
 tmux new -s acttrain-<본인이름>
 cd ~/lerobot_trossen
 
-nvidia-smi --query-compute-apps=pid,used_memory --format=csv   # 프로세스가 없는 장을 고른다
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv   # 프로세스 없는 장 확인
 export CUDA_VISIBLE_DEVICES=<위에서 고른 4장>
 
 uv run accelerate launch \
@@ -124,14 +122,13 @@ uv run accelerate launch \
   --policy.repo_id=kiroaiseoul/act_<본인_단계>_<스텝> \
   --output_dir=outputs/<본인_이름>/<본인_단계> \
   --batch_size=16 --steps=60000 --save_freq=20000 \
-  --wandb.enable=true
+  --wandb.enable=false
 ```
 
-- `<본인_단계_repo>`는 [`데이터 취득 현황`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557) 탭의 값을 쓴다.
-- **4장 × `batch_size` 16 = 유효 배치 64** — 장 수를 바꾸면 `batch_size`도 바꿔 64를 맞춘다 → [유효 배치](#유효-배치)
-- `--steps` 정하는 법 → [스텝 수](#스텝-수)
-- 공유 계정 수칙 → [공유 서버](#공유-서버)
-- tmux 붙기 `tmux attach -t acttrain-<본인이름>` · 떼기 `Ctrl+b` → `d`
+- `<본인_단계_repo>` → [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)
+- 유효 배치 **64** = `batch_size` × 장 수 → [유효 배치](#유효-배치)
+- `--steps` → [스텝 수](#스텝-수) · 스모크런과 달라지는 인자 → [학습](#학습) · 공유 계정 수칙 → [공유 서버](#공유-서버)
+- tmux — 붙기 `tmux attach -t acttrain-<본인이름>` · 떼기 `Ctrl+b` `d`
 
 ### 2-3. 중단·재개
 
@@ -148,18 +145,17 @@ uv run accelerate launch --multi_gpu --num_processes=4 \
 ### 2-4. 학습이 끝나면
 
 1. Hub에 `--policy.repo_id` 이름으로 올라갔는지 확인
-2. **공유 시트 [`모델 체크포인트`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) 탭에 한 줄** — 레포 이름·보유상황·학습 로그·학습 담당·학습 파라미터(`batch_size × 장 수`와 `· fp32`를 반드시 포함)
-3. [3. Eval](#3-eval)로
+2. [`모델 체크포인트` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510)에 한 줄 — 레포 이름·보유상황·학습 로그·담당·파라미터(`batch_size` × 장 수 · `fp32`)
+3. → [3. Eval](#3-eval)
 
 ---
 
 ## 3. Eval
 
-> 🚨 로봇 주변, 특히 **베이스 진행 방향을 비우고** 비상정지에 손이 닿는 위치에 선다.
+> 🚨 베이스 진행 방향을 비우고, 비상정지에 손이 닿는 위치에서.
 
-`--dataset.repo_id`는 **`eval_`로 시작**하고 **회차 식별자를 붙여 새 이름**을 잡는다 → [eval 함정](#eval-함정)
-
-`<체크포인트>`는 [`모델 체크포인트`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) 탭에서, `<본인 단계 지시문>`은 [`데이터 취득 현황`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557) 탭에서 가져온다.
+- `<체크포인트>` → [`모델 체크포인트` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) · `<본인 단계 지시문>` → [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)
+- `--dataset.repo_id` = `eval_` + 회차 식별자 → [eval 함정](#eval-함정)
 
 ```shell
 uv run lerobot-record \
@@ -186,7 +182,7 @@ uv run lerobot-record \
   --dataset.num_episodes=10
 ```
 
-리셋 구간에 리더암으로 다음 에피소드의 시작 자세·파지를 만들고, 다 되면 `→`로 넘긴다. 에피소드 구간은 정책이 구동한다.
+- 리셋 구간 = 리더암으로 시작 자세·파지, 끝나면 `→`. 에피소드 구간은 정책 구동.
 
 **돌리기 전 점검**
 
@@ -200,15 +196,13 @@ uv run python -c "import pyrealsense2 as rs; [print(d.get_info(rs.camera_info.se
 
 ## 4. 데이터셋 확인·편집
 
-**로컬 재생(QC)**
+**로컬 재생(QC)** — 온라인은 [뷰어](https://huggingface.co/spaces/lerobot/visualize_dataset)에 `repo_id` 붙여넣기.
 
 ```shell
 uv run lerobot-dataset-viz --repo-id kiroaiseoul/<dataset> --episode-index 0
 ```
 
-한 번에 한 에피소드만 연다. 허브에 올린 것은 [온라인 뷰어](https://huggingface.co/spaces/lerobot/visualize_dataset)에 `repo_id`를 붙여넣어도 된다.
-
-**손상 에피소드 삭제** — `episode_indices`는 삭제 전 인덱스 기준 → [데이터셋 편집](#데이터셋-편집)
+**손상 에피소드 삭제** → [데이터셋 편집](#데이터셋-편집)
 
 ```shell
 uv run lerobot-edit-dataset \
@@ -219,7 +213,7 @@ uv run lerobot-edit-dataset \
   --push_to_hub true
 ```
 
-**Replay**
+**Replay** — 🚨 기록된 궤적대로 팔·베이스 실제 구동.
 
 ```shell
 uv run lerobot-replay \
@@ -236,17 +230,26 @@ uv run lerobot-replay \
 
 # 인자 레퍼런스
 
+## 설치 함정
+
+- **`sandia`·DGX-1엔 GitHub 자격증명이 없다** — 비공개 repo라 `git clone`이 죽는다. 로컬에서 `rsync -az --exclude=.venv --exclude=outputs <로컬repo>/ <서버>:~/lerobot_trossen/`로 넣는다.
+- 🛑 **`.python-version`(3.11)을 지우거나 3.12로 올리지 말 것** — 락이 3.12를 경계로 갈려 있어 3.12에서는 lerobot 0.6.1이 잡히고, [§3 Eval](#3-eval)의 `--policy.path`가 거부된다.
+
 ## Record
 
 - `--robot.type` / `--robot.left_arm_ip_address` / `--robot.right_arm_ip_address` / `--robot.id` — follower 플랫폼 종류·좌우 팔 IP·명칭
-- `--robot.cameras` — 카메라 종류·시리얼·해상도·FPS
+- `--robot.cameras` — 카메라 종류·시리얼·해상도·FPS. **바깥은 홑따옴표** — 겹따옴표면 안쪽 `"`가 셸에서 벗겨져 시리얼이 정수로 파싱된다.
 - `--teleop.*` — 위와 같은 항목의 leader 쪽
 - `--display_data` — 취득 영상·관절각도 실시간 표시
 - `--dataset.repo_id` — 저장할 Hugging Face dataset (`<username>/<name>`)
-- `--dataset.num_episodes` / `--dataset.episode_time_s` / `--dataset.reset_time_s` — 취득 에피소드 수 · 1회 취득 시간(초) · 에피소드 간 초기화 대기(초)
+- `--dataset.num_episodes` — **이번에 추가로 찍을 개수**(누적 목표가 아니다). `--resume=true`면 기존 repo의 마지막 다음부터 붙는다.
+- `--dataset.episode_time_s` / `--dataset.reset_time_s` — 1회 취득 시간(초) · 에피소드 간 초기화 대기(초)
 - `--dataset.single_task` — 언어 지시문 레이블
 - `--dataset.push_to_hub` — 기본 `true`. 로컬에만 두려면 `false`
-- `--resume` — `true`면 기존 repo에 이어서 기록
+
+### 취득 후 점검
+
+`meta/stats.json`의 base 차원(state/action dim 14·15) `std`가 유한한지 본다. NaN·거대값이면 base 속도 garbage가 섞인 것이고 **사후 복구가 안 된다.** 차단 메커니즘 → [Changes in this fork](#changes-in-this-fork)
 
 ## Eval
 
@@ -262,13 +265,14 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 	```
 
 	로컬 학습 산출물도 같다 — 로드 가능한 경로는 `outputs/…/checkpoints/<스텝>/pretrained_model`이지 그 위 디렉터리가 아니다.
-- **정책 종류는 명령에 안 쓴다** — `lerobot-record`가 체크포인트의 `config.json` `type`에서 정책 종류와 입출력 차원을 읽는다. **`--policy.type`은 주지 말 것** — `--policy.path`와 같이 주면 `Cannot specify both …`로 죽고, 혼자 주면 **경고 없이 랜덤 가중치 정책이 로봇을 구동한다**(`lerobot-eval`엔 있는 경고가 `lerobot-record`엔 없다).
+- **정책 종류는 명령에 안 쓴다** — `lerobot-record`가 체크포인트의 `config.json` `type`에서 정책 종류와 입출력 차원을 읽는다. **`--policy.type`은 주지 말 것** — `--policy.path`와 같이 주면 `Cannot specify both …`로 죽고, 혼자 주면 **경고 없이 랜덤 가중치 정책이 로봇을 구동한다**(`lerobot-eval`엔 있는 경고가 `lerobot-record`엔 없다). `--policy.path`가 안 먹으면 위 중첩 레이아웃부터 의심할 것.
 - `--robot.enable_base_motor_torque` — **eval에선 `true`가 필수이고 기본값이 아니다.** 끄면 정책의 `x.vel`·`theta.vel`이 base에 도달해도 무시되는데 **아무 에러도 안 난다** — 팔만 움직이고 base가 가만있는 것이 "base 동작을 못 배웠다"로 오독된다. `connect()`에서 한 번 적용되므로 처음부터 명령줄에 있어야 한다.
 - `--dataset.repo_id` — **반드시 `eval_`로 시작**한다(정책을 주면서 아니면 즉시 `ValueError`). 반대로 **취득용 repo는 `eval_`로 시작하면 안 된다.**
 - `--dataset.single_task` — 정책 종류와 무관하게 **필수**지만 쓰임이 갈린다. **pi0는 언어조건부**라 학습 때와 같은 문구를 줘야 하고, **ACT는 이 문자열을 정책 입력으로 쓰지 않아**(토크나이저 단계가 없다) 데이터셋 라벨로만 기록된다.
 - `--teleop.*` — 리셋 구간에서 리더암으로 시작 자세·파지를 만들기 위한 것. 에피소드 구간은 `--policy.path`가 있으므로 정책이 구동한다. 리더암을 붙인 채로 돌 수 있게 된 근거 → [Joint Velocity Pacing](#joint-velocity-pacing)
 - `--robot.velocity_safety_factor` — **기본값 `0.4`를 올리지 말 것.** `0.8`·`0.5`는 둘 다 실기에서 트립했다(조건은 `sf ≤ 1/2.07 = 0.483`) → [Joint Velocity Pacing](#joint-velocity-pacing)
-- `--dataset.reset_time_s` — 리셋 구간이 자세 잡기까지 맡으므로 upstream 기본값 60이 아니라 **90**. 남으면 `→`로 조기 종료.
+- `--dataset.reset_time_s` — 리셋 구간이 자세 잡기까지 맡으므로 upstream 기본값 60이 아니라 **90**.
+- `--robot.include_base_in_state` — 체크포인트의 state 차원과 짝을 맞춘다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
 
 **확인 범위** — lerobot 0.4.0~0.4.4에서 동일. 0.6.0부터는 정책 배포가 `lerobot-rollout`으로 분리되고 `lerobot-record`가 `--policy.path`를 거부하나, 체크포인트로 타입을 판별하는 원칙은 유지된다.
 
@@ -281,10 +285,12 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 
 - `--dataset.repo_id` — 학습에 쓸 데이터셋. 단계별 취득이므로 단계 repo 이름을 그대로 준다.
 - `--policy.type` — 정책 종류(`act`·`pi0`·`smolvla`). **학습에서만 쓰는 인자다** — eval에선 체크포인트가 스스로 밝히므로 주지 않는다.
-- `--policy.repo_id` — 학습 결과를 올릴 Hub repo. `push_to_hub` 기본값이 `true`라 **빼면 `ValueError: 'policy.repo_id' argument missing`으로 죽는다.** 올리지 않을 때만 `--policy.push_to_hub=false`를 명시한다.
+- `--policy.repo_id` — 학습 결과를 올릴 Hub repo. `push_to_hub` 기본값이 `true`라 **빼면 `ValueError: 'policy.repo_id' argument missing`으로 죽는다.**
+- 🛑 **스모크런의 `--policy.push_to_hub=false`를 본 학습에 옮기지 말 것** — 붙으면 60k를 완주하고도 허브엔 껍데기 repo만 남고 대장 자동 열이 빈다(실제 발생: `task10_move_to_beaker_shelf_kiro`).
 - `--output_dir` — 로컬 체크포인트 경로. 실제 로드 가능한 디렉터리는 `<output_dir>/checkpoints/<스텝>/pretrained_model`이다.
 - `--batch_size` — **GPU 1장당** 배치.
 - `--save_freq` — 체크포인트 저장 간격(스텝).
+- `--wandb.enable` — `false`. 켜려면 그 기기에 `wandb login`이 선행돼야 하고, 끄더라도 loss·grad_norm·lr은 `log_freq`마다 콘솔에 찍힌다. 남기려면 `2>&1 | tee <로그파일>`.
 - **lr은 GPU 수에 맞춰 자동 스케일되지 않는다.** 바꾸려면 **`--policy.optimizer_lr`**로 준다 — `--optimizer.lr`은 **경고 없이 무시되고** 정책 기본값 `1e-5`로 되돌아간다.
 - ACT는 사전학습 체크포인트가 없어 scratch부터 학습한다(비전 백본만 ImageNet ResNet18로 자동 초기화). 그래서 `--policy.pretrained_path`가 없다.
 - `tmux` — 학습이 몇 시간 걸려 SSH가 끊기면 프로세스가 같이 죽는다. tmux 안에서 돌리면 살아남는다.
@@ -317,11 +323,9 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 
 ### 공유 서버
 
-- 실행 전 **프로세스 단위로** 점유를 확인하고(`nvidia-smi --query-compute-apps=pid,used_memory --format=csv`) **비어 있는 장만** 잡는다. 빈 메모리 수치가 아니라 프로세스 유무로 판단할 것.
+- 실행 전 **프로세스 단위로** 점유를 확인하고(`nvidia-smi --query-compute-apps=pid,used_memory --format=csv`) **비어 있는 장만** 잡는다. 빈 메모리 수치가 아니라 프로세스 유무로 판단할 것. `sandia`는 RTX 3090 ×4가 전부이고 DGX-1은 V100 ×8이다.
 - `--output_dir`·tmux 세션명에 **본인 이름**을 넣는다 — 공유 계정이라 그게 누구 런인지 남는 유일한 기록이다.
 - 남의 프로세스·tmux 세션은 건드리지 않는다.
-- 🛑 **스모크런의 `--policy.push_to_hub=false`를 본 학습에 옮기지 말 것** — 붙으면 60k를 완주하고도 허브엔 껍데기 repo만 남고 대장 자동 열이 빈다(실제 발생: `task10_move_to_beaker_shelf_kiro`).
-- `--wandb.enable`은 로그인이 있는 기기에서만 `true`. DGX-1은 로그인이 없어 `false`로 두고, 남기려면 `2>&1 | tee <로그파일>`.
 
 ### DeepSpeed·FSDP는 쓰지 않는다
 
@@ -333,7 +337,7 @@ ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합�
 - `episode_indices`는 **삭제 전 인덱스 기준**. 삭제 후 `0..N-1`로 자동 재번호된다.
 - ⚠️ **같은 `repo_id`에 덮어쓰지 말 것** — 재패킹으로 파일 구성이 바뀌는데 push가 원격의 옛 파일을 지우지 않아 orphan이 남아 데이터셋 일관성이 깨진다.
 - 다른 연산(`split`·`merge`·`info`·`remove_feature` 등)은 `uv run lerobot-edit-dataset --help`.
-- `lerobot-dataset-viz`의 데이터셋 기본 위치는 `~/.cache/huggingface/lerobot/<repo-id>`. 캐시 밖이면 `--root <경로>`.
+- `lerobot-dataset-viz`는 한 번에 한 에피소드만 연다. 데이터셋 기본 위치는 `~/.cache/huggingface/lerobot/<repo-id>`, 캐시 밖이면 `--root <경로>`.
 
 ## 부록 — pi0 (담당자 전용)
 
