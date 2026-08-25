@@ -1,59 +1,34 @@
 # LeRobot Trossen Integration
 
-## Overview
+[`TrossenRobotics/lerobot_trossen`](https://github.com/TrossenRobotics/lerobot_trossen)의 **KIRO fork.** Mobile AI 양팔 플랫폼의 **데이터 취득 → 학습 → eval** 명령 정본.
 
-This package contains LeRobot integrations for the Trossen AI series of robots.
+- 로봇 조작·취득 단계의 시작·종료 기준 → [Mobile AI Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide)
+- 인자 설명·함정 → [인자 레퍼런스](#인자-레퍼런스) · fork 변경점 → [Fork reference](#fork-reference)
 
-> **This is the KIRO fork** of [`TrossenRobotics/lerobot_trossen`](https://github.com/TrossenRobotics/lerobot_trossen). Use it for Mobile AI data acquisition and policy eval; the examples below target the **Mobile AI** dual-arm platform.
+---
 
-### Changes in this fork
+## 0. 설치
 
-| Change | What it does | Where |
-| ------ | ------------ | ----- |
-| **Mobile-base velocity sanitisation** | `mobileai.py` refreshes the base state before reading it and zeroes out garbage velocity readings left in stale serial buffers. Without it, policies trained on the recorded data fault with `Joint 0 ... contains NaN` at inference. Read path only; always on. | [#2](https://github.com/kiro-ai-division/lerobot_trossen/pull/2) |
-| **Base command guard** | Non-finite base velocity *commands* are zeroed and clamped to +/-1.0 m/s before they reach the base. Without it a NaN from the policy arrives as full-speed reverse. Always on. | [below](#base-command-guard) - [#20](https://github.com/kiro-ai-division/lerobot_trossen/pull/20) |
-| **Joint velocity pacing** | Stretches `goal_time` so no joint is commanded past its hard velocity limit, which is what used to kill the process at the policy/teleop handoff. `velocity_safety_factor` defaults to `0.4`; `LEROBOT_PACING_LOG` logs the decision per frame. | [below](#joint-velocity-pacing) - [#16](https://github.com/kiro-ai-division/lerobot_trossen/pull/16) |
-| **`include_base_in_state` flag** | Drops the base velocity from `observation.state` so 14-dim policies can be evaluated. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4) |
-| **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
-| **`LEROBOT_LOOP_HZ_LOG`** | Opt-in control-loop rate and per-section timing meter. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6) |
-| **cu128 torch wheels** | `torch`/`torchvision` pinned to the CUDA 12.8 index so inference runs on Blackwell (sm_120) GPUs. | [below](#installation) · [#12](https://github.com/kiro-ai-division/lerobot_trossen/pull/12) |
-
-For the KIRO/GIST platform command lines (camera serials, checkpoints, recording conventions), see the [Mobile AI Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide).
-
-See the [LeRobot documentation](https://huggingface.co/docs/lerobot) for details on more advanced usage like using the HuggingFace Hub, model training, and using different teleoperation methods.
-See the [Trossen AI documentation](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin.html) for details on configuration and usage of Trossen AI robots with LeRobot.
-
-## Installation
-
-We use `uv` to manage our dependencies.
-Follow the instructions [here](https://docs.astral.sh/uv/getting-started/installation/) to install `uv`.
-
-Run the following command to install this package and its dependencies:
+로봇 PC에는 `~/lerobot_trossen`으로 설치돼 있다 — **`cd ~/lerobot_trossen`부터 시작한다.** `sandia`·DGX-1은 같은 경로로 세팅 중이니 시작 전에 경로를 확인한다.
 
 ```shell
-# Clone this repository
 git clone https://github.com/kiro-ai-division/lerobot_trossen.git
-
-# Install the trossen lerobot packages and their dependencies
+cd lerobot_trossen
 uv sync
-
-# Verify installation
-uv pip list | grep trossen
-# lerobot-robot-trossen
-# lerobot-teleoperator-trossen
-# trossen-arm
-# trossen-slate
+uv run hf auth login          # kiroaiseoul org write 권한 토큰
 ```
 
-> **CUDA wheels.** `torch` and `torchvision` are pinned to the [cu128 index](https://download.pytorch.org/whl/cu128) so that policy inference works on Blackwell GPUs (sm_120, e.g. the RTX 5090 in the robot PC) — the default PyPI wheels are built against CUDA 12.6 and ship kernels only up to sm_90, which makes eval die on the first frame with `no kernel image is available for execution on the device`. Note that cu128 wheels drop sm_50/sm_60/sm_70 (Maxwell, Pascal, Volta); Turing and newer are unaffected.
+⚠️ **`sandia`·DGX-1엔 GitHub 자격증명이 없어 위 `git clone`이 죽는다**(비공개 repo). 그 두 대는 로컬에서 `rsync -az --exclude=.venv --exclude=outputs <로컬repo>/ <서버>:~/lerobot_trossen/`로 넣는다.
 
-## Usage
+🛑 **`.python-version`(3.11)을 지우거나 3.12로 올리지 말 것** — 락이 3.12를 경계로 갈려 있어 3.12에서는 lerobot 0.6.1이 잡히고, 그러면 §3 Eval의 `--policy.path`가 거부된다.
 
-> Camera serial numbers are **platform-specific** — replace the `<…_serial>` placeholders with your own. See the [Trossen AI configuration docs](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin/configuration.html) for how to find them, and the [Mobile AI Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide) for the serials of the KIRO/GIST platforms.
+카메라 시리얼(KIRO Mobile AI) — `cam_high` `230422273501` / `cam_left_wrist` `230422271234` / `cam_right_wrist` `230322274369`
 
-### Teleoperation Script
+---
 
-Teleoperate a Mobile AI robot (dual-arm leader → dual-arm follower).
+## 1. 데이터 취득
+
+### 1-1. Teleoperation — 작동 확인
 
 ```shell
 uv run lerobot-teleoperate \
@@ -65,13 +40,17 @@ uv run lerobot-teleoperate \
   --teleop.left_arm_ip_address=192.168.1.3 \
   --teleop.right_arm_ip_address=192.168.1.2 \
   --teleop.id=leader \
-  --display_data=false
+  --display_data=true \
+  --robot.cameras='{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}'
 ```
 
-### Record Script
+### 1-2. Record
 
-Record 10 episodes with duration 45s of a cube pickup task with a Mobile AI robot using the RealSense camera interface.
-This dataset will not be pushed to the Hugging Face Hub after recording.
+`<…>` 두 곳은 **공유 시트 [`데이터 취득 현황`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557) 탭이 정본**이다 — 본인 행의 `데이터셋 이름 (dataset.repo_id)`과 `language instruction (dataset.single_task)`을 그대로 복사한다.
 
 ```shell
 uv run lerobot-record \
@@ -79,26 +58,108 @@ uv run lerobot-record \
   --robot.left_arm_ip_address=192.168.1.5 \
   --robot.right_arm_ip_address=192.168.1.4 \
   --robot.id=follower \
-  --robot.cameras="{
-    cam_high: {type: intelrealsense, serial_number_or_name: "<cam_high_serial>", width: 640, height: 480, fps: 30},
-    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "<cam_left_wrist_serial>", width: 640, height: 480, fps: 30},
-    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "<cam_right_wrist_serial>", width: 640, height: 480, fps: 30}
-  }" \
+  --robot.cameras='{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}' \
   --teleop.type=mobileai_leader_teleop \
   --teleop.left_arm_ip_address=192.168.1.3 \
   --teleop.right_arm_ip_address=192.168.1.2 \
   --teleop.id=leader \
   --display_data=true \
-  --dataset.push_to_hub=false \
-  --dataset.repo_id=${HF_USER}/mobileai-cube-pickup \
-  --dataset.episode_time_s=45 \
-  --dataset.reset_time_s=15 \
-  --dataset.num_episodes=10 \
-  --dataset.single_task="Grab the cube"
+  --dataset.repo_id=kiroaiseoul/<본인_단계_repo> \
+  --dataset.num_episodes=3 \
+  --dataset.episode_time_s=90 \
+  --dataset.reset_time_s=30 \
+  --dataset.single_task="<본인 단계 지시문>"
 ```
 
-Record 25 episodes with duration 60s of a handover task with a Mobile AI robot.
-Datasets are pushed to the Hugging Face Hub after recording by default - make sure to set the `HF_USER` environment variable and be logged in with the `huggingface-cli login` command before running this script.
+- 이어 찍기 — 마지막 줄 끝에 `\`를 붙이고 `--resume=true` 추가. `--dataset.num_episodes`는 **이번에 추가로 찍을 개수**다(누적 목표 아님)
+- 녹화 중 키 — `→` 구간 조기 종료 · `←` 현재 에피소드 취소·재취득 · `ESC` 중단·저장
+- 취득 직후 확인 → [4. 데이터셋 확인·편집](#4-데이터셋-확인편집)
+- **자가점검** — `meta/stats.json`의 base 차원(state/action dim 14·15) `std`가 유한한지 본다. NaN·거대값이면 garbage 혼입이고 **사후 복구가 안 된다.**
+
+---
+
+## 2. 학습
+
+`sandia`·DGX-1이 **인자는 같고 두 줄만 다르다** — 잡을 장(`CUDA_VISIBLE_DEVICES`)과 `--wandb.enable`(DGX-1은 로그인이 없어 `false`).
+
+### 2-1. 스모크런 — 본 학습 전에 반드시
+
+```shell
+cd ~/lerobot_trossen && rm -rf outputs/_smoke_<본인이름>
+
+CUDA_VISIBLE_DEVICES=0 uv run accelerate launch \
+  --num_processes=1 \
+  -m lerobot.scripts.lerobot_train \
+  --policy.type=act \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --dataset.repo_id=kiroaiseoul/<본인_단계_repo> \
+  --output_dir=outputs/_smoke_<본인이름> \
+  --batch_size=16 --steps=10 --save_freq=10 \
+  --wandb.enable=false
+```
+
+`outputs/_smoke_<본인이름>/checkpoints/000010/pretrained_model/model.safetensors`가 수백 MB로 생기면 통과.
+
+### 2-2. 본 학습
+
+```shell
+tmux new -s acttrain-<본인이름>
+cd ~/lerobot_trossen
+
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv   # 프로세스가 없는 장을 고른다
+export CUDA_VISIBLE_DEVICES=<위에서 고른 4장>
+
+uv run accelerate launch \
+  --multi_gpu \
+  --num_processes=4 \
+  -m lerobot.scripts.lerobot_train \
+  --policy.type=act \
+  --policy.device=cuda \
+  --dataset.repo_id=kiroaiseoul/<본인_단계_repo> \
+  --policy.repo_id=kiroaiseoul/act_<본인_단계>_<스텝> \
+  --output_dir=outputs/<본인_이름>/<본인_단계> \
+  --batch_size=16 --steps=60000 --save_freq=20000 \
+  --wandb.enable=true
+```
+
+- `<본인_단계_repo>`는 [`데이터 취득 현황`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557) 탭의 값을 쓴다.
+- **4장 × `batch_size` 16 = 유효 배치 64** — 장 수를 바꾸면 `batch_size`도 바꿔 64를 맞춘다 → [유효 배치](#유효-배치)
+- `--steps` 정하는 법 → [스텝 수](#스텝-수)
+- 공유 계정 수칙 → [공유 서버](#공유-서버)
+- tmux 붙기 `tmux attach -t acttrain-<본인이름>` · 떼기 `Ctrl+b` → `d`
+
+### 2-3. 중단·재개
+
+```shell
+cd ~/lerobot_trossen
+export CUDA_VISIBLE_DEVICES=<비어 있는 장>
+
+uv run accelerate launch --multi_gpu --num_processes=4 \
+  -m lerobot.scripts.lerobot_train \
+  --config_path=outputs/<본인_이름>/<본인_단계>/checkpoints/last/pretrained_model/train_config.json \
+  --resume=true
+```
+
+### 2-4. 학습이 끝나면
+
+1. Hub에 `--policy.repo_id` 이름으로 올라갔는지 확인
+2. **공유 시트 [`모델 체크포인트`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) 탭에 한 줄** — 레포 이름·보유상황·학습 로그·학습 담당·학습 파라미터(`batch_size × 장 수`와 `· fp32`를 반드시 포함)
+3. [3. Eval](#3-eval)로
+
+---
+
+## 3. Eval
+
+> 🚨 로봇 주변, 특히 **베이스 진행 방향을 비우고** 비상정지에 손이 닿는 위치에 선다.
+
+`--dataset.repo_id`는 **`eval_`로 시작**하고 **회차 식별자를 붙여 새 이름**을 잡는다 → [eval 함정](#eval-함정)
+
+`<체크포인트>`는 [`모델 체크포인트`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) 탭에서, `<본인 단계 지시문>`은 [`데이터 취득 현황`](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557) 탭에서 가져온다.
 
 ```shell
 uv run lerobot-record \
@@ -106,55 +167,201 @@ uv run lerobot-record \
   --robot.left_arm_ip_address=192.168.1.5 \
   --robot.right_arm_ip_address=192.168.1.4 \
   --robot.id=follower \
-  --robot.cameras="{
-    cam_high: {type: intelrealsense, serial_number_or_name: "<cam_high_serial>", width: 640, height: 480, fps: 30},
-    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "<cam_left_wrist_serial>", width: 640, height: 480, fps: 30},
-    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "<cam_right_wrist_serial>", width: 640, height: 480, fps: 30}
-  }" \
+  --robot.cameras='{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}' \
+  --robot.enable_base_motor_torque=true \
   --teleop.type=mobileai_leader_teleop \
   --teleop.left_arm_ip_address=192.168.1.3 \
   --teleop.right_arm_ip_address=192.168.1.2 \
   --teleop.id=leader \
   --display_data=true \
-  --dataset.repo_id=${HF_USER}/mobileai-handover-cube \
-  --dataset.num_episodes=25 \
-  --dataset.episode_time_s=60 \
-  --dataset.reset_time_s=15 \
-  --dataset.single_task="Grab and handover the red cube to the other arm"
+  --dataset.repo_id=kiroaiseoul/eval_act_<단계>_<회차> \
+  --dataset.single_task="<본인 단계 지시문>" \
+  --policy.path=kiroaiseoul/<체크포인트> \
+  --dataset.episode_time_s=120 \
+  --dataset.reset_time_s=90 \
+  --dataset.num_episodes=10
 ```
 
-### Optional Observation Features
+리셋 구간에 리더암으로 다음 에피소드의 시작 자세·파지를 만들고, 다 되면 `→`로 넘긴다. 에피소드 구간은 정책이 구동한다.
 
-By default, Mobile AI followers only observe joint positions (`<joint>.pos`).
-You can optionally record additional per-joint signals by enabling the following flags.
-All are disabled by default.
-
-| Flag | Observation key | Description |
-| ---- | --------------- | ----------- |
-| `include_velocity` | `<joint>.vel` | Joint velocity. Measured in rad/s for the arm joints and m/s for the gripper carriage. |
-| `include_effort` | `<joint>.eff` | Total motor effort, combining gravity, friction, and any external load. Measured in Nm for the arm joints and N for the gripper carriage. Nonzero even when the arm is holding still against gravity. |
-| `include_external_effort` | `<joint>.ext_eff` | Estimated externally applied effort, after gravity and friction compensation. Measured in Nm for the arm joints and N for the gripper carriage. Useful for contact and force sensing; an unloaded arm reports values near zero. |
-
-Pass them as `--robot.<flag>=true` when running any command that constructs the robot (for example `lerobot-record` or `lerobot-teleoperate`). The flags are shared across both arms, and the resulting observation keys are prefixed per arm, e.g. `left_<joint>.eff` and `right_<joint>.eff`. For example, to record with all three enabled on a Mobile AI follower:
+**돌리기 전 점검**
 
 ```shell
-uv run lerobot-record \
+for ip in 192.168.1.5 192.168.1.4 192.168.1.3 192.168.1.2; do
+  ping -c1 -W1 $ip >/dev/null 2>&1 && echo "OK $ip" || echo "NG $ip"; done
+uv run python -c "import pyrealsense2 as rs; [print(d.get_info(rs.camera_info.serial_number)) for d in rs.context().devices]"
+```
+
+---
+
+## 4. 데이터셋 확인·편집
+
+**로컬 재생(QC)**
+
+```shell
+uv run lerobot-dataset-viz --repo-id kiroaiseoul/<dataset> --episode-index 0
+```
+
+한 번에 한 에피소드만 연다. 허브에 올린 것은 [온라인 뷰어](https://huggingface.co/spaces/lerobot/visualize_dataset)에 `repo_id`를 붙여넣어도 된다.
+
+**손상 에피소드 삭제** — `episode_indices`는 삭제 전 인덱스 기준 → [데이터셋 편집](#데이터셋-편집)
+
+```shell
+uv run lerobot-edit-dataset \
+  --repo_id kiroaiseoul/<dataset> \
+  --new_repo_id kiroaiseoul/<dataset>_clean \
+  --operation.type delete_episodes \
+  --operation.episode_indices "[9, 43, 78]" \
+  --push_to_hub true
+```
+
+**Replay**
+
+```shell
+uv run lerobot-replay \
   --robot.type=mobileai_robot \
   --robot.left_arm_ip_address=192.168.1.5 \
   --robot.right_arm_ip_address=192.168.1.4 \
   --robot.id=follower \
-  --robot.include_velocity=true \
-  --robot.include_effort=true \
-  --robot.include_external_effort=true \
-  --dataset.repo_id=${HF_USER}/mobileai-cube-pickup \
-  --dataset.single_task="Grab the cube" \
-  --teleop.type=mobileai_leader_teleop \
-  --teleop.left_arm_ip_address=192.168.1.3 \
-  --teleop.right_arm_ip_address=192.168.1.2 \
-  --teleop.id=leader
+  --robot.enable_base_motor_torque=true \
+  --dataset.repo_id=kiroaiseoul/<dataset> \
+  --dataset.episode=3
 ```
 
-### Base Velocity in the Observation State
+---
+
+# 인자 레퍼런스
+
+## Record
+
+- `--robot.type` / `--robot.left_arm_ip_address` / `--robot.right_arm_ip_address` / `--robot.id` — follower 플랫폼 종류·좌우 팔 IP·명칭
+- `--robot.cameras` — 카메라 종류·시리얼·해상도·FPS
+- `--teleop.*` — 위와 같은 항목의 leader 쪽
+- `--display_data` — 취득 영상·관절각도 실시간 표시
+- `--dataset.repo_id` — 저장할 Hugging Face dataset (`<username>/<name>`)
+- `--dataset.num_episodes` / `--dataset.episode_time_s` / `--dataset.reset_time_s` — 취득 에피소드 수 · 1회 취득 시간(초) · 에피소드 간 초기화 대기(초)
+- `--dataset.single_task` — 언어 지시문 레이블
+- `--dataset.push_to_hub` — 기본 `true`. 로컬에만 두려면 `false`
+- `--resume` — `true`면 기존 repo에 이어서 기록
+
+## Eval
+
+eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취득(teleop 시연)과 eval(정책 구동)을 가른다.** Record와 달라지는 것만 적는다.
+
+- `--policy.path` — 학습된 정책 경로. **`config.json`이 있는 디렉터리**를 가리켜야 한다. `lerobot-train --policy.repo_id=…`가 올린 체크포인트는 repo 루트에 그 파일들이 있어 bare repo id가 그대로 먹지만, 디렉터리째 업로드된 체크포인트는 `pretrained_model/` 아래에 중첩되고 **이름으로는 구별되지 않는다.** 후자는 먼저 받아서 그 하위를 준다:
+
+	```shell
+	POLICY=$(uv run python -c "
+	from huggingface_hub import snapshot_download
+	print(snapshot_download('kiroaiseoul/<repo>', allow_patterns=['pretrained_model/*']))
+	" | tail -1)/pretrained_model
+	```
+
+	로컬 학습 산출물도 같다 — 로드 가능한 경로는 `outputs/…/checkpoints/<스텝>/pretrained_model`이지 그 위 디렉터리가 아니다.
+- **정책 종류는 명령에 안 쓴다** — `lerobot-record`가 체크포인트의 `config.json` `type`에서 정책 종류와 입출력 차원을 읽는다. **`--policy.type`은 주지 말 것** — `--policy.path`와 같이 주면 `Cannot specify both …`로 죽고, 혼자 주면 **경고 없이 랜덤 가중치 정책이 로봇을 구동한다**(`lerobot-eval`엔 있는 경고가 `lerobot-record`엔 없다).
+- `--robot.enable_base_motor_torque` — **eval에선 `true`가 필수이고 기본값이 아니다.** 끄면 정책의 `x.vel`·`theta.vel`이 base에 도달해도 무시되는데 **아무 에러도 안 난다** — 팔만 움직이고 base가 가만있는 것이 "base 동작을 못 배웠다"로 오독된다. `connect()`에서 한 번 적용되므로 처음부터 명령줄에 있어야 한다.
+- `--dataset.repo_id` — **반드시 `eval_`로 시작**한다(정책을 주면서 아니면 즉시 `ValueError`). 반대로 **취득용 repo는 `eval_`로 시작하면 안 된다.**
+- `--dataset.single_task` — 정책 종류와 무관하게 **필수**지만 쓰임이 갈린다. **pi0는 언어조건부**라 학습 때와 같은 문구를 줘야 하고, **ACT는 이 문자열을 정책 입력으로 쓰지 않아**(토크나이저 단계가 없다) 데이터셋 라벨로만 기록된다.
+- `--teleop.*` — 리셋 구간에서 리더암으로 시작 자세·파지를 만들기 위한 것. 에피소드 구간은 `--policy.path`가 있으므로 정책이 구동한다. 리더암을 붙인 채로 돌 수 있게 된 근거 → [Joint Velocity Pacing](#joint-velocity-pacing)
+- `--robot.velocity_safety_factor` — **기본값 `0.4`를 올리지 말 것.** `0.8`·`0.5`는 둘 다 실기에서 트립했다(조건은 `sf ≤ 1/2.07 = 0.483`) → [Joint Velocity Pacing](#joint-velocity-pacing)
+- `--dataset.reset_time_s` — 리셋 구간이 자세 잡기까지 맡으므로 upstream 기본값 60이 아니라 **90**. 남으면 `→`로 조기 종료.
+
+**확인 범위** — lerobot 0.4.0~0.4.4에서 동일. 0.6.0부터는 정책 배포가 `lerobot-rollout`으로 분리되고 `lerobot-record`가 `--policy.path`를 거부하나, 체크포인트로 타입을 판별하는 원칙은 유지된다.
+
+### eval 함정
+
+- 🛑 **eval repo 이름이 겹치면 즉사한다** — `LeRobotDataset.create()`가 `root.mkdir(exist_ok=False)`라 같은 이름이 있으면 덮지 않고 `FileExistsError`로 죽는다. 중단된 빈 런이 자리를 잡고 있는 경우가 흔하고, 로봇 PC 캐시엔 `eval_*`이 이미 수십 개 있어 단계별 기본 이름은 대부분 선점됐다.
+- ⚠️ **`| tail`을 붙여 돌리지 말 것** — 파이프의 마지막 명령 종료코드가 잡혀 **실패가 `exit 0`으로 보고된다.** 위 `FileExistsError`가 「정상 종료」로 올라온 적이 있다.
+
+## 학습
+
+- `--dataset.repo_id` — 학습에 쓸 데이터셋. 단계별 취득이므로 단계 repo 이름을 그대로 준다.
+- `--policy.type` — 정책 종류(`act`·`pi0`·`smolvla`). **학습에서만 쓰는 인자다** — eval에선 체크포인트가 스스로 밝히므로 주지 않는다.
+- `--policy.repo_id` — 학습 결과를 올릴 Hub repo. `push_to_hub` 기본값이 `true`라 **빼면 `ValueError: 'policy.repo_id' argument missing`으로 죽는다.** 올리지 않을 때만 `--policy.push_to_hub=false`를 명시한다.
+- `--output_dir` — 로컬 체크포인트 경로. 실제 로드 가능한 디렉터리는 `<output_dir>/checkpoints/<스텝>/pretrained_model`이다.
+- `--batch_size` — **GPU 1장당** 배치.
+- `--save_freq` — 체크포인트 저장 간격(스텝).
+- **lr은 GPU 수에 맞춰 자동 스케일되지 않는다.** 바꾸려면 **`--policy.optimizer_lr`**로 준다 — `--optimizer.lr`은 **경고 없이 무시되고** 정책 기본값 `1e-5`로 되돌아간다.
+- ACT는 사전학습 체크포인트가 없어 scratch부터 학습한다(비전 백본만 ImageNet ResNet18로 자동 초기화). 그래서 `--policy.pretrained_path`가 없다.
+- `tmux` — 학습이 몇 시간 걸려 SSH가 끊기면 프로세스가 같이 죽는다. tmux 안에서 돌리면 살아남는다.
+
+### 유효 배치
+
+**유효 배치 = `--batch_size` × 장 수 = 64.** 이 곱이 실제 학습 배치라, 바뀌면 기존 체크포인트와 **비교가 안 되는 다른 실험**이 된다. 장 수를 줄이면 `batch_size`를 그만큼 올린다(2장이면 32, 4장이면 16).
+
+⚠️ **`batch_size` 16은 아직 안 재봤다** — 우리가 직접 돌린 조합은 `batch_size` 8뿐이다(sandia 4장 · DGX-1 8장 · 단일 GPU). 위임 7건도 `batch_size` 8이었고 **장 수는 회수되지 않아 미확인**이다. 스모크런이 OOM을 잡아 준다.
+
+### 스텝 수
+
+⚠️ **`60000`은 관행이지 결정이 아니다** — 위임 런 7건이 그 값으로 돌아왔을 뿐, 근거 기록이 없다. 우리 조사 결론은 **스텝을 고정하지 말고 데이터셋 크기에서 계산하라**는 것이다.
+
+```
+프레임당 학습 횟수(≈epoch) = steps × batch_size × 장 수 ÷ total_frames
+```
+
+- 목표 밴드는 **5~10 epoch**. 단계를 합쳐 에피소드가 길어지면 프레임 수가 배로 뛰는데 `--steps`는 그대로라 같은 스텝이 얇게 퍼진다.
+- 스텝을 늘려 해결되는 문제가 아니라는 쪽 증거가 더 강하다 — 커뮤니티 실측에서 100k steps(40 epoch)로도 66%에서 정체한 사례와, 10k steps(~4 epoch)로 성공한 사례가 함께 있다.
+
+### 정밀도 — fp32
+
+**`--mixed_precision`을 주지 않는다.**
+
+- ACT·Diffusion Policy 공식 구현 어느 쪽도 `autocast`·`GradScaler`를 쓰지 않는다. PyTorch AMP 안내도 회귀·생성 계열은 fp32가 필요할 수 있다고 적고 있고 ACT는 L1 회귀다.
+- **V100(DGX-1)에선 bf16이 해롭다** — bf16 연산기가 없어 **경고 없이 에뮬레이션으로 떨어져 fp32보다 느려진다.** `torch.cuda.is_bf16_supported()`가 `True`를 주기 때문에 아무 신호도 없다.
+- ⚠️ 속도 이득은 재지 않았다. 되돌리려면 §2-2 명령의 `accelerate launch` 뒤에 `--mixed_precision=bf16 \`을 넣는다.
+- ⚠️ 기존 체크포인트는 대부분 bf16으로 학습됐고 `모델 체크포인트` 탭에 정밀도가 기록돼 있지 않다. **앞으로의 런부터** `학습 파라미터`에 `· fp32`를 적는다.
+
+### 공유 서버
+
+- 실행 전 **프로세스 단위로** 점유를 확인하고(`nvidia-smi --query-compute-apps=pid,used_memory --format=csv`) **비어 있는 장만** 잡는다. 빈 메모리 수치가 아니라 프로세스 유무로 판단할 것.
+- `--output_dir`·tmux 세션명에 **본인 이름**을 넣는다 — 공유 계정이라 그게 누구 런인지 남는 유일한 기록이다.
+- 남의 프로세스·tmux 세션은 건드리지 않는다.
+- 🛑 **스모크런의 `--policy.push_to_hub=false`를 본 학습에 옮기지 말 것** — 붙으면 60k를 완주하고도 허브엔 껍데기 repo만 남고 대장 자동 열이 빈다(실제 발생: `task10_move_to_beaker_shelf_kiro`).
+- `--wandb.enable`은 로그인이 있는 기기에서만 `true`. DGX-1은 로그인이 없어 `false`로 두고, 남기려면 `2>&1 | tee <로그파일>`.
+
+### DeepSpeed·FSDP는 쓰지 않는다
+
+ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합쳐도 0.77 GiB다. 24GB에서 쪼개 봐야 아낄 것이 없다. 게다가 DGX-1 ZeRO-2 실측에서 **학습은 도는데 체크포인트에 `config.json`만 남았다** — DeepSpeed가 파라미터를 평탄 버퍼에 담아 각 텐서가 *부분 뷰*가 되는데 safetensors가 그것을 거부하기 때문이다. 메모리가 모자라면 `--batch_size`를 줄인다.
+
+## 데이터셋 편집
+
+- **항상 `--new_repo_id`를 줄 것** — 안 주면 원본이 `<경로>_old`로 밀리고 원래 자리에 결과가 덮인다.
+- `episode_indices`는 **삭제 전 인덱스 기준**. 삭제 후 `0..N-1`로 자동 재번호된다.
+- ⚠️ **같은 `repo_id`에 덮어쓰지 말 것** — 재패킹으로 파일 구성이 바뀌는데 push가 원격의 옛 파일을 지우지 않아 orphan이 남아 데이터셋 일관성이 깨진다.
+- 다른 연산(`split`·`merge`·`info`·`remove_feature` 등)은 `uv run lerobot-edit-dataset --help`.
+- `lerobot-dataset-viz`의 데이터셋 기본 위치는 `~/.cache/huggingface/lerobot/<repo-id>`. 캐시 밖이면 `--root <경로>`.
+
+## 부록 — pi0 (담당자 전용)
+
+> 🛑 **이 repo 환경에서는 pi0·smolVLA가 돌지 않는다** — `transformers`가 의존성에 없다. **pi0는 조건부 import라 에러 없이 반쪽으로 돌고**(더 위험), smolVLA는 `ModuleNotFoundError`로 즉사한다. pi0는 별도 conda 환경(`fix/lerobot_openpi` fork)이 필요하니 윤준원에게 문의할 것.
+>
+> **팀 학습은 전부 ACT다** — 이 절은 건너뛴다.
+
+---
+
+# Fork reference
+
+여기부터는 **이 fork가 upstream과 무엇이 다른가**의 레퍼런스다. 위 명령을 그대로 쓰는 데는 읽지 않아도 된다.
+
+## Changes in this fork
+
+| Change | What it does | Where |
+| ------ | ------------ | ----- |
+| **Mobile-base velocity sanitisation** | `mobileai.py` refreshes the base state before reading it and zeroes out garbage velocity readings left in stale serial buffers. Without it, policies trained on the recorded data fault with `Joint 0 ... contains NaN` at inference. Read path only; always on. | [#2](https://github.com/kiro-ai-division/lerobot_trossen/pull/2) |
+| **Base command guard** | Non-finite base velocity *commands* are zeroed and clamped to +/-1.0 (m/s linear, rad/s angular) before they reach the base. Without it a NaN from the policy arrives as full-speed reverse. Always on. | [below](#base-command-guard) - [#20](https://github.com/kiro-ai-division/lerobot_trossen/pull/20) |
+| **Joint velocity pacing** | Stretches `goal_time` so no joint is commanded past its hard velocity limit, which is what used to kill the process at the policy/teleop handoff. `velocity_safety_factor` defaults to `0.4`; `LEROBOT_PACING_LOG` logs the decision per frame. | [below](#joint-velocity-pacing) - [#16](https://github.com/kiro-ai-division/lerobot_trossen/pull/16) |
+| **`include_base_in_state` flag** | Drops the base velocity from `observation.state` so 14-dim policies can be evaluated. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4) |
+| **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
+| **`LEROBOT_LOOP_HZ_LOG`** | Opt-in control-loop rate and per-section timing meter. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6) |
+| **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
+
+See the [LeRobot documentation](https://huggingface.co/docs/lerobot) and the [Trossen AI documentation](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin.html) for anything beyond this fork.
+
+## Base Velocity in the Observation State
 
 By default a Mobile AI follower appends the mobile base velocity (`x.vel`, `theta.vel`) to
 `observation.state`, giving a **16-dim** state (6 arm joints + 1 gripper carriage, per arm,
@@ -175,15 +382,7 @@ with the base channels sliced out → pass `false` at eval time.
 `action_features` are untouched, so the base is still commanded either way — the flag only
 gates what the policy *observes*.
 
-```shell
-uv run lerobot-record \
-  --robot.type=mobileai_robot \
-  --robot.include_base_in_state=false \
-  ...
-  --policy.path=${HF_USER}/act-mobileai-nobasestate
-```
-
-### Joint Velocity Pacing
+## Joint Velocity Pacing
 
 A single `set_all_positions` moves the arm over a fixed window
 (`min_time_to_move_multiplier / loop_rate`, 0.1 s by default). A large position jump squeezed
@@ -218,10 +417,15 @@ the delta but guarantees nothing about velocity.
 **Do not raise the default without re-measuring.** The controller enforces its limit on the
 *peak* of the trajectory it generates, while this factor scales the *average* we command. On
 hardware the peak measured **2.05-2.07x** the commanded average (joint_3, both arms, ~20 Hz
-loop), so `0.8` and `0.5` both tripped and only `0.4` survived - 12 phase transitions with
-jumps up to 1.53 rad. The tracking cost is negligible: pacing engaged on **12 of 2165**
-policy-driven frames (0.6%). That 2.07 figure depends on the ratio of loop period to
-`goal_time`, so re-measure it if the loop rate changes.
+loop), so `0.8` and `0.5` both tripped and only `0.4` survived across 12 phase transitions.
+The condition is `sf <= 1 / 2.07 = 0.483`. The tracking cost is negligible: pacing engaged on
+**12 of 2165** policy-driven frames (0.6%). That 2.07 figure depends on the ratio of loop
+period to `goal_time`, so re-measure it if the loop rate changes.
+
+**Bigger jumps are not the dangerous ones.** Handoffs of 0.92 and 1.53 rad all passed; the
+crash happened at 0.46-0.48 rad, right at the pacing threshold. And pacing does not remove the
+risk entirely - frames where pacing never fires still carry a hard limit around
+**delta_crit ~ 0.455 rad**, which no choice of `velocity_safety_factor` moves.
 
 Raising `min_time_to_move_multiplier` instead is the worse trade: it stretches *every* frame
 and blurs the whole trajectory, whereas pacing is a selective brake that only fires on the jump.
@@ -230,10 +434,10 @@ With this in place a leader arm can stay connected during eval, which is what ma
 evaluation possible - the operator sets the next episode's start pose and grasp by hand during
 the reset window, and the policy drives the episode itself.
 
-### Base Command Guard
+## Base Command Guard
 
-Base velocity *commands* are checked for non-finite values and clamped to +/-1.0 m/s before
-they reach `set_cmd_vel()`. The read path has been sanitised since the base velocity NaN
+Base velocity *commands* are checked for non-finite values and clamped to +/-1.0 (m/s for the
+linear channel, rad/s for the angular one) before they reach `set_cmd_vel()`. The read path has been sanitised since the base velocity NaN
 incident ([#2](https://github.com/kiro-ai-division/lerobot_trossen/pull/2)); the command path was not, and the asymmetry was backwards - a
 corrupted reading poisons a dataset, a corrupted command drives the robot.
 
@@ -243,7 +447,25 @@ false against everything, so `max(-MAX, NaN)` returns `-MAX`: a NaN action reach
 actually executed. Verified in the installed `trossen_slate` 0.0.3 binary. Failed writes are
 now reported rather than swallowed, throttled to one warning per second per channel.
 
-### Environment Variables
+## Upstream flags (not fork changes)
+
+### Optional Observation Features
+
+By default, Mobile AI followers only observe joint positions (`<joint>.pos`).
+You can optionally record additional per-joint signals by enabling the following flags.
+All are disabled by default.
+
+| Flag | Observation key | Description |
+| ---- | --------------- | ----------- |
+| `include_velocity` | `<joint>.vel` | Joint velocity. Measured in rad/s for the arm joints and m/s for the gripper carriage. |
+| `include_effort` | `<joint>.eff` | Total motor effort, combining gravity, friction, and any external load. Measured in Nm for the arm joints and N for the gripper carriage. Nonzero even when the arm is holding still against gravity. |
+| `include_external_effort` | `<joint>.ext_eff` | Estimated externally applied effort, after gravity and friction compensation. Measured in Nm for the arm joints and N for the gripper carriage. Useful for contact and force sensing; an unloaded arm reports values near zero. |
+
+Pass them as `--robot.<flag>=true` when running any command that constructs the robot. The
+flags are shared across both arms, and the resulting observation keys are prefixed per arm,
+e.g. `left_<joint>.eff` and `right_<joint>.eff`.
+
+## Environment Variables
 
 | Variable | Default | Effect |
 | -------- | ------- | ------ |
@@ -253,10 +475,11 @@ now reported rather than swallowed, throttled to one warning per second per chan
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
 camera frames CPU-side and only then copies them to the GPU, shipping 4× the bytes over PCIe
-and paying for an elementwise divide plus a full `.contiguous()` copy per camera. On the
-Mobile AI 3-camera setup that measured **54.7 ms → 1.6 ms per frame** (p50 under CPU load),
-and on hardware the eval loop went from **9.7 Hz to 20.7 Hz** against a 21.5 Hz teleop
-recording baseline. This matters beyond throughput: the SLATE base holds a velocity command
+and paying for an elementwise divide plus a full `.contiguous()` copy per camera. An offline bench (RTX 5090 laptop, real ACT
+checkpoint, synthetic frames of the production 3-camera shape) measured **54.7 ms → 1.6 ms per
+frame** (p50 under CPU load); on the robot the eval loop went from **9.73 Hz to 20.85 Hz**
+(140-window mean) against a 21.5 Hz teleop recording baseline, i.e. an over-rotation
+multiplier of 2.2 → 1.03. This matters beyond throughput: the SLATE base holds a velocity command
 until the next `send_action`, so a loop running at half the recording rate integrates every
 rotation roughly twice as far. The patch no-ops if upstream ships the same fix
 ([huggingface/lerobot#4339](https://github.com/huggingface/lerobot/pull/4339), still open) and
@@ -293,137 +516,3 @@ adds an `idle` line for every other frame, which is what separates "pacing never
 "pacing fired and was not enough". `avg_v` is the average velocity the pacing model believes it
 commanded; compare it against that joint's `velocity_max`, and remember the measured peak runs
 about twice the average.
-
-### Dataset Visualization
-
-If you uploaded your dataset to the Hugging Face Hub using ``--control.push_to_hub=true``, you can [visualize your dataset online](https://huggingface.co/spaces/lerobot/visualize_dataset).
-To do so, copy and paste your repository ID into the provided field.
-Your repository ID follows the format:
-
-```
-<huggingface-username>/<dataset-id>
-```
-
-### Model Eval (Record with Policy) Script
-
-Evaluate a trained policy by recording 2 episodes of a cube pickup task with a Mobile AI robot using the RealSense camera interface.
-
-**The policy architecture is not a CLI argument.** `lerobot-record` reads the policy type
-(`act`, `pi0`, `smolvla`, …) and the input/output feature shapes from the checkpoint's
-`config.json`, so ACT and pi0 eval are the same command with a different `--policy.path`.
-Two failure modes are worth knowing:
-
-- Passing `--policy.type` alongside `--policy.path` aborts with
-  `Cannot specify both --policy.path and --policy.type`.
-- Passing `--policy.type` *without* `--policy.path` silently builds a **randomly initialised**
-  policy — `lerobot-eval` warns about this, `lerobot-record` does not.
-
-`--dataset.single_task` is required regardless of policy type, but what it does differs:
-language-conditioned policies (pi0, SmolVLA) tokenise it, so it must match the wording used
-during training, while ACT never reads it — for ACT it is only the dataset label.
-
-Also check `--robot.include_base_in_state` against the checkpoint's state dimension — see
-[Base Velocity in the Observation State](#base-velocity-in-the-observation-state).
-
-Verified against lerobot 0.4.0–0.4.4 (this fork pins 0.4.0). From 0.6.0 policy deployment
-moves to `lerobot-rollout` and `lerobot-record` refuses `--policy.path`, but the
-type-from-checkpoint rule still holds there.
-
-**`--policy.path` has to point at the directory that holds `config.json`.** A checkpoint pushed
-by `lerobot-train --policy.repo_id=...` puts those files at the repo root, so the bare Hub repo
-id works. A checkpoint uploaded as a whole directory instead nests them under
-`pretrained_model/` (next to `training_state/`), and the repo id then resolves to a directory
-with no `config.json`. `--policy.path` cannot address a subfolder of a Hub repo, so fetch it
-first and point at the subdirectory:
-
-```shell
-POLICY=$(uv run python -c "
-from huggingface_hub import snapshot_download
-print(snapshot_download('${HF_USER}/<repo>', allow_patterns=['pretrained_model/*']))
-" | tail -1)/pretrained_model
-
-uv run lerobot-record ... --policy.path="$POLICY"
-```
-
-Check the file list on the Hub before a run; the two layouts are indistinguishable from the
-repo name. The same rule applies to local training output, where the loadable directory is
-`outputs/.../checkpoints/<step>/pretrained_model`, not the checkpoint directory above it.
-
-```shell
-uv run lerobot-record \
-  --robot.type=mobileai_robot \
-  --robot.left_arm_ip_address=192.168.1.5 \
-  --robot.right_arm_ip_address=192.168.1.4 \
-  --robot.id=follower \
-  --robot.cameras="{
-    cam_high: {type: intelrealsense, serial_number_or_name: "<cam_high_serial>", width: 640, height: 480, fps: 30},
-    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "<cam_left_wrist_serial>", width: 640, height: 480, fps: 30},
-    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "<cam_right_wrist_serial>", width: 640, height: 480, fps: 30}
-  }" \
-  --robot.enable_base_motor_torque=true \
-  --dataset.repo_id=${HF_USER}/mobileai-cube-pickup \
-  --dataset.num_episodes=2 \
-  --dataset.single_task="Grab the cube" \
-  --policy.path=${HF_USER}/act-mobileai-cube-pickup
-```
-
-> **`--robot.enable_base_motor_torque=true` is required whenever the policy has to drive the
-> mobile base, and it is not the default.** During teleoperated recording the base is moved by
-> its own controller and `MobileAILeaderTeleop` merely echoes the measured velocity back as an
-> action, so recording works with the torque disabled. At eval the roles reverse: the policy's
-> `x.vel`/`theta.vel` reach `base.set_cmd_vel()` on every `send_action`, but with motor torque
-> off the base ignores them. **Nothing errors** — the arms behave and the base silently stays
-> put, which is easy to misread as the policy having learned no base motion. The flag is applied
-> once in `connect()`, so it has to be on the command line from the start.
-
-**A leader arm can stay connected during eval.** Add the `--teleop.*` block from the
-[Record Script](#record-script). The policy still drives every episode - `lerobot-record`
-picks the driver by the presence of `--policy.path`, not by whether a teleoperator is
-configured - and the leader is there for the reset window, where an operator sets the next
-episode's start pose and grasp by hand. That handoff used to kill the process; it is paced now,
-see [Joint Velocity Pacing](#joint-velocity-pacing). The example above omits the block simply
-because it is the minimal form.
-
-```shell
-uv run lerobot-record \
-  --robot.type=mobileai_robot \
-  --robot.left_arm_ip_address=192.168.1.5 \
-  --robot.right_arm_ip_address=192.168.1.4 \
-  --robot.id=follower \
-  --robot.cameras="{
-    cam_high: {type: intelrealsense, serial_number_or_name: "<cam_high_serial>", width: 640, height: 480, fps: 30},
-    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "<cam_left_wrist_serial>", width: 640, height: 480, fps: 30},
-    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "<cam_right_wrist_serial>", width: 640, height: 480, fps: 30}
-  }" \
-  --robot.enable_base_motor_torque=true \
-  --teleop.type=mobileai_leader_teleop \
-  --teleop.left_arm_ip_address=192.168.1.3 \
-  --teleop.right_arm_ip_address=192.168.1.2 \
-  --teleop.id=leader \
-  --dataset.repo_id=${HF_USER}/eval-mobileai-cube-pickup \
-  --dataset.num_episodes=2 \
-  --dataset.reset_time_s=90 \
-  --dataset.single_task="Grab the cube" \
-  --policy.path=${HF_USER}/act-mobileai-cube-pickup
-```
-
-Use the first example when every episode starts from the staged pose, and this one when the
-episodes need a start pose the robot cannot reach on its own - a grasped object, a mid-task
-configuration. `--dataset.reset_time_s` is raised because the reset window now carries posing
-and scene setup, not just scene setup; end it early with the right arrow key when it is done.
-
-
-### Replay Script
-
-Replay episode 3 of a cube pickup task with a Mobile AI robot.
-
-```shell
-uv run lerobot-replay \
-  --robot.type=mobileai_robot \
-  --robot.left_arm_ip_address=192.168.1.5 \
-  --robot.right_arm_ip_address=192.168.1.4 \
-  --robot.id=follower \
-  --robot.enable_base_motor_torque=true \
-  --dataset.repo_id=${HF_USER}/mobileai-cube-pickup \
-  --dataset.episode=3
-```
