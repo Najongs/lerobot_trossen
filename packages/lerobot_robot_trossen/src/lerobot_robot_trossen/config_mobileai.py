@@ -19,3 +19,10 @@ class MobileAIRobotConfig(BiWidowXAIFollowerRobotConfig):
     # the policy checkpoint: True for base-in-state models, False for the
     # _nobasestate models. Base is still commanded via action_features regardless.
     include_base_in_state: bool = True
+
+    # When False, connect() no longer refuses to start with the base in emergency
+    # stop. Only that hard error is disabled; the warning get_observation() logs
+    # on each base state change stays on either way. Set False for runs that
+    # deliberately keep the base immobilized; eval reaches this check too, since
+    # it goes through the same robot.connect() path.
+    estop_check: bool = True

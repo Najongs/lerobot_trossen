@@ -3,9 +3,11 @@ import math
 import os
 import threading
 import time
+from enum import IntEnum
 from typing import Any
 
-from trossen_slate import TrossenSlate
+from termcolor import colored
+from trossen_slate import ChassisData, TrossenSlate
 
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots import Robot
@@ -68,6 +70,87 @@ def _warn_throttled(key: str, message: str) -> None:
     if last is None or now - last >= _BASE_WARN_INTERVAL_S:
         _last_base_warn[key] = now
         logger.warning(message)
+
+
+class SlateBaseSystemState(IntEnum):
+    """Values of ``ChassisData.system_state`` reported by the SLATE base.
+
+    trossen_slate exposes the field as a plain int, and this table exists neither
+    there nor in lerobot 0.4.4: it lived in the legacy
+    ``lerobot/common/robot_devices/utils.py``, which the 0.4 restructuring deleted
+    along with the emergency stop check this module restores. The installed
+    firmware may therefore report codes that are missing here; see
+    :func:`_known_base_state` for why those are ignored rather than reported.
+    """
+
+    SYS_INIT = 0x00
+    SYS_NORMAL = 0x01
+    SYS_REMOTE = 0x02
+    SYS_ESTOP = 0x03
+    SYS_CALIB = 0x04
+    SYS_TEST = 0x05
+    SYS_CHARGING = 0x06
+    SYS_ERR = 0x10
+    SYS_ERR_ID = 0x11
+    SYS_ERR_COM = 0x12
+    SYS_ERR_ENC = 0x13
+    SYS_ERR_COLLISION = 0x14
+    SYS_ERR_LOW_VOLTAGE = 0x15
+    SYS_ERR_OVER_VOLTAGE = 0x16
+    SYS_ERR_OVER_CURRENT = 0x17
+    SYS_ERR_OVER_TEMP = 0x18
+
+
+# lerobot's console format (lerobot/utils/utils.py, custom_format) carries no
+# %(name)s and truncates the module path, so a warning from this fork is not
+# distinguishable from a lerobot one. Hence an explicit prefix and bold red -- the
+# one place where this fork's plain-sentence log convention is broken on purpose.
+# termcolor drops the escapes on a non-tty and under NO_COLOR, so there is no
+# hand-written isatty guard here.
+_BASE_STATE_PREFIX = "[MOBILE AI BASE]"
+
+
+def _base_state_banner(message: str, color: str = "red") -> str:
+    """Prefix and highlight a base state message (see _BASE_STATE_PREFIX).
+
+    The prefix stays on the recovery line too, so one grep finds both ends of an
+    incident; only the colour differs, because a red line means "the base was not
+    moving" and the closing line means the opposite.
+    """
+    return colored(f"{_BASE_STATE_PREFIX} {message}", color, attrs=["bold"])
+
+
+def _known_base_state(state: int) -> SlateBaseSystemState | None:
+    """Map a raw ``system_state`` to a known code, or None when it is unlisted.
+
+    The driver's chassis buffer is uninitialized until the first successful
+    ``update_state()``, and a partially failed transaction can leave a stale byte
+    behind, so a value missing from the table above is far more likely to be
+    garbage than a state the firmware means. Callers ignore it entirely rather
+    than report it.
+    """
+    try:
+        return SlateBaseSystemState(state)
+    except ValueError:
+        return None
+
+
+def _base_state_warning(state: SlateBaseSystemState) -> str | None:
+    """Describe an abnormal base system state, or None when it is fine.
+
+    Every state below arrives in the same 26-register transaction that
+    ``update_state()`` already performs, so watching more than the emergency stop
+    costs nothing. Kept as one function so a state that turns out to be noise in
+    practice (docked charging is the likely candidate) can be dropped by deleting
+    its branch.
+    """
+    if state is SlateBaseSystemState.SYS_ESTOP:
+        return "Emergency stop is engaged; the base will not move."
+    if state is SlateBaseSystemState.SYS_CHARGING:
+        return "The base is charging."
+    if state >= SlateBaseSystemState.SYS_ERR:
+        return f"The base reports a fault: {state.name}."
+    return None
 
 
 def _sanitize_base_command(x_vel: float, theta_vel: float) -> tuple[float, float]:
@@ -213,6 +296,23 @@ class MobileAIRobot(Robot):
 
         self.arms = BiWidowXAIFollowerRobot(arms_config)
         self.base = TrossenSlate()
+        # Destination struct for TrossenSlate.read(), which only copies the
+        # driver's cache, so one buffer is reused for the whole session.
+        self._chassis = ChassisData()
+        # Last system_state seen on a successful read, so the warning fires on the
+        # edge instead of on every frame. Deliberately not seeded in connect(): a
+        # run that connects while the base is already in an abnormal state would
+        # then have no transition left and would stay silent for its whole length.
+        self._last_base_state: SlateBaseSystemState | None = None
+        # Latched off after the first failed read, so a driver whose ChassisData
+        # differs from the one this was written against costs one warning rather
+        # than one exception per frame (see _read_base_state).
+        self._base_state_monitor_ok = True
+        # Whether a warning is currently open. Separate from _last_base_state on
+        # purpose: the base can pass through SYS_INIT or SYS_REMOTE on its way out
+        # of an emergency stop, and keying the closing line off the previous state
+        # alone would swallow it whenever it does.
+        self._base_warning_active = False
 
         self.cameras = make_cameras_from_configs(config.cameras)
 
@@ -250,10 +350,121 @@ class MobileAIRobot(Robot):
         if not base_init_success:
             raise ConnectionError(f"Failed to connect to Mobile AI base: {message}")
 
+        # Refuse to start a run against a base that cannot move: an emergency stop
+        # left engaged used to be noticed only once the recording was over. Runs
+        # before enable_motor_torque so nothing is energized on the way out.
+        if self.config.estop_check:
+            self._raise_if_base_estopped()
+
         self.base.enable_motor_torque(self.config.enable_base_motor_torque)
 
         for cam in self.cameras.values():
             cam.connect()
+
+    def _read_base_state(self, latch: bool = True) -> int | None:
+        """Return the cached ``system_state``, or None when it is unavailable.
+
+        ``read()`` copies the struct ``update_state()`` already filled, so this
+        costs no serial traffic and is safe to call on every frame. Its return
+        value is discarded on purpose: the C++ signature is ``void`` and only the
+        docstring claims otherwise, so ``if not read(...)`` would be true forever.
+
+        Never raises. ``record_loop()`` runs both the record and the reset phase
+        and ``dataset.save_episode()`` is called after the reset phase, so an
+        exception escaping ``get_observation()`` during a reset would discard the
+        episode that was just recorded -- and pressing the emergency stop during a
+        reset to push the base by hand is normal operation, not an error. A
+        mismatch with the installed driver latches the monitor off for the rest of
+        the process instead.
+        """
+        if not self._base_state_monitor_ok:
+            return None
+        try:
+            self.base.read(self._chassis)
+            return int(self._chassis.system_state)
+        except Exception as e:
+            if not latch:
+                # connect() is a single call, not a loop, so one failure there is
+                # no reason to give up on the per-frame monitor as well.
+                logger.warning(f"Could not read Mobile AI base state: {e}.")
+                return None
+            self._base_state_monitor_ok = False
+            logger.warning(
+                f"Mobile AI base state monitoring disabled: {e}. The base "
+                "emergency stop will not be reported for the rest of this run."
+            )
+            return None
+
+    def _raise_if_base_estopped(self) -> None:
+        """Fail the connection when the base is in emergency stop.
+
+        Called from ``connect()`` only. The refresh below is a single ~21 ms
+        Modbus transaction outside the control loop, where the same call would
+        de-rate the loop and de-rating the loop multiplies base rotation. It
+        cannot be skipped here: the driver's chassis buffer is uninitialized until
+        the first successful refresh, so judging it without one judges garbage.
+
+        Fails open on anything short of a confirmed ``SYS_ESTOP``. A missed check
+        leaves the behavior we had before this patch, while a false positive
+        stops someone from recording at all.
+        """
+        if not self.base.update_state():
+            logger.warning(
+                "Could not refresh Mobile AI base state; skipping the emergency "
+                "stop check. Confirm the emergency stop is released before "
+                "recording."
+            )
+            return
+        if self._read_base_state(latch=False) != SlateBaseSystemState.SYS_ESTOP:
+            return
+        # Both record()'s finally and Robot.__del__ guard on is_connected, which is
+        # False here because the cameras are connected further down, so neither
+        # would release the arms: without this they stay torque-enabled and never
+        # run their sleep-pose sequence.
+        try:
+            self.arms.disconnect()
+        except Exception as e:
+            logger.warning(f"Error while disconnecting arms after e-stop: {e}")
+        raise RuntimeError(
+            "Robot is in emergency stop state. Please release the emergency stop "
+            "button and try again. Pass --robot.estop_check=false to start anyway."
+        )
+
+    def _log_base_state_transition(self, state: int) -> None:
+        """Warn once when the base enters an abnormal state, once when it leaves.
+
+        Warning only, never an exception -- :meth:`_read_base_state` explains what
+        a raise on this path would cost.
+
+        Not routed through :func:`_warn_throttled`, which rate-limits a condition
+        that keeps re-firing (a failing serial link) and would print once a second
+        for as long as the button stays down. An emergency stop is a state, not a
+        stream of failures, so it is reported on its edges.
+        """
+        known = _known_base_state(state)
+        if known is None:
+            # An unlisted code is ignored and not remembered: remembering it would
+            # make the next frame look like a transition back, so a register that
+            # flickers between garbage and a real state would warn every frame.
+            return
+        if known == self._last_base_state:
+            return
+        self._last_base_state = known
+        message = _base_state_warning(known)
+        if message is not None:
+            self._base_warning_active = True
+            logger.warning(_base_state_banner(message))
+            return
+        if not self._base_warning_active:
+            return
+        if known is not SlateBaseSystemState.SYS_NORMAL:
+            # Releasing the button can show SYS_INIT or SYS_REMOTE for a frame
+            # first. That is not a recovery, so the warning stays open until the
+            # base actually reports SYS_NORMAL -- otherwise the closing line goes
+            # missing exactly when the release was not instantaneous.
+            return
+        self._base_warning_active = False
+        logger.warning(_base_state_banner("The base state is back to normal.", "green"))
 
     @property
     def is_calibrated(self) -> bool:
@@ -283,9 +494,18 @@ class MobileAIRobot(Robot):
         # velocities on the first frame of an episode), then sanity-check the result.
         _t = time.perf_counter()
         if not self.base.update_state():
-            logger.warning(
-                "Failed to refresh Mobile AI base state; using last cached velocity."
+            _warn_throttled(
+                "base_read",
+                "Failed to refresh Mobile AI base state; using last cached velocity.",
             )
+        else:
+            # system_state arrived with the velocities update_state() just read and
+            # read() only copies that cache, so watching the emergency stop adds no
+            # serial traffic. Success path only: after a failed refresh the cached
+            # state is stale and would report a transition that never happened.
+            base_state = self._read_base_state()
+            if base_state is not None:
+                self._log_base_state_transition(base_state)
         base_obs = self.base.get_vel()
         _add_loop_section("base_read", time.perf_counter() - _t)
         x_vel, theta_vel = _sanitize_base_velocity(base_obs[0], base_obs[1])

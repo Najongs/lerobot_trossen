@@ -173,7 +173,7 @@ for ip in 192.168.1.5 192.168.1.4 192.168.1.3 192.168.1.2; do
 uv run python -c "import pyrealsense2 as rs; [print(d.get_info(rs.camera_info.serial_number)) for d in rs.context().devices]"
 ```
 
-`OK` 4줄 + 아래 명령의 시리얼 3개와 같은 값이면 통과. **베이스 비상정지 버튼도 돌려 빼 둔다** — 걸린 채면 `RuntimeError: Failed to check base state.`로 즉사.
+`OK` 4줄 + 아래 명령의 시리얼 3개와 같은 값이면 통과. **베이스 비상정지 버튼도 돌려 빼 둔다** — 걸린 채면 `connect()`에서 `RuntimeError: Robot is in emergency stop state. …`로 즉사 → [Base Emergency Stop Detection](#base-emergency-stop-detection).
 
 ### 3-2. 체크포인트 경로 잡기
 
@@ -279,6 +279,8 @@ uv run lerobot-replay \
 
 `meta/stats.json`의 base 차원(state/action dim 14·15) `std`가 유한한지 본다. NaN·거대값이면 base 속도 garbage가 섞인 것이고 **사후 복구가 안 된다.** 차단 메커니즘 → [Changes in this fork](#changes-in-this-fork)
 
+- ⚠️ **빨간 `[MOBILE AI BASE]` 경고가 뜬 구간은 베이스가 안 움직인 구간이다** — 경고는 실행을 막지 않으므로 그 구간의 base 채널이 정지값으로 기록된다. **리셋 구간 발화는 정상**(손으로 밀려고 누르는 것), **녹화 구간 발화는 재취득 대상** → [Base Emergency Stop Detection](#base-emergency-stop-detection)
+
 ## Eval
 
 eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취득(teleop 시연)과 eval(정책 구동)을 가른다.** Record와 달라지는 것만 적는다.
@@ -302,6 +304,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - 🛑 **`Joint 0 position input contains NaN`은 그 관절 문제가 아니다** — 정책 normalizer stats가 손상된 것(학습 데이터에 base 속도 garbage가 섞여 `std=NaN`이 되고 전 출력으로 전파된다). **코드로 못 고친다** — 손상 에피소드를 지우고 **재학습**해야 한다. 취득 쪽 차단은 [취득 후 점검](#취득-후-점검).
 - ⚠️ **`Feature mismatch … Missing/Extra features`** — 체크포인트가 학습 때 쓴 카메라 키·해상도가 지금 로봇과 다르다. `--rename_map`으로 맞춘다. ⚠ **이름만 검사한다** — 해상도·채널 순서·fps가 달라도 **조용히 통과**하므로 「에러가 안 났다」가 「맞게 돌고 있다」의 증거가 못 된다.
 - ⚠️ **관절이 `idle`로 떨어져 죽으면 세션 안에서 회복이 안 된다** — 프로세스를 다시 띄워야 `configure(clear_error=True)`가 걸린다.
+- ⚠️ **베이스 e-stop 경고 읽는 법** → [취득 후 점검](#취득-후-점검)
 
 ### 무해한 로그
 
@@ -310,7 +313,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 | 뜨는 것 | 정체 |
 | --- | --- |
 | 종료 시 Rerun `transport error`·`gracefully disconnected`·`channel closed` (ERROR 3~4줄) | 뷰어 gRPC 스트림이 닫히는 한 사건을 세 층에서 본 것. 저장은 정상(로컬·Hub 프레임 수 일치 확인) |
-| 리셋 구간의 `No policy or teleoperator provided, skipping action generation…` 대량 출력 | 리셋 구간은 정책·teleop 없이 도는 것이 정상 |
+| 리셋 구간의 `No policy or teleoperator provided, skipping action generation…` 대량 출력 (`--teleop.type` 없이 돌린 실행 한정) | 리셋 구간이 정책 없이 도는 것은 정상. 다만 `record()`의 리셋 호출은 `teleop`을 그대로 넘기므로 **`--teleop.type`을 준 실행(취득·§3-3 eval)에서는 안 뜨고, 리더암 없는 실행에서만** 뜬다 |
 | `Record loop is running slower (21.4 Hz) than the target FPS (30 Hz)` | 취득 파이프라인의 천장(카메라 USB 대역·base 시리얼). **기존 환경도 같은 값** |
 
 - 🛑 반대로 **`→`·`←`·`ESC`가 아무 반응이 없는데 에러도 없으면** 세션이 Wayland다. `echo $XDG_SESSION_TYPE`으로 확인하고 "GNOME on Xorg"로 재로그인 → [Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide#작업-pc-준비)
@@ -391,6 +394,7 @@ ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합�
 | ------ | ------------ | ----- |
 | **Mobile-base velocity sanitisation** | `mobileai.py` refreshes the base state before reading it and zeroes out garbage velocity readings left in stale serial buffers. Without it, policies trained on the recorded data fault with `Joint 0 ... contains NaN` at inference. Read path only; always on. | [#2](https://github.com/kiro-ai-division/lerobot_trossen/pull/2) |
 | **Base command guard** | Non-finite base velocity *commands* are zeroed and clamped to +/-1.0 (m/s linear, rad/s angular) before they reach the base. Without it a NaN from the policy arrives as full-speed reverse. Always on. | [below](#base-command-guard) - [#20](https://github.com/kiro-ai-division/lerobot_trossen/pull/20) |
+| **Base emergency stop detection** | `connect()` refuses to start while the base is in emergency stop, and `get_observation()` logs one red warning each time the base enters or leaves an abnormal state (emergency stop, controller fault, charging). The mid-run check rides the chassis block `update_state()` already fetches, so it costs no extra serial transaction. On by default; `--robot.estop_check=false` disables the connect-time error only. | [below](#base-emergency-stop-detection) - [#38](https://github.com/kiro-ai-division/lerobot_trossen/pull/38) |
 | **Joint velocity pacing** | Stretches `goal_time` so no joint is commanded past its hard velocity limit, which is what used to kill the process at the policy/teleop handoff. `velocity_safety_factor` defaults to `0.4`; `LEROBOT_PACING_LOG` logs the decision per frame. | [below](#joint-velocity-pacing) - [#16](https://github.com/kiro-ai-division/lerobot_trossen/pull/16) |
 | **`include_base_in_state` flag** | Drops the base velocity from `observation.state` so 14-dim policies can be evaluated. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4) |
 | **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
@@ -484,6 +488,50 @@ false against everything, so `max(-MAX, NaN)` returns `-MAX`: a NaN action reach
 **full-speed reverse**, and eval runs with `enable_base_motor_torque=True`, so that command was
 actually executed. Verified in the installed `trossen_slate` 0.0.3 binary. Failed writes are
 now reported rather than swallowed, throttled to one warning per second per channel.
+
+## Base Emergency Stop Detection
+
+The base reports its own system state inside the chassis block `update_state()` already reads
+once per control-loop iteration, so the mid-run check is free: `read()` only copies that struct.
+Nothing calls `update_state()` an extra time inside the loop - that call is a 21 ms Modbus
+transaction and a de-rated loop is a base over-rotation multiplier. `connect()` does issue one of
+its own, because nothing has filled the chassis buffer at that point and judging an
+uninitialised buffer would make the check silently useless; once, at startup, that cost is
+irrelevant.
+
+| Where | Level | Catches |
+| ----- | ----- | ------- |
+| `connect()`, after `init_base()` and before `enable_motor_torque()` | `RuntimeError` | Starting a run with the button already pressed |
+| `get_observation()`, on the existing `update_state()` success path | Red log warning, no sound | The button being pressed mid-run |
+
+The two levels are deliberately different. A run that *starts* in emergency stop records nothing
+usable, so it is stopped at `connect()` before a single frame is written, and the arms are
+released first because nothing else would (`is_connected` is still `False` at that point, so
+`record()`'s `finally` does not fire). Note that `LeRobotDataset.create()` runs *before*
+`robot.connect()`: an aborted start still leaves an empty dataset directory behind, so reusing
+that `--dataset.repo_id` afterwards fails with `FileExistsError` - see [eval 함정](#eval-함정).
+
+A run that *enters* emergency stop is only warned about. `lerobot-record` drives the record phase
+and the reset phase through the same `record_loop()` and the robot cannot tell them apart, while
+pressing the button during reset to push the base by hand is normal operation. Raising there
+would abort before `dataset.save_episode()`, which runs *after* the reset window, so the episode
+just recorded would be lost. **A warning during the reset window is expected; a warning during
+the recording window is not** - the base did not move for that stretch.
+
+Warnings are edge-triggered: one line when the base leaves the normal state and one when it
+returns, never one per frame. The same path also reports the controller fault codes and the
+charging state; those are warnings only and never block a run. A value that is not one of the
+known state codes is ignored rather than warned about, because the chassis buffer is
+uninitialised until the first successful `update_state()` and an unrecognised code is more likely
+garbage than a state. The message carries a `[MOBILE AI BASE]` prefix and is printed bold red
+through `termcolor`, because lerobot's log format has no logger name field and a fork warning is
+otherwise indistinguishable from an upstream one. Colour is dropped automatically on a non-TTY -
+`termcolor` tests `stdout` while the log handler writes to `stderr`, so redirecting only `stderr`
+keeps the escape codes; `NO_COLOR=1` disables colour everywhere.
+
+| Config field | Default | Effect |
+| ------------ | ------- | ------ |
+| `estop_check` | `true` | Gates the `connect()` hard error only. Pass `--robot.estop_check=false` to start a run with the base in emergency stop, e.g. an eval that deliberately keeps the base immobilised. The `get_observation()` warnings are unaffected. |
 
 ## Upstream flags (not fork changes)
 
