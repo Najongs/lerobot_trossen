@@ -256,6 +256,7 @@ uv run --script scripts/slice_feature_dims.py \
 - **`--script` 필수** — 이 repo env(Python 3.11 → lerobot 0.4.4)엔 `recompute_stats`가 없어, uv가 스크립트 전용 임시 env를 만들게 한다
 - 통과 기준 = `[verify]` 블록에 `observation.state shape = (14,)` · `has NaN = False`
 - 로컬 산출물 확인 후 업로드는 **같은 `--out-repo-id`에 `--push-only`**(업로드엔 `hf auth login` 필요)
+- **전체 인자는 이 README가 아니라 `--help`가 정본** — `uv run --script scripts/slice_feature_dims.py --help`(`--feature`로 다른 벡터 feature, `--drop-indices`로 임의 채널, `--force`·`--keep-tmp`·`--private`). 여기엔 base 제거 경로만 적는다
 - 이 데이터셋으로 학습한 정책은 eval 때 `--robot.include_base_in_state=false` 짝 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
 
 **Replay** — 🚨 기록된 궤적대로 팔·베이스 실제 구동.
