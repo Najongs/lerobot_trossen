@@ -255,7 +255,7 @@ uv run --script scripts/slice_feature_dims.py \
 
 - **`--script` 필수** — 이 repo env(Python 3.11 → lerobot 0.4.4)엔 `recompute_stats`가 없어, uv가 스크립트 전용 임시 env를 만들게 한다
 - 통과 기준 = `[verify]` 블록에 `observation.state shape = (14,)` · `has NaN = False`
-- 로컬 산출물 확인 후 업로드는 같은 명령에 `--push-only`
+- 로컬 산출물 확인 후 업로드는 **같은 `--out-repo-id`에 `--push-only`**(업로드엔 `hf auth login` 필요)
 - 이 데이터셋으로 학습한 정책은 eval 때 `--robot.include_base_in_state=false` 짝 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
 
 **Replay** — 🚨 기록된 궤적대로 팔·베이스 실제 구동.
@@ -403,6 +403,7 @@ ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합�
 - **디스크 피크는 데이터셋의 2~3배**(원본 + `_tmp` + 출력, 비디오 포함).
 - **재실행하면 `FileExistsError`** — 출력 폴더를 `exist_ok=False`로 만들기 때문이다. 이미 만든 것을 올릴 땐 `--push-only`, 다시 만들 땐 `--force`.
 - **`[verify]`가 보는 것은 shape·names·stats뿐이다.** 값 보존(원본 앞 14채널 == 산출)·프레임 수·`action` 16-dim·비디오 무손상은 안 본다 — 새 데이터셋에 처음 적용할 땐 원본과 직접 대조할 것.
+- ⚠️ **`meta/episodes/*.parquet`의 에피소드별 통계는 슬라이스 전 차원 그대로 남는다** — `recompute_stats`가 갱신하는 것은 `meta/stats.json`뿐이다. 학습 정규화는 `meta/stats.json`을 쓰므로 0.4.x 학습·eval에는 영향이 없다(`task03` 산출물 로드·`_clean_nobasestate` 학습본 둘 다 확인). 에피소드 통계를 직접 읽는 분석 코드만 주의.
 - **push 후 허브 `v3.0` 태그를 확인**한다. `LeRobotDataset`은 `main`이 아니라 그 태그를 받으므로, 태그가 안 붙거나 안 따라오면 학습이 옛 판을 읽는다.
 - 슬라이스한 데이터셋으로 학습하면 ACT/pi0가 **state 14-in / action 16-out**(비대칭)을 자동 추론한다 — 정책 쪽 차원 설정은 불필요.
 - 임의 feature·임의 채널에도 쓴다: `--feature`, `--drop-indices i,j`.

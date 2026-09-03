@@ -98,17 +98,26 @@ def parse_arguments():
         metavar="i,j,...",
         help="드롭할 차원 인덱스(쉼표 구분), 예: '14,15' / dim indices to drop",
     )
-    parser.add_argument("--out-repo-id", help="출력 repo_id (기본: {repo_id}_sliced)")
+    parser.add_argument(
+        "--out-repo-id",
+        help=(
+            "출력 repo_id (기본: {repo_id}_sliced). "
+            "--push-only 일 때도 같은 값을 줘야 로컬 산출물을 찾는다"
+        ),
+    )
     parser.add_argument("--tmp-repo-id", help="중간 repo_id (기본: {repo_id}_tmp)")
     parser.add_argument(
         "--push",
         action="store_true",
-        help="재파생 후 Hub 업로드 (기본 off — 먼저 로컬 검증 권장)",
+        help="재파생 후 Hub 업로드 (기본 off — 먼저 로컬 검증 권장). hf auth login 필요",
     )
     parser.add_argument(
         "--push-only",
         action="store_true",
-        help="재파생 건너뛰고 이미 만든 로컬 산출물만 업로드",
+        help=(
+            "재파생 건너뛰고 이미 만든 로컬 산출물만 업로드 "
+            "(--out-repo-id 를 함께 줄 것. 이 모드에선 --push 는 무시된다)"
+        ),
     )
     parser.add_argument("--private", action="store_true", help="private repo 로 업로드")
     parser.add_argument(
