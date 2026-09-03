@@ -244,6 +244,20 @@ uv run lerobot-edit-dataset \
   --push_to_hub true
 ```
 
+**관측 차원 슬라이스(16→14)** — `observation.state`에서 base 속도 2채널만 제거, `action`은 16-dim 유지 → [데이터셋 슬라이스](#데이터셋-슬라이스)
+
+```shell
+uv run --script scripts/slice_feature_dims.py \
+  --repo-id kiroaiseoul/<dataset> \
+  --keep-first 14 \
+  --out-repo-id kiroaiseoul/<dataset>_nobasestate
+```
+
+- **`--script` 필수** — 이 repo env(Python 3.11 → lerobot 0.4.4)엔 `recompute_stats`가 없어, uv가 스크립트 전용 임시 env를 만들게 한다
+- 통과 기준 = `[verify]` 블록에 `observation.state shape = (14,)` · `has NaN = False`
+- 로컬 산출물 확인 후 업로드는 같은 명령에 `--push-only`
+- 이 데이터셋으로 학습한 정책은 eval 때 `--robot.include_base_in_state=false` 짝 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
+
 **Replay** — 🚨 기록된 궤적대로 팔·베이스 실제 구동.
 
 ```shell
@@ -380,6 +394,18 @@ ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합�
 - ⚠️ **같은 `repo_id`에 덮어쓰지 말 것** — 재패킹으로 파일 구성이 바뀌는데 push가 원격의 옛 파일을 지우지 않아 orphan이 남아 데이터셋 일관성이 깨진다.
 - 다른 연산(`split`·`merge`·`info`·`remove_feature` 등)은 `uv run lerobot-edit-dataset --help`.
 - `lerobot-dataset-viz`는 한 번에 한 에피소드만 연다. 데이터셋 기본 위치는 `~/.cache/huggingface/lerobot/<repo-id>`, 캐시 밖이면 `--root <경로>`.
+
+## 데이터셋 슬라이스
+
+`lerobot-edit-dataset`은 feature **전체(키 단위)** 삭제만 한다. base 속도는 별도 키가 아니라 `observation.state` 벡터에 concat돼 있어 CLI로는 못 뺀다. 그래서 `scripts/slice_feature_dims.py`가 `dataset_tools` Python API로 재파생한다.
+
+- **원본은 수정하지 않는다** — `add_features`/`remove_feature`가 항상 새 `repo_id` 사본을 만든다. 중간 `_tmp` 사본은 자동 삭제(`--keep-tmp`로 유지).
+- **디스크 피크는 데이터셋의 2~3배**(원본 + `_tmp` + 출력, 비디오 포함).
+- **재실행하면 `FileExistsError`** — 출력 폴더를 `exist_ok=False`로 만들기 때문이다. 이미 만든 것을 올릴 땐 `--push-only`, 다시 만들 땐 `--force`.
+- **`[verify]`가 보는 것은 shape·names·stats뿐이다.** 값 보존(원본 앞 14채널 == 산출)·프레임 수·`action` 16-dim·비디오 무손상은 안 본다 — 새 데이터셋에 처음 적용할 땐 원본과 직접 대조할 것.
+- **push 후 허브 `v3.0` 태그를 확인**한다. `LeRobotDataset`은 `main`이 아니라 그 태그를 받으므로, 태그가 안 붙거나 안 따라오면 학습이 옛 판을 읽는다.
+- 슬라이스한 데이터셋으로 학습하면 ACT/pi0가 **state 14-in / action 16-out**(비대칭)을 자동 추론한다 — 정책 쪽 차원 설정은 불필요.
+- 임의 feature·임의 채널에도 쓴다: `--feature`, `--drop-indices i,j`.
 
 ## 부록 — pi0 (담당자 전용)
 
