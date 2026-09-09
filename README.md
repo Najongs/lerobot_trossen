@@ -94,7 +94,7 @@ nvidia-smi                            # 하단 Processes 표가 빈 GPU를 고�
 export CUDA_VISIBLE_DEVICES=0,1,2,3   # 고른 GPU 번호로
 ```
 
-2-1 ~ 2-3은 **이 셸에서** 이어 실행. 새 셸을 열면 2-0부터 다시.
+2-1 ~ 2-4는 **이 셸에서** 이어 실행. 새 셸을 열면 2-0부터 다시.
 
 ### 2-1. 스모크런 (본 학습 전 필수)
 
@@ -147,7 +147,34 @@ uv run accelerate launch \
   --resume=true
 ```
 
-### 2-4. 학습이 끝나면
+- 스텝 연장 — `--steps=<새 값>` 추가
+
+### 2-4. 체크포인트에서 이어 학습 (warm start)
+
+추가 취득분을 기존 정책 위에 얹거나, 다른 단계 정책을 출발점으로.
+
+```shell
+uv run accelerate launch \
+  --multi_gpu \
+  --num_processes=4 \
+  -m lerobot.scripts.lerobot_train \
+  --policy.path="$POLICY" \
+  --policy.tags='["parent-act_<부모_단계>_<스텝>","warmstart-<YYMMDD>"]' \
+  --dataset.repo_id=kiroaiseoul/<새_단계_repo> \
+  --policy.repo_id=kiroaiseoul/act_<새_단계>_<스텝> \
+  --output_dir=outputs/<본인_이름>/<새_단계> \
+  --job_name=act_<새_단계> \
+  --batch_size=16 --steps=60000 --save_freq=20000 \
+  --wandb.enable=false
+```
+
+- 🛑 `--policy.repo_id`·`--output_dir` **부모 것 재사용 금지** — 완주 시 부모 정책 repo를 덮어씀
+- `$POLICY` → [3-2](#3-2-체크포인트-경로-잡기) · `<부모_단계>` → [`모델 체크포인트` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) · `<새_단계_repo>` → [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)
+- 부모와 관측 차원 일치 필수 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
+- 정규화 통계·계보 태그·[2-3](#2-3-중단재개)과의 차이 → [학습](#학습)
+- 끝나면 → [2-5](#2-5-학습이-끝나면)
+
+### 2-5. 학습이 끝나면
 
 1. Hub에 `--policy.repo_id` 이름으로 올라갔는지 확인
 2. [`모델 체크포인트` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510)에 한 줄 — 레포 이름·보유상황·학습 로그·담당·파라미터(`batch_size` × 장 수 · `fp32`)
@@ -349,7 +376,12 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - `--save_freq` — 체크포인트 저장 간격(스텝).
 - `--wandb.enable` — `false`. 켜려면 그 기기에 `wandb login`이 선행돼야 하고, 끄더라도 loss·grad_norm·lr은 `log_freq`마다 콘솔에 찍힌다. 남기려면 `2>&1 | tee <로그파일>`.
 - **lr은 GPU 수에 맞춰 자동 스케일되지 않는다.** 바꾸려면 **`--policy.optimizer_lr`**로 준다 — `--optimizer.lr`은 **경고 없이 무시되고** 정책 기본값 `1e-5`로 되돌아간다.
-- ACT는 사전학습 체크포인트가 없어 scratch부터 학습한다(비전 백본만 ImageNet ResNet18로 자동 초기화). 그래서 `--policy.pretrained_path`가 없다.
+- ACT는 **공개 사전학습 체크포인트가 없어** 첫 학습은 scratch다(비전 백본만 ImageNet ResNet18로 자동 초기화). 우리 체크포인트를 출발점으로 삼는 것은 된다 → [2-4](#2-4-체크포인트에서-이어-학습-warm-start)
+- `--policy.path` — 학습에선 **warm start 전용**. `config.json`이 있는 디렉터리를 가리켜야 하는 함정은 eval과 같으므로 [3-2](#3-2-체크포인트-경로-잡기)를 쓴다.
+- `--policy.tags` — 허브 모델 카드 태그. **warm start의 계보가 남는 유일한 자리**다. 정책 config에 실려 resume해도 살아남는 반면, 부모 경로가 자동으로 적히는 `pretrained_path`는 **resume 한 번에 자기 자신으로 덮인다.** 학습 시각은 어디에도 안 남으므로 필요하면 `warmstart-<YYMMDD>`로 태그에 박는다.
+	- ⚠️ **큰따옴표 필수** — `--policy.tags=[a,b]`는 `DecodingError`로 죽는다. lerobot 공식 문서 예시(`\[ppo,rl\]`)를 그대로 쓰면 실패한다. 순서는 보장되지 않으므로(기본 태그와 합집합) 뜻은 접두사에 담는다.
+- **2-3(중단·재개)과 2-4(warm start)의 차이** — 2-3은 끊긴 같은 런을 잇는 것이라 데이터셋을 못 바꾸고 옵티마이저·스텝이 복원된다. 2-4는 부모 가중치만 물려받는 새 런이라 스텝 0부터고 옵티마이저가 초기화된다. 정책 하이퍼파라미터(`chunk_size`·`n_action_steps`·차원)는 둘 다 체크포인트 것을 승계한다. `--steps`는 두 경우 모두 명령줄 값이 체크포인트 config를 덮는다.
+- ⚠️ **warm start는 정규화 통계가 새 데이터셋 것으로 갈린다** — 부모 것을 유지할 CLI가 없다(0.4.4). 같은 단계에 추가분을 얹을 땐 차이가 미미하고, 다른 단계로 전이하면 초기 loss가 높게 시작한다. 맞추려면 옛·새 데이터를 한 repo로 합쳐 학습한다.
 - `tmux` — 학습이 몇 시간 걸려 SSH가 끊기면 프로세스가 같이 죽는다. tmux 안에서 돌리면 살아남는다.
 
 ### 유효 배치
