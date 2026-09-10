@@ -334,7 +334,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - **정책 종류는 명령에 안 쓴다** — `lerobot-record`가 체크포인트의 `config.json` `type`에서 정책 종류와 입출력 차원을 읽는다. **`--policy.type`은 주지 말 것** — `--policy.path`와 같이 주면 `Cannot specify both …`로 죽고, 혼자 주면 **경고 없이 랜덤 가중치 정책이 로봇을 구동한다**(`lerobot-eval`엔 있는 경고가 `lerobot-record`엔 없다). `--policy.path`가 안 먹으면 위 중첩 레이아웃부터 의심할 것.
 - `--policy.temporal_ensemble_coeff`·`--policy.n_action_steps` — ACT temporal ensembling. **기본 eval 명령에는 넣지 않는다**(아래 실측). 붙일 때는 **둘을 반드시 같이 준다** — coeff만 주면 체크포인트의 `n_action_steps`가 기본 `100`이라 `NotImplementedError: n_action_steps must be 1 when using temporal ensembling`으로 죽는다. `--policy.*`는 `type`·`path`만 예외로 벗겨지고 나머지는 체크포인트 `config.json` 위에 얹혀 반영된다. 값 `0.01`은 원 ACT 논문의 `m`과 같은 파라미터로 가중치가 `exp(-0.01 × i)`이고 `i=0`이 그 타임스텝을 가장 먼저 예측한 청크라, **오래된 관측에서 나온 예측에 더 무게**가 실린다(청크 끝에서도 0.37배라 사실상 완만한 평균).
 - ⚠️ **ensembling을 켜면 매 스텝 정책 forward가 돈다** — 기본 `n_action_steps=100`은 100스텝에 한 번만 돌리고 나머지는 큐에서 꺼내 쓰는데, ensembling은 큐를 안 쓰고 매 스텝 청크를 새로 뽑아 평균한다. 루프가 목표 fps를 못 따라가도 대기 시간이 음수면 그냥 통과하므로 **경고 없이 느려진다** — 실주기는 로그의 `Control loop rate` 줄에서 읽는다(기본 ON) → [Environment Variables](#environment-variables). **실측(2026-09-10, ACT task05, 같은 체크포인트로 두 인자만 넣고 뺀 A/B)** — 켜면 `19.96 → 15.81 Hz`로 **20.8% 느려지고**, 늘어난 13.2 ms가 전부 요약 줄의 `other=`에 실린다. 이 로봇에서 루프 저하는 그대로 base 과회전이 되므로 과회전 배수가 **1.02x → 1.29x**가 된다. 그래서 기본 명령에서 뺐다 — 붙이는 쪽을 택하면 그 배수를 감수하는 것이다.
-- `--robot.enable_base_motor_torque` — **eval에선 `true`가 필수이고 기본값이 아니다.** 끄면 정책의 `x.vel`·`theta.vel`이 base에 도달해도 무시되는데 **아무 에러도 안 난다** — 팔만 움직이고 base가 가만있는 것이 "base 동작을 못 배웠다"로 오독된다. `connect()`에서 한 번 적용되므로 처음부터 명령줄에 있어야 한다.
+- `--robot.enable_base_motor_torque` — **eval에선 `true`로 반드시 줄 것**(기본값이 아니다). 끄면 정책의 `x.vel`·`theta.vel`이 base에 도달해도 무시되는데 **아무 에러도 안 난다** — 팔만 움직이고 base가 가만있는 것이 "base 동작을 못 배웠다"로 오독된다. `connect()`에서 한 번 적용되므로 처음부터 명령줄에 있어야 한다.
 - `--dataset.repo_id` — **반드시 `eval_`로 시작**한다(정책을 주면서 아니면 즉시 `ValueError`). 반대로 **취득용 repo는 `eval_`로 시작하면 안 된다.**
 - `--dataset.single_task` — 정책 종류와 무관하게 **필수**지만 쓰임이 갈린다. **pi0는 언어조건부**라 학습 때와 같은 문구를 줘야 하고, **ACT는 이 문자열을 정책 입력으로 쓰지 않아**(토크나이저 단계가 없다) 데이터셋 라벨로만 기록된다.
 - `--teleop.*` — 리셋 구간에서 리더암으로 시작 자세·파지를 만들기 위한 것. 에피소드 구간은 `--policy.path`가 있으므로 정책이 구동한다. **리더암이 필요한 이유** = staged 자세 이동이 `connect()` 때 한 번뿐이라 **2번째 에피소드부터는 아무것도 자세를 되돌려 주지 않는다.** 리더암을 붙인 채로 돌 수 있게 된 근거 → [Joint Velocity Pacing](#joint-velocity-pacing)
@@ -369,13 +369,13 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 
 - `--dataset.repo_id` — 학습에 쓸 데이터셋. 단계별 취득이므로 단계 repo 이름을 그대로 준다.
 - `--policy.type` — 정책 종류(`act`·`pi0`·`smolvla`). **학습에서만 쓰는 인자다** — eval에선 체크포인트가 스스로 밝히므로 주지 않는다.
-- `--policy.repo_id` — 학습 결과를 올릴 Hub repo. `push_to_hub` 기본값이 `true`라 **빼면 `ValueError: 'policy.repo_id' argument missing`으로 죽는다.**
+- `--policy.repo_id` — 학습 결과를 올릴 Hub repo. **본 학습엔 반드시 줄 것** — `push_to_hub` 기본값이 `true`라 빼면 `ValueError: 'policy.repo_id' argument missing`으로 죽는다.
 - 🛑 **스모크런의 `--policy.push_to_hub=false`를 본 학습에 옮기지 말 것** — 붙으면 60k를 완주하고도 허브엔 껍데기 repo만 남고 대장 자동 열이 빈다(실제 발생: `task10_move_to_beaker_shelf_kiro`).
 - `--output_dir` — 로컬 체크포인트 경로. 실제 로드 가능한 디렉터리는 `<output_dir>/checkpoints/<스텝>/pretrained_model`이다.
 - `--batch_size` — **GPU 1장당** 배치.
 - `--save_freq` — 체크포인트 저장 간격(스텝).
 - `--wandb.enable` — `false`. 켜려면 그 기기에 `wandb login`이 선행돼야 하고, 끄더라도 loss·grad_norm·lr은 `log_freq`마다 콘솔에 찍힌다. 남기려면 `2>&1 | tee <로그파일>`.
-- **lr은 GPU 수에 맞춰 자동 스케일되지 않는다.** 바꾸려면 **`--policy.optimizer_lr`**로 준다 — `--optimizer.lr`은 **경고 없이 무시되고** 정책 기본값 `1e-5`로 되돌아간다.
+- **lr을 바꾸려면 `--policy.optimizer_lr`로 줄 것** — `--optimizer.lr`은 **경고 없이 무시되고** 정책 기본값 `1e-5`로 되돌아간다. GPU 수에 맞춘 자동 스케일도 없다.
 - ACT는 **공개 사전학습 체크포인트가 없어** 첫 학습은 scratch다(비전 백본만 ImageNet ResNet18로 자동 초기화). 우리 체크포인트를 출발점으로 삼는 것은 된다 → [2-4](#2-4-체크포인트에서-이어-학습-warm-start)
 - `--policy.path` — 학습에선 **warm start 전용**. `config.json`이 있는 디렉터리를 가리켜야 하는 함정은 eval과 같으므로 [3-2](#3-2-체크포인트-경로-잡기)를 쓴다.
 - `--policy.tags` — 허브 모델 카드 태그. **warm start의 계보가 남는 유일한 자리**다. 정책 config에 실려 resume해도 살아남는 반면, 부모 경로가 자동으로 적히는 `pretrained_path`는 **resume 한 번에 자기 자신으로 덮인다.** 학습 시각은 어디에도 안 남으므로 필요하면 `warmstart-<YYMMDD>`로 태그에 박는다.
@@ -434,8 +434,8 @@ ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합�
 
 - **원본은 수정하지 않는다** — `add_features`/`remove_feature`가 항상 새 `repo_id` 사본을 만든다. 중간 `_tmp` 사본은 자동 삭제(`--keep-tmp`로 유지).
 - **디스크 피크는 데이터셋의 2~3배**(원본 + `_tmp` + 출력, 비디오 포함).
-- **재실행하면 `FileExistsError`** — 출력 폴더를 `exist_ok=False`로 만들기 때문이다. 이미 만든 것을 올릴 땐 `--push-only`, 다시 만들 땐 `--force`.
-- **`[verify]`가 보는 것은 shape·names·stats뿐이다.** 값 보존(원본 앞 14채널 == 산출)·프레임 수·`action` 16-dim·비디오 무손상은 안 본다 — 새 데이터셋에 처음 적용할 땐 원본과 직접 대조할 것.
+- **이미 만든 것을 올릴 땐 `--push-only`, 다시 만들 땐 `--force`를 줄 것** — 그냥 재실행하면 출력 폴더를 `exist_ok=False`로 만들어 `FileExistsError`가 난다.
+- **새 데이터셋에 처음 적용할 땐 원본과 직접 대조할 것** — `[verify]`가 보는 것은 shape·names·stats뿐이라 값 보존(원본 앞 14채널 == 산출)·프레임 수·`action` 16-dim·비디오 무손상은 안 본다.
 - ⚠️ **`meta/episodes/*.parquet`의 에피소드별 통계는 슬라이스 전 차원 그대로 남는다** — `recompute_stats`가 갱신하는 것은 `meta/stats.json`뿐이다. 학습 정규화는 `meta/stats.json`을 쓰므로 0.4.x 학습·eval에는 영향이 없다(`task03` 산출물 로드·`_clean_nobasestate` 학습본 둘 다 확인). 에피소드 통계를 직접 읽는 분석 코드만 주의.
 - **push 후 허브 `v3.0` 태그를 확인**한다. `LeRobotDataset`은 `main`이 아니라 그 태그를 받으므로, 태그가 안 붙거나 안 따라오면 학습이 옛 판을 읽는다.
 - 슬라이스한 데이터셋으로 학습하면 ACT/pi0가 **state 14-in / action 16-out**(비대칭)을 자동 추론한다 — 정책 쪽 차원 설정은 불필요.
