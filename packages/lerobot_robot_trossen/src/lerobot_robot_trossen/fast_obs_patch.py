@@ -57,8 +57,8 @@ if it is ever suspected of causing trouble::
 
     LEROBOT_FAST_OBS=0 uv run lerobot-record ...
 
-Combine with ``LEROBOT_LOOP_HZ_LOG=1`` (see ``mobileai.py``) to read the achieved
-rate straight out of the log. To check which path a run took::
+The achieved rate is in the log either way (see ``loop_rate_log.py``, on by
+default), so an A/B is two runs and a ``grep``. To check which path a run took::
 
     grep LEROBOT_FAST_OBS <run log>
 """

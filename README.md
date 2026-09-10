@@ -333,7 +333,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - `--policy.path` — **`config.json`이 있는 디렉터리**. `lerobot-train --policy.repo_id=…`가 올린 체크포인트는 repo 루트에 그 파일들이 있어 bare repo id가 그대로 먹지만, 디렉터리째 업로드된 것은 `pretrained_model/` 아래에 중첩된다. **이름으로는 구별되지 않으므로** 레이아웃을 따지지 말고 [3-2](#3-2-체크포인트-경로-잡기)를 쓴다. bare repo id를 그냥 주면 중첩형에서 로드에 실패한다.
 - **정책 종류는 명령에 안 쓴다** — `lerobot-record`가 체크포인트의 `config.json` `type`에서 정책 종류와 입출력 차원을 읽는다. **`--policy.type`은 주지 말 것** — `--policy.path`와 같이 주면 `Cannot specify both …`로 죽고, 혼자 주면 **경고 없이 랜덤 가중치 정책이 로봇을 구동한다**(`lerobot-eval`엔 있는 경고가 `lerobot-record`엔 없다). `--policy.path`가 안 먹으면 위 중첩 레이아웃부터 의심할 것.
 - `--policy.temporal_ensemble_coeff`·`--policy.n_action_steps` — ACT temporal ensembling. **둘은 반드시 같이 준다** — coeff만 주면 체크포인트의 `n_action_steps`가 기본 `100`이라 `NotImplementedError: n_action_steps must be 1 when using temporal ensembling`으로 죽는다. `--policy.*`는 `type`·`path`만 예외로 벗겨지고 나머지는 체크포인트 `config.json` 위에 얹혀 반영된다. 값 `0.01`은 원 ACT 논문의 `m`과 같은 파라미터로 가중치가 `exp(-0.01 × i)`이고 `i=0`이 그 타임스텝을 가장 먼저 예측한 청크라, **오래된 관측에서 나온 예측에 더 무게**가 실린다(청크 끝에서도 0.37배라 사실상 완만한 평균).
-- ⚠️ **ensembling을 켜면 매 스텝 정책 forward가 돈다** — 기본 `n_action_steps=100`은 100스텝에 한 번만 돌리고 나머지는 큐에서 꺼내 쓰는데, ensembling은 큐를 안 쓰고 매 스텝 청크를 새로 뽑아 평균한다. 루프가 목표 fps를 못 따라가도 대기 시간이 음수면 그냥 통과하므로 **경고 없이 느려진다** — 실주기는 `LEROBOT_LOOP_HZ_LOG=1`로 잰다 → [Environment Variables](#environment-variables). ⚠ **속도 영향은 아직 안 재봤다.**
+- ⚠️ **ensembling을 켜면 매 스텝 정책 forward가 돈다** — 기본 `n_action_steps=100`은 100스텝에 한 번만 돌리고 나머지는 큐에서 꺼내 쓰는데, ensembling은 큐를 안 쓰고 매 스텝 청크를 새로 뽑아 평균한다. 루프가 목표 fps를 못 따라가도 대기 시간이 음수면 그냥 통과하므로 **경고 없이 느려진다** — 실주기는 로그의 `Control loop rate` 줄에서 읽는다(기본 ON) → [Environment Variables](#environment-variables). ⚠ **속도 영향은 아직 안 재봤다.**
 - `--robot.enable_base_motor_torque` — **eval에선 `true`가 필수이고 기본값이 아니다.** 끄면 정책의 `x.vel`·`theta.vel`이 base에 도달해도 무시되는데 **아무 에러도 안 난다** — 팔만 움직이고 base가 가만있는 것이 "base 동작을 못 배웠다"로 오독된다. `connect()`에서 한 번 적용되므로 처음부터 명령줄에 있어야 한다.
 - `--dataset.repo_id` — **반드시 `eval_`로 시작**한다(정책을 주면서 아니면 즉시 `ValueError`). 반대로 **취득용 repo는 `eval_`로 시작하면 안 된다.**
 - `--dataset.single_task` — 정책 종류와 무관하게 **필수**지만 쓰임이 갈린다. **pi0는 언어조건부**라 학습 때와 같은 문구를 줘야 하고, **ACT는 이 문자열을 정책 입력으로 쓰지 않아**(토크나이저 단계가 없다) 데이터셋 라벨로만 기록된다.
@@ -361,7 +361,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 | --- | --- |
 | 종료 시 Rerun `transport error`·`gracefully disconnected`·`channel closed` (ERROR 3~4줄) | 뷰어 gRPC 스트림이 닫히는 한 사건을 세 층에서 본 것. 저장은 정상(로컬·Hub 프레임 수 일치 확인) |
 | 리셋 구간의 `No policy or teleoperator provided, skipping action generation…` 대량 출력 (`--teleop.type` 없이 돌린 실행 한정) | 리셋 구간이 정책 없이 도는 것은 정상. 다만 `record()`의 리셋 호출은 `teleop`을 그대로 넘기므로 **`--teleop.type`을 준 실행(취득·§3-3 eval)에서는 안 뜨고, 리더암 없는 실행에서만** 뜬다 |
-| `Record loop is running slower (21.4 Hz) than the target FPS (30 Hz)` | 취득 파이프라인의 천장(카메라 USB 대역·base 시리얼). **기존 환경도 같은 값** |
+| `Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.9 Hz …` (초당 1줄) | 실주기 계측. 취득 파이프라인의 천장(카메라 USB 대역·base 시리얼)이 ~21.5 Hz라 **target 30에 못 미치는 것이 정상**이다. 취득 로그의 같은 줄과 나눠서 base 과회전 배수를 본다 → [Environment Variables](#environment-variables) |
 
 - 🛑 반대로 **`→`·`←`·`ESC`가 아무 반응이 없는데 에러도 없으면** 세션이 Wayland다. `echo $XDG_SESSION_TYPE`으로 확인하고 "GNOME on Xorg"로 재로그인 → [Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide#작업-pc-준비)
 
@@ -463,7 +463,7 @@ ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합�
 | **Joint velocity pacing** | Stretches `goal_time` so no joint is commanded past its hard velocity limit, which is what used to kill the process at the policy/teleop handoff. `velocity_safety_factor` defaults to `0.4`; `LEROBOT_PACING_LOG` logs the decision per frame. | [below](#joint-velocity-pacing) - [#16](https://github.com/kiro-ai-division/lerobot_trossen/pull/16) |
 | **`include_base_in_state` flag** | Drops the base velocity from `observation.state` so 14-dim policies can be evaluated. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4) |
 | **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
-| **`LEROBOT_LOOP_HZ_LOG`** | Opt-in control-loop rate and per-section timing meter. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6) |
+| **`LEROBOT_LOOP_HZ_LOG`** | Control-loop rate and per-section timing meter, one summary line per 30 frames. On by default; setting `0` turns it off and restores upstream's per-frame fps warning, which this replaces. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6), [#46](https://github.com/kiro-ai-division/lerobot_trossen/pull/46) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
 
 See the [LeRobot documentation](https://huggingface.co/docs/lerobot) and the [Trossen AI documentation](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin.html) for anything beyond this fork.
@@ -621,7 +621,7 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | Variable | Default | Effect |
 | -------- | ------- | ------ |
 | `LEROBOT_FAST_OBS` | `1` (on) | Converts camera frames to float32 and permutes HWC→CHW **on the GPU** instead of the CPU. Set `0` to fall back to the stock lerobot path. |
-| `LEROBOT_LOOP_HZ_LOG` | unset (off) | Set `1` to log the achieved control-loop rate and a per-frame section breakdown. |
+| `LEROBOT_LOOP_HZ_LOG` | `1` (on) | Logs the achieved control-loop rate and a per-frame section breakdown, one line per 30 frames. Set `0` to turn it off, which also restores upstream's per-frame fps warning. |
 | `LEROBOT_PACING_LOG` | unset (off) | Set `1` to log the joint velocity pacing decision on *every* frame. Frames where pacing actually fired are logged either way. |
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
@@ -637,22 +637,49 @@ rotation roughly twice as far. The patch no-ops if upstream ships the same fix
 swallows its own errors so plugin discovery cannot fail because of it. To check which path a
 run took, `grep LEROBOT_FAST_OBS <run log>`.
 
-**`LEROBOT_LOOP_HZ_LOG`** — off by default so normal operation carries no logging overhead.
-When enabled, `send_action` measures every loop iteration and emits a summary every 30 frames:
+**`LEROBOT_LOOP_HZ_LOG`** — on by default. `send_action` measures every loop iteration and
+emits a summary every 30 frames:
 
 ```
-Control loop rate over last 30 frames: mean=20.7 Hz, min=18.9 Hz
-(target_fps / mean_hz = base over-rotation multiplier)
+Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.9 Hz, min=18.9 Hz
+(divide the recording run's mean by this one for the base over-rotation multiplier)
  | per-frame: arms_read=3ms  arms_write=2ms  base_read=21ms  base_write=21ms
    cam:cam_high=1ms  ...  other=4ms
 ```
 
-`target_fps / mean_hz` is the base over-rotation multiplier — a mean near the target fps rules
-the loop-slowdown hypothesis out, a mean near half confirms it. The section breakdown says
-which I/O is responsible; `other` is loop time outside any instrumented section (policy
-`select_action`, preprocessing, `dataset.add_frame`, processors, `busy_wait`). Episode-reset
-gaps longer than 1 s are dropped so an idle pause cannot masquerade as a slow loop. Combine
-with `LEROBOT_FAST_OBS=0` for an A/B comparison.
+The SLATE base holds a velocity command until the next `send_action`, so the multiplier that
+matters is **the recording run's achieved rate divided by the eval run's** — take the last
+summary of each run and divide:
+
+```bash
+grep "Control loop rate" record_run.log | tail -1   # mean=21.5 Hz
+grep "Control loop rate" eval_run.log   | tail -1   # mean=20.9 Hz  ->  1.03x
+```
+
+Do **not** divide the target fps by the mean instead. The teleop recording ceiling here is
+~21.5 Hz against a target of 30, so that reads 1.44x where the truth is 1.03x — the target is
+not the rate the training data was produced at.
+
+`phase=policy` vs `phase=teleop` — `record()` drives the reset phase through the same
+`record_loop`, and the reset call gets no policy, so an eval run with a leader arm ([3-3](#3-3-act--리더암))
+also logs fast reset windows. Compare only `phase=policy` lines against the recording run.
+Episode-reset gaps longer than 1 s are dropped so an idle pause cannot masquerade as a slow loop.
+
+The section breakdown says which I/O is responsible; `other` is loop time outside any
+instrumented section (policy `select_action`, preprocessing, `dataset.add_frame`, processors,
+`busy_wait`). Combine with `LEROBOT_FAST_OBS=0` for an A/B comparison.
+
+Lines are `INFO` unless a window drops below 80% of the best window seen earlier in the same
+phase of the same run, which escalates that line to `WARNING` (`... slowed to 62% of the
+20.9 Hz reached earlier in this run`). The reference is the run's own rate rather than the
+target fps on purpose: below-target is the normal state on this hardware, so a target-based
+alarm would fire continuously.
+
+Setting `0` turns the summary off and restores upstream's per-frame warning
+(`Record loop is running slower (20.4 Hz) than the target FPS (30 Hz) ...`), which fires on
+every frame that misses the budget — about 20 lines a second here, which is what buries the
+base emergency stop, base command guard and pacing `FIRED` warnings. The two are tied together
+so that no configuration leaves a run silent about its loop rate.
 
 **`LEROBOT_PACING_LOG`** - the controller log tells you *that* a velocity limit was tripped but
 never what was commanded, so `send_action` logs its own pacing decision:

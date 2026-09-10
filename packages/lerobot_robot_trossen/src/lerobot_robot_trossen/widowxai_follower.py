@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 # Opt-in per-frame pacing diagnostics. The controller log tells us *that* a
 # velocity limit was tripped but never what was commanded, so this prints the
 # per-joint delta and the resulting goal_time on every send_action.
-# Same on/off convention as LEROBOT_LOOP_HZ_LOG in mobileai.py.
+# Opt-in (unset means off), unlike LEROBOT_LOOP_HZ_LOG in loop_rate_log.py,
+# which is on by default.
 _PACING_LOG_ENABLED = os.getenv("LEROBOT_PACING_LOG", "").strip().lower() not in (
     "",
     "0",

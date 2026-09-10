@@ -5,8 +5,14 @@ from .widowxai_follower import WidowXAIFollower
 from .mobileai import MobileAIRobot
 from .config_mobileai import MobileAIRobotConfig
 from .fast_obs_patch import apply_fast_observation_patch
+from .loop_rate_log import apply_loop_rate_logging_patch
 
 # On by default; set LEROBOT_FAST_OBS=0 to opt out. lerobot imports this package
 # on startup (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is
 # early enough to rebind the inference path before any policy runs.
 apply_fast_observation_patch()
+
+# On by default; set LEROBOT_LOOP_HZ_LOG=0 to opt out (which also restores
+# upstream's per-frame fps warning). Same import timing as above, which is early
+# enough to wrap record_loop before record() resolves it.
+apply_loop_rate_logging_patch()
