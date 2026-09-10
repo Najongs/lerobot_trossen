@@ -21,6 +21,7 @@ uv run hf auth login          # kiroaiseoul org write 토큰
 ```
 
 - 서버 반입·인터프리터 고정 → [설치 함정](#설치-함정)
+- pi0·smolVLA 담당자만 → [부록 — pi0](#부록--pi0-담당자-전용)
 - 카메라 시리얼 — `cam_high` `230422273501` / `cam_left_wrist` `230422271234` / `cam_right_wrist` `230322274369`
 
 ---
@@ -304,7 +305,8 @@ uv run lerobot-replay \
 ## 설치 함정
 
 - **`sandia`·DGX-1엔 GitHub 자격증명이 없다** — 비공개 repo라 `git clone`이 죽는다. 로컬에서 `rsync -az --exclude=.venv --exclude=outputs <로컬repo>/ <서버>:~/lerobot_trossen/`로 넣는다.
-- 🛑 **`.python-version`(3.11)을 지우거나 3.12로 올리지 말 것** — 락이 3.12를 경계로 갈려 있어 3.12에서는 lerobot 0.6.1이 잡히고, [§3 Eval](#3-eval)의 `--policy.path`가 거부된다.
+- 🛑 **`.python-version`(3.11)을 그대로 둘 것** — workspace 멤버가 `>=3.10,<3.13`을 요구하고, 락은 lerobot 0.4.4 하나로 고정돼 있다. 3.11 밖은 검증하지 않았다.
+	- 예전에는 락이 3.12를 경계로 갈려 3.12에서 lerobot 0.6.1이 잡혔고 [§3 Eval](#3-eval)의 `--policy.path`가 거부됐다. `pi0` extra가 transformers를 fork로 override하면서 0.6.1 가지가 해소 불가가 돼 **락에서 사라졌다** — 그 함정은 이제 없다.
 
 ## Record
 
@@ -441,9 +443,58 @@ ACT는 51.6M 파라미터라 가중치·그래디언트·옵티마이저를 합�
 
 ## 부록 — pi0 (담당자 전용)
 
-> 🛑 **이 repo 환경에서는 pi0·smolVLA가 돌지 않는다** — `transformers`가 의존성에 없다. **pi0는 조건부 import라 에러 없이 반쪽으로 돌고**(더 위험), smolVLA는 `ModuleNotFoundError`로 즉사한다. pi0는 별도 conda 환경(`fix/lerobot_openpi` fork)이 필요하니 윤준원에게 문의할 것.
->
 > **팀 학습은 전부 ACT다** — 이 절은 건너뛴다.
+
+필요 접근 — pi0 full 파인튜닝은 48GB 카드에서만 확인했다 → [기기별 제약](#기기별-제약)
+
+### 설치
+
+```shell
+uv sync --extra pi0
+```
+
+- `--extra pi0`를 **줄 때만** transformers fork(`fix/lerobot_openpi`)와 `peft`가 깔린다. 안 주면 `uv sync`와 설치 결과가 같다(실측 — 패키지 114개 동일).
+- 사전학습 가중치 — `lerobot/pi0_base`를 **리비전 `26b99b94`로 받을 것.** 허브 HEAD를 받으면 `ImportError: Processor step 'relative_actions_processor' not found`로 죽는다.
+- 토크나이저 — `google/paligemma-3b-pt-224`가 gated repo라 **이미 받아 둔 기기에서 캐시를 복사할 것**(토크나이저 21M, 가중치 아님). 실행 시 `HF_HUB_OFFLINE=1`을 함께 준다.
+
+### 학습
+
+[2-0](#2-0-gpu-고르기)에서 GPU를 고르고 **이 셸에서** 이어 실행. 아래는 1장 기준이고, 한 모델에 2장을 쓰려면 `--multi_gpu --num_processes=2`.
+
+```shell
+uv run accelerate launch \
+  --num_processes=1 \
+  -m lerobot.scripts.lerobot_train \
+  --policy.type=pi0 \
+  --policy.pretrained_path=<pi0_base 로컬 경로> \
+  --policy.device=cuda \
+  --policy.push_to_hub=false \
+  --policy.dtype=bfloat16 \
+  --policy.gradient_checkpointing=true \
+  --dataset.repo_id=kiroaiseoul/<본인_단계_repo> \
+  --output_dir=outputs/<본인이름>/<본인_단계>_pi0 \
+  --batch_size=32 --steps=<계산> --save_freq=<간격> \
+  --wandb.enable=false
+```
+
+- **`--policy.type=pi0` + `--policy.pretrained_path`로 줄 것** — `--policy.path`를 쓰면 저장된 config의 카메라 키(`*_0_rgb`)가 그대로 잡혀 `Feature mismatch … Missing: observation.images.base_0_rgb`가 나고 `--rename_map`을 손으로 짜야 한다. 이 형태면 카메라 키를 데이터셋에서 잡는다.
+- **`--policy.dtype=bfloat16`·`--policy.gradient_checkpointing=true`를 반드시 함께 줄 것** — 둘 다 기본값이 아니라, 빼면 batch 1에서도 48GB가 모자란다(Adam state만 47.4 GiB).
+- **`--batch_size`는 32까지** — A6000 48GB 1장 기준이고 64는 OOM.
+- **2장을 어떻게 쓸지는 돌릴 모델이 몇 개인가로 갈린다.** 한 모델이면 DDP(`--multi_gpu --num_processes=2`)로 1.38배. 서로 다른 모델 둘이면 `CUDA_VISIBLE_DEVICES`로 장을 갈라 따로 띄우는 쪽이 합계 1.99배로 낫다 — A6000 워크스테이션은 2번 슬롯이 Gen3 x4라 DDP의 all-reduce가 그 링크에 묶인다.
+- 완주분을 허브에 올려 대장에 등재할 땐 `--policy.repo_id=kiroaiseoul/pi0_<본인_단계>_<스텝>`을 주고 `--policy.push_to_hub=false`를 뺀다 → [2-5](#2-5-학습이-끝나면)
+- `--steps` → [스텝 수](#스텝-수) · `<본인_단계_repo>` → [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)
+- 로딩 중 `Missing key(s) … embed_tokens.weight` 경고는 **무시할 것** — Gemma가 입력 임베딩과 `lm_head`를 tie해서 체크포인트에 하나만 저장된 것이다(실측 — 두 텐서의 `data_ptr()`가 같다).
+
+### 기기별 제약
+
+| 기기 | GPU | pi0 |
+| --- | --- | --- |
+| A6000 워크스테이션 | A6000 48GB ×2 (sm_86) | **full FT 실측** — 장당 batch 32 |
+| `sandia` | RTX 3090 24GB ×4 (sm_86) | full FT 불가(고정비용만 30GB+) — VLM을 얼리는 `train_expert_only` 경로가 필요 |
+| DGX-1 | V100 32GB ×8 (sm_70) | **bf16 미지원** — fp16 autocast 경로가 필요 |
+
+- ⚠️ **`sandia`·DGX-1에서는 `uv sync --extra pi0`를 아직 돌려보지 않았다.** 위 칸은 하드웨어 제약에서 나온 것이고 그 두 기기의 설치·실행은 미검증이다.
+- ⚠️ **smolVLA는 import만 통과했고 학습은 안 돌려봤다**(세 기기 모두).
 
 ---
 

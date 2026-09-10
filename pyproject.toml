@@ -22,6 +22,16 @@ dependencies = [
   "torchcodec>=0.10,<0.11",
 ]
 
+[project.optional-dependencies]
+# pi0 (VLA) needs lerobot's peft extra and the fork of transformers that
+# carries the PaliGemma/Gemma classes; base lerobot[intelrealsense] loads
+# modeling_pi0 but silently lacks those classes.
+pi0 = [
+  "lerobot[peft]==0.4.4",
+  "transformers",
+  "scipy>=1.10.1,<1.15",
+]
+
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
@@ -32,6 +42,14 @@ lerobot_robot_trossen = { workspace = true }
 lerobot_teleoperator_trossen = { workspace = true }
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+transformers = { git = "https://github.com/huggingface/transformers.git", branch = "fix/lerobot_openpi" }
+
+[tool.uv]
+# lerobot 0.4.4 declares transformers>=4.57.1, but pi0 requires the
+# fix/lerobot_openpi fork which predates that. The conda recipe achieves
+# the same by installing lerobot first and overwriting transformers after
+# (pip warns and proceeds); uv resolves in one pass, so state it explicitly.
+override-dependencies = ["transformers"]
 
 [tool.uv.workspace]
 members = ["packages/*"]
