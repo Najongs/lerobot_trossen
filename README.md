@@ -240,15 +240,13 @@ uv run lerobot-record \
   --dataset.repo_id=kiroaiseoul/eval_act_<단계>_<회차> \
   --dataset.single_task="<본인 단계 지시문>" \
   --policy.path="$POLICY" \
-  --policy.temporal_ensemble_coeff=0.01 \
-  --policy.n_action_steps=1 \
   --dataset.episode_time_s=120 \
   --dataset.reset_time_s=90 \
   --dataset.num_episodes=10
 ```
 
 - 리셋 구간 = 리더암으로 시작 자세·파지, 끝나면 `→`. 에피소드 구간은 정책 구동.
-- ACT temporal ensembling 인자 2종 → [Eval](#eval)
+- ACT temporal ensembling은 **기본에서 뺐다**(제어 루프 20.8% 저하) — 붙이려면 [Eval](#eval)
 
 ---
 
@@ -332,8 +330,8 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 
 - `--policy.path` — **`config.json`이 있는 디렉터리**. `lerobot-train --policy.repo_id=…`가 올린 체크포인트는 repo 루트에 그 파일들이 있어 bare repo id가 그대로 먹지만, 디렉터리째 업로드된 것은 `pretrained_model/` 아래에 중첩된다. **이름으로는 구별되지 않으므로** 레이아웃을 따지지 말고 [3-2](#3-2-체크포인트-경로-잡기)를 쓴다. bare repo id를 그냥 주면 중첩형에서 로드에 실패한다.
 - **정책 종류는 명령에 안 쓴다** — `lerobot-record`가 체크포인트의 `config.json` `type`에서 정책 종류와 입출력 차원을 읽는다. **`--policy.type`은 주지 말 것** — `--policy.path`와 같이 주면 `Cannot specify both …`로 죽고, 혼자 주면 **경고 없이 랜덤 가중치 정책이 로봇을 구동한다**(`lerobot-eval`엔 있는 경고가 `lerobot-record`엔 없다). `--policy.path`가 안 먹으면 위 중첩 레이아웃부터 의심할 것.
-- `--policy.temporal_ensemble_coeff`·`--policy.n_action_steps` — ACT temporal ensembling. **둘은 반드시 같이 준다** — coeff만 주면 체크포인트의 `n_action_steps`가 기본 `100`이라 `NotImplementedError: n_action_steps must be 1 when using temporal ensembling`으로 죽는다. `--policy.*`는 `type`·`path`만 예외로 벗겨지고 나머지는 체크포인트 `config.json` 위에 얹혀 반영된다. 값 `0.01`은 원 ACT 논문의 `m`과 같은 파라미터로 가중치가 `exp(-0.01 × i)`이고 `i=0`이 그 타임스텝을 가장 먼저 예측한 청크라, **오래된 관측에서 나온 예측에 더 무게**가 실린다(청크 끝에서도 0.37배라 사실상 완만한 평균).
-- ⚠️ **ensembling을 켜면 매 스텝 정책 forward가 돈다** — 기본 `n_action_steps=100`은 100스텝에 한 번만 돌리고 나머지는 큐에서 꺼내 쓰는데, ensembling은 큐를 안 쓰고 매 스텝 청크를 새로 뽑아 평균한다. 루프가 목표 fps를 못 따라가도 대기 시간이 음수면 그냥 통과하므로 **경고 없이 느려진다** — 실주기는 로그의 `Control loop rate` 줄에서 읽는다(기본 ON) → [Environment Variables](#environment-variables). ⚠ **속도 영향은 아직 안 재봤다.**
+- `--policy.temporal_ensemble_coeff`·`--policy.n_action_steps` — ACT temporal ensembling. **기본 eval 명령에는 넣지 않는다**(아래 실측). 붙일 때는 **둘을 반드시 같이 준다** — coeff만 주면 체크포인트의 `n_action_steps`가 기본 `100`이라 `NotImplementedError: n_action_steps must be 1 when using temporal ensembling`으로 죽는다. `--policy.*`는 `type`·`path`만 예외로 벗겨지고 나머지는 체크포인트 `config.json` 위에 얹혀 반영된다. 값 `0.01`은 원 ACT 논문의 `m`과 같은 파라미터로 가중치가 `exp(-0.01 × i)`이고 `i=0`이 그 타임스텝을 가장 먼저 예측한 청크라, **오래된 관측에서 나온 예측에 더 무게**가 실린다(청크 끝에서도 0.37배라 사실상 완만한 평균).
+- ⚠️ **ensembling을 켜면 매 스텝 정책 forward가 돈다** — 기본 `n_action_steps=100`은 100스텝에 한 번만 돌리고 나머지는 큐에서 꺼내 쓰는데, ensembling은 큐를 안 쓰고 매 스텝 청크를 새로 뽑아 평균한다. 루프가 목표 fps를 못 따라가도 대기 시간이 음수면 그냥 통과하므로 **경고 없이 느려진다** — 실주기는 로그의 `Control loop rate` 줄에서 읽는다(기본 ON) → [Environment Variables](#environment-variables). **실측(2026-09-10, ACT task05, 같은 체크포인트로 두 인자만 넣고 뺀 A/B)** — 켜면 `19.96 → 15.81 Hz`로 **20.8% 느려지고**, 늘어난 13.2 ms가 전부 요약 줄의 `other=`에 실린다. 이 로봇에서 루프 저하는 그대로 base 과회전이 되므로 과회전 배수가 **1.02x → 1.29x**가 된다. 그래서 기본 명령에서 뺐다 — 붙이는 쪽을 택하면 그 배수를 감수하는 것이다.
 - `--robot.enable_base_motor_torque` — **eval에선 `true`가 필수이고 기본값이 아니다.** 끄면 정책의 `x.vel`·`theta.vel`이 base에 도달해도 무시되는데 **아무 에러도 안 난다** — 팔만 움직이고 base가 가만있는 것이 "base 동작을 못 배웠다"로 오독된다. `connect()`에서 한 번 적용되므로 처음부터 명령줄에 있어야 한다.
 - `--dataset.repo_id` — **반드시 `eval_`로 시작**한다(정책을 주면서 아니면 즉시 `ValueError`). 반대로 **취득용 repo는 `eval_`로 시작하면 안 된다.**
 - `--dataset.single_task` — 정책 종류와 무관하게 **필수**지만 쓰임이 갈린다. **pi0는 언어조건부**라 학습 때와 같은 문구를 줘야 하고, **ACT는 이 문자열을 정책 입력으로 쓰지 않아**(토크나이저 단계가 없다) 데이터셋 라벨로만 기록된다.
