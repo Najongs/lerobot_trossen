@@ -276,14 +276,15 @@ uv run lerobot-edit-dataset \
 uv run --script scripts/slice_feature_dims.py \
   --repo-id kiroaiseoul/<dataset> \
   --keep-first 14 \
-  --out-repo-id kiroaiseoul/<dataset>_nobasestate
+  --out-repo-id kiroaiseoul/<dataset>_14D
 ```
 
 - **`--script` 필수** — 이 repo env(Python 3.11 → lerobot 0.4.4)엔 `recompute_stats`가 없어, uv가 스크립트 전용 임시 env를 만들게 한다
 - 통과 기준 = `[verify]` 블록에 `observation.state shape = (14,)` · `has NaN = False`
 - 로컬 산출물 확인 후 업로드는 **같은 `--out-repo-id`에 `--push-only`**(업로드엔 `hf auth login` 필요)
 - **전체 인자는 이 README가 아니라 `--help`가 정본** — `uv run --script scripts/slice_feature_dims.py --help`(`--feature`로 다른 벡터 feature, `--drop-indices`로 임의 채널, `--force`·`--keep-tmp`·`--private`). 여기엔 base 제거 경로만 적는다
-- 이 데이터셋으로 학습한 정책은 eval 때 `--robot.include_base_in_state=false` 짝 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
+- 산출물은 14-dim이라 **취득·eval에서 인자를 줄 게 없다**(기본값). 16-dim 원본을 쓸 때만 `--robot.include_base_in_state=true` → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
+- 파생 이름은 **`_14D` 접미**로 통일한다 — 11개 단계 repo가 그 표기로 올라가 있고 [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)이 정본
 
 **Replay** — 🚨 기록된 궤적대로 팔·베이스 실제 구동.
 
@@ -319,10 +320,13 @@ uv run lerobot-replay \
 - `--dataset.episode_time_s` / `--dataset.reset_time_s` — 1회 취득 시간(초) · 에피소드 간 초기화 대기(초)
 - `--dataset.single_task` — 언어 지시문 레이블
 - `--dataset.push_to_hub` — 기본 `true`. 로컬에만 두려면 `false`
+- `--robot.include_base_in_state` — **`_14D` repo에 찍을 땐 안 준다**(14-dim이 기본값). 접미 없는 옛 16-dim repo에 `--resume=true`로 이어 찍을 때만 `true`로 줄 것 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
 
 ### 취득 후 점검
 
-`meta/stats.json`의 base 차원(state/action dim 14·15) `std`가 유한한지 본다. NaN·거대값이면 base 속도 garbage가 섞인 것이고 **사후 복구가 안 된다.** 차단 메커니즘 → [Changes in this fork](#changes-in-this-fork)
+`meta/stats.json`의 **`action` dim 14·15**(base `x.vel`·`theta.vel`) `std`가 유한한지 본다. NaN·거대값이면 base 속도 garbage가 섞인 것이고 **사후 복구가 안 된다.** 차단 메커니즘 → [Changes in this fork](#changes-in-this-fork)
+
+- **`observation.state`엔 이제 base 채널이 없다**(14-dim이 기본) — 점검은 `action` 쪽에서만 한다. 16-dim으로 찍은 옛 데이터셋은 `observation.state` dim 14·15도 같이 본다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
 
 - ⚠️ **빨간 `[MOBILE AI BASE]` 경고가 뜬 구간은 베이스가 안 움직인 구간이다** — 경고는 실행을 막지 않으므로 그 구간의 base 채널이 정지값으로 기록된다. **리셋 구간 발화는 정상**(손으로 밀려고 누르는 것), **녹화 구간 발화는 재취득 대상** → [Base Emergency Stop Detection](#base-emergency-stop-detection)
 
@@ -340,7 +344,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - `--teleop.*` — 리셋 구간에서 리더암으로 시작 자세·파지를 만들기 위한 것. 에피소드 구간은 `--policy.path`가 있으므로 정책이 구동한다. **리더암이 필요한 이유** = staged 자세 이동이 `connect()` 때 한 번뿐이라 **2번째 에피소드부터는 아무것도 자세를 되돌려 주지 않는다.** 리더암을 붙인 채로 돌 수 있게 된 근거 → [Joint Velocity Pacing](#joint-velocity-pacing)
 - `--robot.velocity_safety_factor` — **기본값 `0.4`를 올리지 말 것.** `0.8`·`0.5`는 둘 다 실기에서 트립했다(조건은 `sf ≤ 1/2.07 = 0.483`) → [Joint Velocity Pacing](#joint-velocity-pacing)
 - `--dataset.reset_time_s` — 리셋 구간이 자세 잡기까지 맡으므로 upstream 기본값 60이 아니라 **90**.
-- `--robot.include_base_in_state` — 체크포인트의 state 차원과 짝을 맞춘다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
+- `--robot.include_base_in_state` — **2026-09-16 이전 체크포인트(16-dim)면 `true`로 줄 것.** 그 뒤 학습본은 14-dim이라 안 줘도 된다(기본값). 안 맞으면 정규화 버퍼에서 즉시 죽는다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
 
 **확인 범위** — lerobot 0.4.0~0.4.4에서 동일. 0.6.0부터는 정책 배포가 `lerobot-rollout`으로 분리되고 `lerobot-record`가 `--policy.path`를 거부하나, 체크포인트로 타입을 판별하는 원칙은 유지된다.
 
@@ -510,7 +514,7 @@ uv run accelerate launch \
 | **Base command guard** | Non-finite base velocity *commands* are zeroed and clamped to +/-1.0 (m/s linear, rad/s angular) before they reach the base. Without it a NaN from the policy arrives as full-speed reverse. Always on. | [below](#base-command-guard) - [#20](https://github.com/kiro-ai-division/lerobot_trossen/pull/20) |
 | **Base emergency stop detection** | `connect()` refuses to start while the base is in emergency stop, and `get_observation()` logs one red warning each time the base enters or leaves an abnormal state (emergency stop, controller fault, charging). The mid-run check rides the chassis block `update_state()` already fetches, so it costs no extra serial transaction. On by default; `--robot.estop_check=false` disables the connect-time error only. | [below](#base-emergency-stop-detection) - [#38](https://github.com/kiro-ai-division/lerobot_trossen/pull/38) |
 | **Joint velocity pacing** | Stretches `goal_time` so no joint is commanded past its hard velocity limit, which is what used to kill the process at the policy/teleop handoff. `velocity_safety_factor` defaults to `0.4`; `LEROBOT_PACING_LOG` logs the decision per frame. | [below](#joint-velocity-pacing) - [#16](https://github.com/kiro-ai-division/lerobot_trossen/pull/16) |
-| **`include_base_in_state` flag** | Drops the base velocity from `observation.state` so 14-dim policies can be evaluated. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4) |
+| **`include_base_in_state` flag** | Gates whether the base velocity lands in `observation.state`. Defaults to `false` (14-dim) since 2026-09-16; pass `true` for datasets and checkpoints from before that. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4), [#44](https://github.com/kiro-ai-division/lerobot_trossen/issues/44) |
 | **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
 | **`LEROBOT_LOOP_HZ_LOG`** | Control-loop rate and per-section timing meter, one summary line per 30 frames. On by default; setting `0` turns it off and restores upstream's per-frame fps warning, which this replaces. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6), [#46](https://github.com/kiro-ai-division/lerobot_trossen/pull/46) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
@@ -519,21 +523,23 @@ See the [LeRobot documentation](https://huggingface.co/docs/lerobot) and the [Tr
 
 ## Base Velocity in the Observation State
 
-By default a Mobile AI follower appends the mobile base velocity (`x.vel`, `theta.vel`) to
-`observation.state`, giving a **16-dim** state (6 arm joints + 1 gripper carriage, per arm,
-plus the two base channels). Set `--robot.include_base_in_state=false` to drop them and emit
-a **14-dim** state (arms only).
+By default a Mobile AI follower emits a **14-dim** `observation.state` (6 arm joints + 1
+gripper carriage, per arm). Pass `--robot.include_base_in_state=true` to append the mobile
+base velocity (`x.vel`, `theta.vel`) and get a **16-dim** state instead.
 
 | Flag | Default | `observation.state` |
 | ---- | ------- | ------------------- |
-| `include_base_in_state` | `true` | 16-dim — both arms + base `x.vel`, `theta.vel` |
-| | `false` | 14-dim — both arms only |
+| `include_base_in_state` | `false` | 14-dim — both arms only |
+| | `true` | 16-dim — both arms + base `x.vel`, `theta.vel` |
 
-**Match this flag to the checkpoint you evaluate.** LeRobot does not reshape robot
-observations to the policy's `input_features`: the slicing rule that produced a base-free
-training set exists only in the dataset, so a 14-dim policy fed a 16-dim state breaks on the
-normalisation buffers. Train on a base-in-state dataset → leave it `true`; train on a dataset
-with the base channels sliced out → pass `false` at eval time.
+**Pass `true` for anything that predates the 2026-09-16 switch** — the `kiroaiseoul/taskNN_*`
+datasets without the `_14D` suffix, and every checkpoint trained on them. Anything recorded or
+trained after the switch is 14-dim and needs no flag.
+
+LeRobot does not reshape robot observations to the policy's `input_features`: the slicing rule
+that produced a base-free training set exists only in the dataset, so a 14-dim policy fed a
+16-dim state breaks on the normalisation buffers. A mismatch raises on the spot — it never runs
+with the wrong shape.
 
 `action_features` are untouched, so the base is still commanded either way — the flag only
 gates what the policy *observes*.

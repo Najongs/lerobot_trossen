@@ -436,9 +436,9 @@ class MobileAIRobot(Robot):
             _latest_base_velocity["x.vel"] = x_vel
             _latest_base_velocity["theta.vel"] = theta_vel
 
-        # Expose base velocity as an observation feature only when configured. The
-        # _nobasestate policies expect a 14-dim observation.state (arms only); adding
-        # base here would make it 16-dim and break the policy normalizer.
+        # Expose base velocity as an observation feature only when configured. Off by
+        # default: current policies expect a 14-dim observation.state (arms only), and
+        # adding base here would make it 16-dim and break the policy normalizer.
         if self.config.include_base_in_state:
             obs_dict.update({"x.vel": x_vel, "theta.vel": theta_vel})
 
