@@ -50,6 +50,17 @@ chunks disagree by sigma=0.1, ``every=20`` async lands on the same RMS (0.074 vs
 same worst step-to-step jump (0.206) as ``every=20`` *synchronous*, against 0.040 / 0.143 at
 ``every=1``. Raise it only if the GPU is genuinely needed elsewhere.
 
+``--ensemble.amp=bf16`` runs the chunk forward under autocast. It exists because
+``--policy.use_amp=true`` is a **silent no-op here**: lerobot enables autocast inside
+``predict_action`` on the control thread, and autocast state is thread-local, so it never
+reaches the worker's forward. Whether it actually pays is an open question on SmolVLA -- the
+backbone re-casts activations to the weight dtype at every layer and forces attention math to
+fp32 (``smolvlm_with_expert.py:222,307,528``), so the GEMMs speed up but the cast traffic
+grows. Read the exit line's mean inference time with it on and off. ``bf16`` rather than
+``fp16`` by default when enabled: lerobot's own autocast has no dtype and so picks fp16, whose
+overflow surfaces as ``Joint 0 position input contains NaN`` -- which this repo's README
+attributes to corrupt normalizer stats, so it would be misdiagnosed.
+
 ``--ensemble.plugin=<module>`` force-imports a module that registers a robot/teleop type, for
 setups where lerobot's ``lerobot_robot_*`` name-scan does not find it.
 
@@ -63,6 +74,8 @@ the ``Control loop rate`` summary and divide the recording run's by the eval run
 base over-rotation multiplier.
 """
 
+import atexit
+import contextlib
 import logging
 import queue
 import sys
@@ -114,6 +127,20 @@ def _pop_flag(name: str, default: bool) -> bool:
     if raw in ("0", "false", "no", "off"):
         return False
     raise ValueError(f"{name} 은 true/false 여야 한다 (받은 값: {raw!r})")
+
+
+def _amp(mode: str, device: torch.device):
+    """A fresh autocast context for one forward, or a no-op.
+
+    Nested inside ``predict_action``'s autocast (when ``--policy.use_amp=true``) this wins --
+    the inner context overrides the outer dtype, verified -- so the flag means the same thing
+    on the control thread as it does on the worker.
+    """
+    if mode == "off" or device.type != "cuda":
+        return contextlib.nullcontext()
+    return torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16 if mode == "bf16" else torch.float16
+    )
 
 
 class _Stats:
@@ -216,14 +243,20 @@ class _Worker:
     arrives, and is dropped on arrival.
     """
 
-    def __init__(self, device: torch.device):
+    def __init__(self, device: torch.device, amp: str = "off"):
         self._device = device
+        self._amp = amp
         self._requests: queue.Queue = queue.Queue()
         self._results: queue.Queue = queue.Queue()
         self._generation = 0
         self._inflight = 0
-        thread = threading.Thread(target=self._run, name="ensemble-inference", daemon=True)
-        thread.start()
+        self._thread = threading.Thread(target=self._run, name="ensemble-inference", daemon=True)
+        self._thread.start()
+        # A daemon thread parked in queue.get() is killed mid-C++-call when the interpreter
+        # shuts down, which intermittently aborts with "terminate called without an active
+        # exception" *after* a successful run -- a SIGABRT that reads like a crash. Ask it to
+        # leave on its own instead.
+        atexit.register(self.close)
 
     @property
     def busy(self) -> bool:
@@ -237,13 +270,16 @@ class _Worker:
             torch.cuda.set_device(self._device)
             stream = torch.cuda.Stream(device=self._device)
         while True:
-            fn, batch, step, generation = self._requests.get()
+            request = self._requests.get()
+            if request is None:  # shutdown sentinel
+                return
+            fn, batch, step, generation = request
             started = time.perf_counter()
             actions, error = None, None
             try:
                 # The control thread runs under inference_mode; match it so the tensors this
                 # produces can be merged there without crossing modes.
-                with torch.inference_mode():
+                with torch.inference_mode(), _amp(self._amp, self._device):
                     if stream is not None:
                         with torch.cuda.stream(stream):
                             actions = fn(batch)
@@ -279,6 +315,14 @@ class _Worker:
             return None
         return actions, step, elapsed
 
+    def close(self) -> None:
+        """Let the worker return before the interpreter tears the thread down."""
+        if not self._thread.is_alive():
+            return
+        self._requests.put(None)
+        # Generous enough for an in-flight forward to finish; it is a daemon either way.
+        self._thread.join(timeout=5.0)
+
     def flush(self) -> None:
         """Invalidate everything in flight -- called when an episode resets.
 
@@ -309,7 +353,9 @@ class _State:
         self.worker: _Worker | None = None
 
 
-def install(coeff: float, every: int = 1, use_async: bool = True, align: bool = True) -> _Stats:
+def install(
+    coeff: float, every: int = 1, use_async: bool = True, align: bool = True, amp: str = "off"
+) -> _Stats:
     """Replace SmolVLA's chunk queue with a temporal ensembler."""
     stats = _Stats()
     original_reset = SmolVLAPolicy.reset
@@ -373,7 +419,8 @@ def install(coeff: float, every: int = 1, use_async: bool = True, align: bool = 
         if not use_async:
             if dry() or state.step - state.last_submit >= every:
                 started = time.perf_counter()
-                actions = self._get_action_chunk(batch, noise)  # (batch, chunk, action_dim)
+                with _amp(amp, next(self.parameters()).device):
+                    actions = self._get_action_chunk(batch, noise)  # (batch, chunk, action_dim)
                 # Nothing was consumed while the loop blocked, so the chunk is still aligned.
                 _fold(self, state, (actions, state.step, time.perf_counter() - started))
                 state.last_submit = state.step
@@ -381,7 +428,7 @@ def install(coeff: float, every: int = 1, use_async: bool = True, align: bool = 
             return _pop(ens)
 
         if state.worker is None:
-            state.worker = _Worker(next(self.parameters()).device)
+            state.worker = _Worker(next(self.parameters()).device, amp)
         worker = state.worker
 
         # 1. Fold in whatever finished while the robot was being driven.
@@ -430,6 +477,9 @@ def main() -> None:
     every = max(1, int(_pop_arg("--ensemble.every", "1")))
     use_async = _pop_flag("--ensemble.async", True)
     align = _pop_flag("--ensemble.align", True)
+    amp = _pop_arg("--ensemble.amp", "off").strip().lower()
+    if amp not in ("off", "bf16", "fp16"):
+        raise ValueError(f"--ensemble.amp 은 off/bf16/fp16 이어야 한다 (받은 값: {amp!r})")
     extra = _pop_arg("--ensemble.plugin", "")
     init_logging()
 
@@ -443,12 +493,12 @@ def main() -> None:
         logging.info(f"추가 플러그인 임포트: {extra}")
     _report_registered()
 
-    stats = install(coeff, every, use_async, align)
+    stats = install(coeff, every, use_async, align, amp)
     cadence = "매 제어 스텝마다" if every == 1 else f"{every} 스텝마다"
     if use_async:
         logging.info(
             f"temporal ensembling 활성화 (coeff={coeff}, every={every}, async, "
-            f"align={'on' if align else 'off'}). 추론은 전용 스레드·CUDA 스트림에서 돌고 제어 "
+            f"align={'on' if align else 'off'}, amp={amp}). 추론은 전용 스레드·CUDA 스트림에서 돌고 제어 "
             f"루프는 안 멈춘다. {cadence} 새 청크를 요청하고, 도착한 청크는 비행 중 흘러간 "
             "스텝만큼 앞을 잘라 맞춘 뒤 겹치는 구간을 가중 평균한다."
         )

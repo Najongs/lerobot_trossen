@@ -77,8 +77,22 @@ uv run --extra pi0 python scripts/record_ensemble.py \
 #
 # 그리고 종료 줄의 「비행 중 지연」:
 #   추론 39회 · 평균 170.2 ms (최악 ...) · 비행 중 지연 평균 4.1 스텝 (최악 5) · ...
-#   → 4 근처면 정상. 훨씬 크거나 「너무 늦어 버린 청크」가 쌓이면 --policy.num_steps=5 로
-#     디노이징을 10→5 로 줄여 추론 시간을 깎는다 (품질은 A/B 해볼 것).
+#   → 4 근처면 정상. 훨씬 크거나 「너무 늦어 버린 청크」가 쌓이면 추론 시간(Δ)을 깎는다.
+#     Δ 를 줄이면 지연·평균 창·관측 노후화가 한꺼번에 줄어드는 유일한 레버다:
+#
+#       --policy.num_steps=5     플로우매칭 디노이징 10→5. 가장 확실하고 코드 변경 불필요.
+#                                (체크포인트 config 위에 덮어써진다 — 확인함)
+#       --ensemble.amp=bf16      청크 forward 를 autocast 로. 효과는 재봐야 안다 (아래).
+#
+#     ⚠️ --policy.use_amp=true 는 여기서 아무 일도 안 한다. lerobot 은 autocast 를 제어
+#        스레드의 predict_action 안에서 켜는데 autocast 상태는 thread-local 이라 워커의
+#        forward 에 안 닿는다. 그래서 --ensemble.amp 이 따로 있다.
+#     ⚠️ --ensemble.amp 은 bf16 을 쓴다. lerobot 의 autocast 는 dtype 을 안 줘서 fp16 이
+#        되는데, fp16 오버플로는 「Joint 0 position input contains NaN」으로 나타나고
+#        README 는 그걸 normalizer stats 손상으로 설명해 둬서 오진하기 딱 좋다.
+#     ⚠️ SmolVLA 는 레이어마다 활성값을 가중치 dtype 으로 되돌리고 attention 을 fp32 로
+#        강제한다(smolvlm_with_expert.py:222,307,528). GEMM 은 빨라져도 캐스팅이 늘어
+#        순이득이 불확실하다 — 종료 줄의 「평균 ms」를 켜고/끄고 비교할 것.
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -88,6 +102,7 @@ uv run --extra pi0 python scripts/record_ensemble.py \
 #   앙상블 없이 (기준선)   : record_ensemble.py 대신 `lerobot-record`, --ensemble.* 전부 삭제
 #   동기 앙상블           : --ensemble.async=false --ensemble.every=20
 #   정렬만 끄기           : --ensemble.align=false
+#   추론 시간 줄이기       : --policy.num_steps=5  /  --ensemble.amp=bf16
 #
 # 스텁 측정(실기 아님) — 이음매 최대 점프 / 제어율:
 #   앙상블 없이   0.328 / 20.1 Hz
