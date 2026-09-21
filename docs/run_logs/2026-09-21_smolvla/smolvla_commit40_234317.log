@@ -1,0 +1,744 @@
+INFO 2026-09-21 23:43:20 bs_patch.py:207 Patched prepare_observation_for_inference to convert images on the device (LEROBOT_FAST_OBS) (rebound in: lerobot.utils.control_utils).
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:43:20 ensemble.py:997 등록된 robot.type: bi_openarm_follower, bi_so_follower, bi_widowxai_follower_robot, earthrover_mini_plus, hope_jr_arm, hope_jr_hand, koch_follower, mobileai_robot, omx_follower, openarm_follower, reachy2, so100_follower, so101_follower, unitree_g1, widowxai_follower_robot
+INFO 2026-09-21 23:43:20 ensemble.py:997 등록된 teleop.type: bi_openarm_leader, bi_so_leader, bi_widowxai_leader_teleop, homunculus_arm, homunculus_glove, keyboard, keyboard_ee, keyboard_rover, koch_leader, mobileai_leader_teleop, omx_leader, openarm_leader, openarm_mini, reachy2_teleoperator, so100_leader, so101_leader, unitree_g1, widowxai_leader_teleop
+INFO 2026-09-21 23:43:20 nsemble.py:1046 commit=40: 워커는 쉬지 않고 추론하고, 로봇은 청크 하나를 40 스텝 실행한 뒤 그 사이 도착한 청크들의 가중평균으로 크로스페이드해 갈아탄다 (TA, coeff 적용)
+INFO 2026-09-21 23:43:20 nsemble.py:1055 샘플링 조정: 초기 노이즈 x0.9, 추론당 노이즈 샘플 2개 평균
+INFO 2026-09-21 23:43:20 nsemble.py:1061 temporal ensembling 활성화 (coeff=-1.0, every=1, async/process, align=on, amp=bf16). 추론은 전용 스레드·CUDA 스트림에서 돌고 제어 루프는 안 멈춘다. 매 제어 스텝마다 새 청크를 요청하고, 도착한 청크는 비행 중 흘러간 스텝만큼 앞을 잘라 맞춘 뒤 겹치는 구간을 가중 평균한다.
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:43:20 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:43:23 t_record.py:435 {'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 60,
+             'fps': 30,
+             'num_episodes': 1,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'kiroaiseoul/eval_foundation_smolvla_v1',
+             'reset_time_s': 30,
+             'root': None,
+             'single_task': 'Grab and shake the filled beaker, then move to '
+                            'the front of the fridge',
+             'streaming_encoding': False,
+             'tags': None,
+             'vcodec': 'libsvtav1',
+             'video': True,
+             'video_encoding_batch_size': 1},
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'play_sounds': True,
+ 'policy': {'adapt_to_pi_aloha': False,
+            'add_image_special_tokens': False,
+            'attention_mode': 'cross_attn',
+            'chunk_size': 50,
+            'compile_mode': 'max-autotune',
+            'compile_model': False,
+            'device': 'cuda',
+            'empty_cameras': 0,
+            'expert_width_multiplier': 0.75,
+            'freeze_vision_encoder': True,
+            'input_features': {'observation.images.cam_high': {'shape': (3,
+                                                                         480,
+                                                                         640),
+                                                               'type': <FeatureType.VISUAL: 'VISUAL'>},
+                               'observation.images.cam_left_wrist': {'shape': (3,
+                                                                               480,
+                                                                               640),
+                                                                     'type': <FeatureType.VISUAL: 'VISUAL'>},
+                               'observation.images.cam_right_wrist': {'shape': (3,
+                                                                                480,
+                                                                                640),
+                                                                      'type': <FeatureType.VISUAL: 'VISUAL'>},
+                               'observation.state': {'shape': (16,),
+                                                     'type': <FeatureType.STATE: 'STATE'>}},
+            'license': None,
+            'load_vlm_weights': False,
+            'max_action_dim': 32,
+            'max_period': 4.0,
+            'max_state_dim': 32,
+            'min_period': 0.004,
+            'n_action_steps': 50,
+            'n_obs_steps': 1,
+            'normalization_mapping': {'ACTION': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+                                      'STATE': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+                                      'VISUAL': <NormalizationMode.IDENTITY: 'IDENTITY'>},
+            'num_expert_layers': -1,
+            'num_steps': 15,
+            'num_vlm_layers': 16,
+            'optimizer_betas': (0.9, 0.95),
+            'optimizer_eps': 1e-08,
+            'optimizer_grad_clip_norm': 10.0,
+            'optimizer_lr': 1e-05,
+            'optimizer_weight_decay': 1e-10,
+            'output_features': {'action': {'shape': (16,),
+                                           'type': <FeatureType.ACTION: 'ACTION'>}},
+            'pad_language_to': 'longest',
+            'prefix_length': -1,
+            'pretrained_path': '/home/trossen-ai/daehee/models/smolvla_190k_30k_aug_80k_kirogist/pretrained_model',
+            'private': None,
+            'push_to_hub': False,
+            'repo_id': None,
+            'resize_imgs_with_padding': (512, 512),
+            'rtc_config': None,
+            'scheduler_decay_lr': 5e-07,
+            'scheduler_decay_steps': 112000,
+            'scheduler_warmup_steps': 1000,
+            'self_attn_every_n_layers': 2,
+            'tags': None,
+            'tokenizer_max_length': 48,
+            'train_expert_only': True,
+            'train_state_proj': True,
+            'use_amp': False,
+            'use_cache': True,
+            'use_delta_joint_actions_aloha': False,
+            'use_peft': False,
+            'vlm_model_name': 'HuggingFaceTB/SmolVLM2-500M-Video-Instruct'},
+ 'resume': False,
+ 'robot': {'calibration_dir': None,
+           'cameras': {'cam_high': {'color_mode': <ColorMode.RGB: 'rgb'>,
+                                    'fps': 30,
+                                    'height': 480,
+                                    'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                    'serial_number_or_name': '230422273501',
+                                    'use_depth': False,
+                                    'warmup_s': 1,
+                                    'width': 640},
+                       'cam_left_wrist': {'color_mode': <ColorMode.RGB: 'rgb'>,
+                                          'fps': 30,
+                                          'height': 480,
+                                          'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                          'serial_number_or_name': '230422271234',
+                                          'use_depth': False,
+                                          'warmup_s': 1,
+                                          'width': 640},
+                       'cam_right_wrist': {'color_mode': <ColorMode.RGB: 'rgb'>,
+                                           'fps': 30,
+                                           'height': 480,
+                                           'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                           'serial_number_or_name': '230322274369',
+                                           'use_depth': False,
+                                           'warmup_s': 1,
+                                           'width': 640}},
+           'enable_base_motor_torque': True,
+           'estop_check': True,
+           'id': 'follower',
+           'include_base_in_state': True,
+           'include_effort': False,
+           'include_external_effort': False,
+           'include_velocity': False,
+           'left_arm_ip_address': '192.168.1.5',
+           'left_arm_max_relative_target': 0.1,
+           'loop_rate': 30,
+           'min_time_to_move_multiplier': 3.0,
+           'right_arm_ip_address': '192.168.1.4',
+           'right_arm_max_relative_target': 0.1,
+           'velocity_safety_factor': 0.4},
+ 'teleop': {'calibration_dir': None,
+            'id': 'leader',
+            'left_arm_ip_address': '192.168.1.3',
+            'right_arm_ip_address': '192.168.1.2'}}
+INFO 2026-09-21 23:43:23 eo_utils.py:106 Using video codec: libsvtav1
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+Reducing the number of VLM layers to 16 ...
+INFO 2026-09-21 23:43:36 follower.py:100 Connecting to the arm controller's TCP server at 192.168.1.5:50001
+INFO 2026-09-21 23:43:36 follower.py:100 Connecting to the arm controller's UDP server at 192.168.1.5:50000
+INFO 2026-09-21 23:43:36 follower.py:100 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:43:36 follower.py:100 Controller firmware version: 'v1.9.1'
+INFO 2026-09-21 23:43:38 follower.py:141 192.168.1.5 joint velocity_max (rad/s; m/s for the gripper carriage): joint_0=6.283185, joint_1=6.283185, joint_2=6.283185, joint_3=9.424778, joint_4=9.424778, joint_5=9.424778, left_carriage_joint=0.250000
+INFO 2026-09-21 23:43:38 follower.py:113 None WidowXAIFollower connected.
+INFO 2026-09-21 23:43:38 follower.py:100 Connecting to the arm controller's TCP server at 192.168.1.4:50001
+INFO 2026-09-21 23:43:38 follower.py:100 Connecting to the arm controller's UDP server at 192.168.1.4:50000
+INFO 2026-09-21 23:43:38 follower.py:100 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:43:38 follower.py:100 Controller firmware version: 'v1.9.1'
+INFO 2026-09-21 23:43:40 follower.py:141 192.168.1.4 joint velocity_max (rad/s; m/s for the gripper carriage): joint_0=6.283185, joint_1=6.283185, joint_2=6.283185, joint_3=9.424778, joint_4=9.424778, joint_5=9.424778, left_carriage_joint=0.250000
+INFO 2026-09-21 23:43:40 follower.py:113 None WidowXAIFollower connected.
+INFO 2026-09-21 23:43:42 ealsense.py:202 RealSenseCamera(230422273501) connected.
+INFO 2026-09-21 23:43:43 ealsense.py:202 RealSenseCamera(230422271234) connected.
+INFO 2026-09-21 23:43:44 ealsense.py:202 RealSenseCamera(230322274369) connected.
+INFO 2026-09-21 23:43:44 ai_leader.py:46 Connecting to the arm controller's TCP server at 192.168.1.3:50001
+INFO 2026-09-21 23:43:44 ai_leader.py:46 Connecting to the arm controller's UDP server at 192.168.1.3:50000
+INFO 2026-09-21 23:43:44 ai_leader.py:46 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:43:44 ai_leader.py:46 Controller firmware version: 'v1.9.1'
+INFO 2026-09-21 23:43:46 ai_leader.py:56 leader_left WidowXAILeaderTeleop connected.
+INFO 2026-09-21 23:43:46 ai_leader.py:46 Connecting to the arm controller's TCP server at 192.168.1.2:50001
+INFO 2026-09-21 23:43:46 ai_leader.py:46 Connecting to the arm controller's UDP server at 192.168.1.2:50000
+INFO 2026-09-21 23:43:46 ai_leader.py:46 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:43:46 ai_leader.py:46 Controller firmware version: 'v1.9.1'
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+INFO 2026-09-21 23:43:48 ai_leader.py:56 leader_right WidowXAILeaderTeleop connected.
+INFO 2026-09-21 23:43:48 t_record.py:526 Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding
+INFO 2026-09-21 23:43:48 ls/utils.py:227 Recording episode 0
+INFO 2026-09-21 23:43:48 bs_patch.py:125 GPU-side observation preprocessing is active (converting images on the device instead of the CPU). Disable with LEROBOT_FAST_OBS=0.
+INFO 2026-09-21 23:43:52 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=16.9 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=20ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:43:53 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.7 Hz, min=19.4 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+WARNING 2026-09-21 23:43:54 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.4332525730133057,
+                   'safe goal_pos': 1.4139925003051759}}
+WARNING 2026-09-21 23:43:54 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.5712106227874756,
+                   'safe goal_pos': 1.5646753072738648}}
+WARNING 2026-09-21 23:43:54 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.6677850484848022,
+                   'safe goal_pos': 1.6215152502059937}}
+WARNING 2026-09-21 23:43:54 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.7218908071517944,
+                   'safe goal_pos': 1.681406831741333}}
+WARNING 2026-09-21 23:43:54 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.777937650680542,
+                   'safe goal_pos': 1.7432058811187745}}
+WARNING 2026-09-21 23:43:54 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.8235304355621338,
+                   'safe goal_pos': 1.8053864002227784}}
+WARNING 2026-09-21 23:43:54 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.8912501335144043,
+                   'safe goal_pos': 1.8641336917877198}}
+INFO 2026-09-21 23:43:55 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=19.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:43:56 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=18.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:43:58 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=19.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:43:59 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.5 Hz, min=18.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+WARNING 2026-09-21 23:44:00 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.802995204925537,
+                   'safe goal_pos': 1.8338903427124023}}
+INFO 2026-09-21 23:44:00 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.7 Hz, min=19.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:02 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=21.0 Hz, min=19.4 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=20ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:03 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=19.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+WARNING 2026-09-21 23:44:04 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.8777562379837036,
+                   'safe goal_pos': 1.8534523010253907}}
+WARNING 2026-09-21 23:44:04 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.6560344696044922,
+                   'safe goal_pos': 1.6645151615142821}}
+INFO 2026-09-21 23:44:05 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.4 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:06 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=4ms
+INFO 2026-09-21 23:44:08 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.7 Hz, min=19.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:09 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:11 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:12 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=19.4 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:13 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=21.0 Hz, min=20.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:14 ls/utils.py:227 Reset the environment
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.2927824854850769,
+                   'safe goal_pos': 0.4193789601325989}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': -0.00019073777366429567,
+                   'safe goal_pos': 0.191638046503067},
+    'joint_1': {   'original goal_pos': 1.0576409101486206,
+                   'safe goal_pos': 1.479118013381958},
+    'joint_2': {   'original goal_pos': 0.5151827335357666,
+                   'safe goal_pos': 0.6085908055305481},
+    'joint_3': {   'original goal_pos': 0.02880140393972397,
+                   'safe goal_pos': 0.6745860815048218},
+    'joint_4': {   'original goal_pos': -0.008201723918318748,
+                   'safe goal_pos': -0.07109178006649017},
+    'joint_5': {   'original goal_pos': 0.00019073777366429567,
+                   'safe goal_pos': 0.0016632318496704046}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.2924010157585144,
+                   'safe goal_pos': 0.39649041891098025}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': -0.00019073777366429567,
+                   'safe goal_pos': 0.15387197732925414},
+    'joint_1': {   'original goal_pos': 1.058022379875183,
+                   'safe goal_pos': 1.4527962446212768},
+    'joint_2': {   'original goal_pos': 0.5151827335357666,
+                   'safe goal_pos': 0.5834134459495545},
+    'joint_3': {   'original goal_pos': 0.028038453310728073,
+                   'safe goal_pos': 0.6585641145706177},
+    'joint_4': {   'original goal_pos': -0.008201723918318748,
+                   'safe goal_pos': -0.01654078215360641}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.2946898639202118,
+                   'safe goal_pos': 0.30264743566513064}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.00019073777366429567,
+                   'safe goal_pos': 0.0977950781583786},
+    'joint_1': {   'original goal_pos': 1.054207682609558,
+                   'safe goal_pos': 1.3749752283096313},
+    'joint_3': {   'original goal_pos': 0.010872052982449532,
+                   'safe goal_pos': 0.5849393248558045}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.0009536888683214784,
+                   'safe goal_pos': 0.03714045286178588},
+    'joint_1': {   'original goal_pos': 1.0515373945236206,
+                   'safe goal_pos': 1.3265278577804565},
+    'joint_3': {   'original goal_pos': 0.018120087683200836,
+                   'safe goal_pos': 0.5414511203765869}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0652704238891602,
+                   'safe goal_pos': 1.262821340560913},
+    'joint_3': {   'original goal_pos': 0.012779430486261845,
+                   'safe goal_pos': 0.4827038884162903}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.050774335861206,
+                   'safe goal_pos': 1.2101778030395507},
+    'joint_3': {   'original goal_pos': 0.01506828423589468,
+                   'safe goal_pos': 0.4075532197952271}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0683223009109497,
+                   'safe goal_pos': 1.1510490417480468},
+    'joint_3': {   'original goal_pos': 0.018501564860343933,
+                   'safe goal_pos': 0.36292057633399966}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0660333633422852,
+                   'safe goal_pos': 1.0888685226440429},
+    'joint_3': {   'original goal_pos': 0.01583123579621315,
+                   'safe goal_pos': 0.30188449621200564}}
+WARNING 2026-09-21 23:44:14 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.016212711110711098,
+                   'safe goal_pos': 0.25343709588050845}}
+WARNING 2026-09-21 23:44:15 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.005912871100008488,
+                   'safe goal_pos': 0.18515297174453735}}
+WARNING 2026-09-21 23:44:15 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.006294346414506435,
+                   'safe goal_pos': 0.13479819297790527}}
+WARNING 2026-09-21 23:44:15 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.005149920005351305,
+                   'safe goal_pos': 0.07948424816131591}}
+WARNING 2026-09-21 23:44:15 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.004386968910694122,
+                   'safe goal_pos': 0.012344548106193537}}
+INFO 2026-09-21 23:44:15 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=22.3 Hz, min=21.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=20ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=0ms
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': -0.18978407979011536,
+                   'safe goal_pos': -0.11468680892139674}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': -0.31376364827156067,
+                   'safe goal_pos': -0.16771191209554673}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': 0.23937590420246124,
+                   'safe goal_pos': 0.12346074581146241}}
+INFO 2026-09-21 23:44:17 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=22.2 Hz, min=21.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=20ms  base_write=20ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=1ms
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': -0.3908216953277588,
+                   'safe goal_pos': -0.23065537810325623}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': 0.38357365131378174,
+                   'safe goal_pos': 0.1879301130771637}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': -0.41103988885879517,
+                   'safe goal_pos': -0.28558785319328306}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': 0.4659723937511444,
+                   'safe goal_pos': 0.24019227027893067}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': -0.41065841913223267,
+                   'safe goal_pos': -0.3462424635887146}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': 0.4888609051704407,
+                   'safe goal_pos': 0.30122835040092466}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': -0.41103988885879517,
+                   'safe goal_pos': -0.4019379079341888}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': 0.4873350262641907,
+                   'safe goal_pos': 0.3573052644729614}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': 0.4873350262641907,
+                   'safe goal_pos': 0.41300067901611326}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_5': {   'original goal_pos': 0.4873350262641907,
+                   'safe goal_pos': 0.4686961233615875}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.19207294285297394,
+                   'safe goal_pos': 0.16351567804813386},
+    'joint_4': {   'original goal_pos': 0.0036240178160369396,
+                   'safe goal_pos': 0.001388570666313177},
+    'joint_5': {   'original goal_pos': 0.34504464268684387,
+                   'safe goal_pos': 0.3896238744258881}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.2782863974571228,
+                   'safe goal_pos': 0.22340734153985978},
+    'joint_4': {   'original goal_pos': 0.07724879682064056,
+                   'safe goal_pos': 0.046402683854103094},
+    'joint_5': {   'original goal_pos': 0.25158312916755676,
+                   'safe goal_pos': 0.3442282617092133}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.33627068996429443,
+                   'safe goal_pos': 0.282917520403862},
+    'joint_4': {   'original goal_pos': 0.12569619715213776,
+                   'safe goal_pos': 0.11087205298244954},
+    'joint_5': {   'original goal_pos': 0.23670557141304016,
+                   'safe goal_pos': 0.28204777240753176}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.3854810297489166,
+                   'safe goal_pos': 0.343190661072731}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.4552910625934601,
+                   'safe goal_pos': 0.42787823677062986}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.44575417041778564,
+                   'safe goal_pos': 0.39926756024360655}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.580033540725708,
+                   'safe goal_pos': 0.4820477724075317},
+    'joint_5': {   'original goal_pos': -0.14057374000549316,
+                   'safe goal_pos': -0.15463491678237914}}
+WARNING 2026-09-21 23:44:17 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.5235751867294312,
+                   'safe goal_pos': 0.4549630045890808}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.7158388495445251,
+                   'safe goal_pos': 0.5407950043678283},
+    'joint_5': {   'original goal_pos': -0.06275273114442825,
+                   'safe goal_pos': -0.10046539604663848}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.3227664232254028,
+                   'safe goal_pos': 1.3109941244125367},
+    'joint_3': {   'original goal_pos': 0.6044480204582214,
+                   'safe goal_pos': 0.5118028581142425}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.3067444562911987,
+                   'safe goal_pos': 1.3041275501251222},
+    'joint_3': {   'original goal_pos': 0.8493552803993225,
+                   'safe goal_pos': 0.5953460097312927},
+    'joint_5': {   'original goal_pos': 0.016975661739706993,
+                   'safe goal_pos': -0.04057374000549316}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.4017318487167358,
+                   'safe goal_pos': 1.368596887588501},
+    'joint_3': {   'original goal_pos': 0.6811245679855347,
+                   'safe goal_pos': 0.573220407962799}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.3799878358840942,
+                   'safe goal_pos': 1.3602044343948365},
+    'joint_3': {   'original goal_pos': 0.9729533791542053,
+                   'safe goal_pos': 0.6548561811447143},
+    'joint_5': {   'original goal_pos': 0.09174486994743347,
+                   'safe goal_pos': 0.01512168943881989}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.489089846611023,
+                   'safe goal_pos': 1.4265812397003175},
+    'joint_3': {   'original goal_pos': 0.7581826448440552,
+                   'safe goal_pos': 0.6289158225059509}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.4471274614334106,
+                   'safe goal_pos': 1.4185702562332154},
+    'joint_3': {   'original goal_pos': 1.0847257375717163,
+                   'safe goal_pos': 0.7097886562347412},
+    'joint_5': {   'original goal_pos': 0.17109178006649017,
+                   'safe goal_pos': 0.07425040043890477}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.5676738023757935,
+                   'safe goal_pos': 1.4841840028762818},
+    'joint_3': {   'original goal_pos': 0.8398184180259705,
+                   'safe goal_pos': 0.68499276638031},
+    'joint_4': {   'original goal_pos': -0.0707637146115303,
+                   'safe goal_pos': -0.046402683854103094}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.5211337804794312,
+                   'safe goal_pos': 1.4788433074951173},
+    'joint_3': {   'original goal_pos': 1.1671243906021118,
+                   'safe goal_pos': 0.7670100092887878},
+    'joint_5': {   'original goal_pos': 0.2569237947463989,
+                   'safe goal_pos': 0.1310902576893568}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.6569390296936035,
+                   'safe goal_pos': 1.5425498247146607},
+    'joint_3': {   'original goal_pos': 0.9294651746749878,
+                   'safe goal_pos': 0.7445029377937317},
+    'joint_4': {   'original goal_pos': -0.15812161564826965,
+                   'safe goal_pos': -0.10171663996297867}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.580643892288208,
+                   'safe goal_pos': 1.5356832504272462},
+    'joint_3': {   'original goal_pos': 1.2212939262390137,
+                   'safe goal_pos': 0.8265201807022095},
+    'joint_5': {   'original goal_pos': 0.2943083941936493,
+                   'safe goal_pos': 0.1879301130771637}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.733234167098999,
+                   'safe goal_pos': 1.598626708984375},
+    'joint_3': {   'original goal_pos': 1.0168230533599854,
+                   'safe goal_pos': 0.8024872303009033},
+    'joint_4': {   'original goal_pos': -0.23861294984817505,
+                   'safe goal_pos': -0.16046387553215027}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.6355763673782349,
+                   'safe goal_pos': 1.5932860136032105},
+    'joint_3': {   'original goal_pos': 1.2586785554885864,
+                   'safe goal_pos': 0.8860303521156311},
+    'joint_5': {   'original goal_pos': 0.2931639552116394,
+                   'safe goal_pos': 0.24591439068317414}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.80571448802948,
+                   'safe goal_pos': 1.6585182905197144},
+    'joint_3': {   'original goal_pos': 1.0709925889968872,
+                   'safe goal_pos': 0.8593270540237427},
+    'joint_4': {   'original goal_pos': -0.3133821487426758,
+                   'safe goal_pos': -0.21615930497646332}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.6813534498214722,
+                   'safe goal_pos': 1.6524147748947144},
+    'joint_3': {   'original goal_pos': 1.27775239944458,
+                   'safe goal_pos': 0.9463035225868225}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.8690394163131714,
+                   'safe goal_pos': 1.7138323545455934},
+    'joint_3': {   'original goal_pos': 1.1045624017715454,
+                   'safe goal_pos': 0.9173113465309143},
+    'joint_4': {   'original goal_pos': -0.3850995600223541,
+                   'safe goal_pos': -0.2749065369367599}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.71950101852417,
+                   'safe goal_pos': 1.7107804775238038},
+    'joint_3': {   'original goal_pos': 1.2819485664367676,
+                   'safe goal_pos': 1.000854527950287}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.9251163005828857,
+                   'safe goal_pos': 1.7737239360809327},
+    'joint_3': {   'original goal_pos': 1.119439959526062,
+                   'safe goal_pos': 0.9794918656349182},
+    'joint_4': {   'original goal_pos': -0.45910581946372986,
+                   'safe goal_pos': -0.33327229917049406}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.284618854522705,
+                   'safe goal_pos': 1.0657053351402284}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.9777599573135376,
+                   'safe goal_pos': 1.8328526973724366},
+    'joint_3': {   'original goal_pos': 1.1095216274261475,
+                   'safe goal_pos': 1.03900203704834},
+    'joint_4': {   'original goal_pos': -0.5296788215637207,
+                   'safe goal_pos': -0.39583427309989927}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.3029297590255737,
+                   'safe goal_pos': 1.1225452184677125}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.029259204864502,
+                   'safe goal_pos': 1.8908369302749635},
+    'joint_4': {   'original goal_pos': -0.5674448609352112,
+                   'safe goal_pos': -0.4538185656070709}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.333447813987732,
+                   'safe goal_pos': 1.1805294513702393}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.0799953937530518,
+                   'safe goal_pos': 1.9484398126602174},
+    'joint_4': {   'original goal_pos': -0.5655375123023987,
+                   'safe goal_pos': -0.5125657975673675}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.3792248964309692,
+                   'safe goal_pos': 1.2358433961868287}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.132638931274414,
+                   'safe goal_pos': 2.0068055152893067}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.4230945110321045,
+                   'safe goal_pos': 1.298405385017395}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.1845197677612305,
+                   'safe goal_pos': 2.0632638692855836}}
+INFO 2026-09-21 23:44:18 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=22.1 Hz, min=21.0 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=20ms  base_write=20ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=1ms
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.019340753555298,
+                   'safe goal_pos': 2.018249845504761},
+    'joint_3': {   'original goal_pos': 1.4635308980941772,
+                   'safe goal_pos': 1.354482388496399}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.2302968502044678,
+                   'safe goal_pos': 2.121629571914673}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.50244140625,
+                   'safe goal_pos': 1.4105592727661134}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.2695887088775635,
+                   'safe goal_pos': 2.180758333206177}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.5341038703918457,
+                   'safe goal_pos': 1.4666361570358277}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.307736396789551,
+                   'safe goal_pos': 2.2387426853179933}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.561570167541504,
+                   'safe goal_pos': 1.523475980758667}}
+WARNING 2026-09-21 23:44:18 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.332913637161255,
+                   'safe goal_pos': 2.2959640979766847}}
+WARNING 2026-09-21 23:44:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.407454013824463,
+                   'safe goal_pos': 1.4432593822479247}}
+WARNING 2026-09-21 23:44:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.2903410196304321,
+                   'safe goal_pos': 1.3868009090423583}}
+WARNING 2026-09-21 23:44:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.1877241134643555,
+                   'safe goal_pos': 1.3345388412475585},
+    'joint_4': {   'original goal_pos': 0.2744716703891754,
+                   'safe goal_pos': 0.26918440163135526}}
+WARNING 2026-09-21 23:44:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.1217288970947266,
+                   'safe goal_pos': 1.2811322450637816},
+    'joint_4': {   'original goal_pos': 0.3561074137687683,
+                   'safe goal_pos': 0.31763180196285246}}
+WARNING 2026-09-21 23:44:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.110666036605835,
+                   'safe goal_pos': 1.2281071186065673},
+    'joint_4': {   'original goal_pos': 0.42858776450157166,
+                   'safe goal_pos': 0.3782863974571228}}
+WARNING 2026-09-21 23:44:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 1.1232547760009766,
+                   'safe goal_pos': 1.173556113243103},
+    'joint_4': {   'original goal_pos': 0.4812313914299011,
+                   'safe goal_pos': 0.433981841802597}}
+WARNING 2026-09-21 23:44:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.5006866455078125,
+                   'safe goal_pos': 0.49044022560119627}}
+INFO 2026-09-21 23:44:19 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=22.3 Hz, min=21.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=20ms  base_write=20ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=1ms
+INFO 2026-09-21 23:44:21 ls/utils.py:227 Re-record episode
+INFO 2026-09-21 23:44:21 ls/utils.py:227 Recording episode 0
+INFO 2026-09-21 23:44:22 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.9 Hz, min=20.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:24 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=20.0 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:25 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.7 Hz, min=19.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:27 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=18.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=4ms
+INFO 2026-09-21 23:44:28 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=19.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:30 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.2 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:31 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:33 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:34 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.9 Hz, min=19.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:35 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=19.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:37 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=19.2 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:38 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.8 Hz, min=18.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:40 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=21.0 Hz, min=19.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:41 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:43 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.6 Hz, min=19.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=2ms  arms_write=2ms  base_read=21ms  base_write=21ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=3ms
+INFO 2026-09-21 23:44:43 ls/utils.py:227 Reset the environment
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.099832057952881,
+                   'safe goal_pos': 1.9999389410018922},
+    'joint_3': {   'original goal_pos': 1.114862322807312,
+                   'safe goal_pos': 1.000854527950287},
+    'joint_4': {   'original goal_pos': 0.46330204606056213,
+                   'safe goal_pos': 0.4572518527507782}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.11196307092905045,
+                   'safe goal_pos': 0.1290760725736618},
+    'joint_1': {   'original goal_pos': 2.035362720489502,
+                   'safe goal_pos': 1.8656595706939698},
+    'joint_2': {   'original goal_pos': 0.8962767720222473,
+                   'safe goal_pos': 0.798291003704071},
+    'joint_3': {   'original goal_pos': 0.619325578212738,
+                   'safe goal_pos': 0.9114823579788208},
+    'joint_4': {   'original goal_pos': -0.7093538045883179,
+                   'safe goal_pos': -0.37904936671257017},
+    'joint_5': {   'original goal_pos': -0.12722209095954895,
+                   'safe goal_pos': -0.10743877328932286}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.099832057952881,
+                   'safe goal_pos': 2.0312199354171754},
+    'joint_3': {   'original goal_pos': 1.114862322807312,
+                   'safe goal_pos': 1.0210727214813233}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.035362720489502,
+                   'safe goal_pos': 1.8996108531951905},
+    'joint_2': {   'original goal_pos': 0.8962767720222473,
+                   'safe goal_pos': 0.8246127724647522},
+    'joint_3': {   'original goal_pos': 0.6197070479393005,
+                   'safe goal_pos': 0.8630350470542908},
+    'joint_4': {   'original goal_pos': -0.7093538045883179,
+                   'safe goal_pos': -0.3912565767765045}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.036125659942627,
+                   'safe goal_pos': 1.966369128227234},
+    'joint_3': {   'original goal_pos': 0.6189440488815308,
+                   'safe goal_pos': 0.8222171306610108},
+    'joint_4': {   'original goal_pos': -0.7082093358039856,
+                   'safe goal_pos': -0.5106584191322326}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 2.033836841583252,
+                   'safe goal_pos': 2.0186313152313233},
+    'joint_3': {   'original goal_pos': 0.5823224186897278,
+                   'safe goal_pos': 0.7600366115570069},
+    'joint_4': {   'original goal_pos': -0.7154573798179626,
+                   'safe goal_pos': -0.5304951429367065}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.578507661819458,
+                   'safe goal_pos': 0.6871748208999634},
+    'joint_4': {   'original goal_pos': -0.7257572412490845,
+                   'safe goal_pos': -0.5987792670726776}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.5724040865898132,
+                   'safe goal_pos': 0.6516975402832031},
+    'joint_4': {   'original goal_pos': -0.7135500311851501,
+                   'safe goal_pos': -0.6258640646934509}}
+WARNING 2026-09-21 23:44:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -0.7173647880554199,
+                   'safe goal_pos': -0.6960555672645569}}
+Process ensemble-inference:
+Traceback (most recent call last):
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/trossen-ai/NAJY/lerobot_trossen/scripts/record_ensemble.py", line 244, in _proc_main
+    msg = requests.get()
+          ^^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/queues.py", line 103, in get
+    res = self._recv_bytes()
+          ^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/connection.py", line 216, in recv_bytes
+    buf = self._recv_bytes(maxlength)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/connection.py", line 430, in _recv_bytes
+    buf = self._recv(4)
+          ^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/connection.py", line 395, in _recv
+    chunk = read(handle, remaining)
+            ^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Reducing the number of VLM layers to 16 ...
+Loading weights from local directory
+INFO 2026-09-21 23:44:44 ls/utils.py:227 Stop recording
+INFO 2026-09-21 23:44:50 follower.py:328 None WidowXAIFollower disconnected.
+INFO 2026-09-21 23:44:54 follower.py:328 None WidowXAIFollower disconnected.
+INFO 2026-09-21 23:44:54 ealsense.py:639 RealSenseCamera(230422273501) disconnected.
+INFO 2026-09-21 23:44:54 ealsense.py:639 RealSenseCamera(230422271234) disconnected.
+INFO 2026-09-21 23:44:54 ealsense.py:639 RealSenseCamera(230322274369) disconnected.
+INFO 2026-09-21 23:44:58 i_leader.py:122 leader_left WidowXAILeaderTeleop disconnected.
+INFO 2026-09-21 23:45:02 i_leader.py:122 leader_right WidowXAILeaderTeleop disconnected.
+INFO 2026-09-21 23:45:02 ls/utils.py:227 Exiting
+INFO 2026-09-21 23:45:02 nsemble.py:1076 추론 239회 · 평균 165.6 ms (최악 443.5 ms) -> 동기로 돌렸다면 지속 가능한 제어 주파수 약 6 Hz · 비행 중 지연 평균 4.0 스텝 (최악 4) · 프로세스 워커: 제출(관측 복사) 평균 1.0 ms/회 | 내역: 큐 대기 1.3 ms (최악 27.9)
+Loading weights from local directory
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Right arrow key pressed. Exiting loop...
+Traceback (most recent call last):
+  File "/home/trossen-ai/NAJY/lerobot_trossen/scripts/record_ensemble.py", line 1080, in <module>
+    main()
+  File "/home/trossen-ai/NAJY/lerobot_trossen/scripts/record_ensemble.py", line 1074, in main
+    lerobot_record.main()
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/scripts/lerobot_record.py", line 608, in main
+    record()
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/configs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/scripts/lerobot_record.py", line 563, in record
+    record_loop(
+  File "/home/trossen-ai/NAJY/lerobot_trossen/packages/lerobot_robot_trossen/src/lerobot_robot_trossen/loop_rate_log.py", line 270, in record_loop
+    return original(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/datasets/image_writer.py", line 29, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/scripts/lerobot_record.py", line 348, in record_loop
+    obs = robot.get_observation()
+          ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/NAJY/lerobot_trossen/packages/lerobot_robot_trossen/src/lerobot_robot_trossen/mobileai.py", line 416, in get_observation
+    if not self.base.update_state():
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

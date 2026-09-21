@@ -1,0 +1,1108 @@
+INFO 2026-09-21 23:01:50 bs_patch.py:207 Patched prepare_observation_for_inference to convert images on the device (LEROBOT_FAST_OBS) (rebound in: lerobot.utils.control_utils).
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:01:50 ensemble.py:893 등록된 robot.type: bi_openarm_follower, bi_so_follower, bi_widowxai_follower_robot, earthrover_mini_plus, hope_jr_arm, hope_jr_hand, koch_follower, mobileai_robot, omx_follower, openarm_follower, reachy2, so100_follower, so101_follower, unitree_g1, widowxai_follower_robot
+INFO 2026-09-21 23:01:50 ensemble.py:893 등록된 teleop.type: bi_openarm_leader, bi_so_leader, bi_widowxai_leader_teleop, homunculus_arm, homunculus_glove, keyboard, keyboard_ee, keyboard_rover, koch_leader, mobileai_leader_teleop, omx_leader, openarm_leader, openarm_mini, reachy2_teleoperator, so100_leader, so101_leader, unitree_g1, widowxai_leader_teleop
+INFO 2026-09-21 23:01:50 ensemble.py:933 샘플링 조정: 초기 노이즈 x0.9, 추론당 노이즈 샘플 4개 평균
+INFO 2026-09-21 23:01:50 ensemble.py:939 temporal ensembling 활성화 (coeff=0.01, every=1, async/process, align=on, amp=bf16). 추론은 전용 스레드·CUDA 스트림에서 돌고 제어 루프는 안 멈춘다. 매 제어 스텝마다 새 청크를 요청하고, 도착한 청크는 비행 중 흘러간 스텝만큼 앞을 잘라 맞춘 뒤 겹치는 구간을 가중 평균한다.
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_robot_trossen
+INFO 2026-09-21 23:01:50 rt_utils.py:160 Imported third-party plugin: lerobot_teleoperator_trossen
+INFO 2026-09-21 23:01:53 t_record.py:435 {'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 60,
+             'fps': 30,
+             'num_episodes': 1,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'kiroaiseoul/eval_foundation_smolvla_v1',
+             'reset_time_s': 30,
+             'root': None,
+             'single_task': 'Grab and shake the filled beaker, then move to '
+                            'the front of the fridge',
+             'streaming_encoding': False,
+             'tags': None,
+             'vcodec': 'libsvtav1',
+             'video': True,
+             'video_encoding_batch_size': 1},
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'play_sounds': True,
+ 'policy': {'adapt_to_pi_aloha': False,
+            'add_image_special_tokens': False,
+            'attention_mode': 'cross_attn',
+            'chunk_size': 50,
+            'compile_mode': 'max-autotune',
+            'compile_model': False,
+            'device': 'cuda',
+            'empty_cameras': 0,
+            'expert_width_multiplier': 0.75,
+            'freeze_vision_encoder': True,
+            'input_features': {'observation.images.cam_high': {'shape': (3,
+                                                                         480,
+                                                                         640),
+                                                               'type': <FeatureType.VISUAL: 'VISUAL'>},
+                               'observation.images.cam_left_wrist': {'shape': (3,
+                                                                               480,
+                                                                               640),
+                                                                     'type': <FeatureType.VISUAL: 'VISUAL'>},
+                               'observation.images.cam_right_wrist': {'shape': (3,
+                                                                                480,
+                                                                                640),
+                                                                      'type': <FeatureType.VISUAL: 'VISUAL'>},
+                               'observation.state': {'shape': (16,),
+                                                     'type': <FeatureType.STATE: 'STATE'>}},
+            'license': None,
+            'load_vlm_weights': False,
+            'max_action_dim': 32,
+            'max_period': 4.0,
+            'max_state_dim': 32,
+            'min_period': 0.004,
+            'n_action_steps': 50,
+            'n_obs_steps': 1,
+            'normalization_mapping': {'ACTION': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+                                      'STATE': <NormalizationMode.MEAN_STD: 'MEAN_STD'>,
+                                      'VISUAL': <NormalizationMode.IDENTITY: 'IDENTITY'>},
+            'num_expert_layers': -1,
+            'num_steps': 20,
+            'num_vlm_layers': 16,
+            'optimizer_betas': (0.9, 0.95),
+            'optimizer_eps': 1e-08,
+            'optimizer_grad_clip_norm': 10.0,
+            'optimizer_lr': 1e-05,
+            'optimizer_weight_decay': 1e-10,
+            'output_features': {'action': {'shape': (16,),
+                                           'type': <FeatureType.ACTION: 'ACTION'>}},
+            'pad_language_to': 'longest',
+            'prefix_length': -1,
+            'pretrained_path': '/home/trossen-ai/daehee/models/smolvla_190k_30k_aug_80k_kirogist/pretrained_model',
+            'private': None,
+            'push_to_hub': False,
+            'repo_id': None,
+            'resize_imgs_with_padding': (512, 512),
+            'rtc_config': None,
+            'scheduler_decay_lr': 5e-07,
+            'scheduler_decay_steps': 112000,
+            'scheduler_warmup_steps': 1000,
+            'self_attn_every_n_layers': 2,
+            'tags': None,
+            'tokenizer_max_length': 48,
+            'train_expert_only': True,
+            'train_state_proj': True,
+            'use_amp': False,
+            'use_cache': True,
+            'use_delta_joint_actions_aloha': False,
+            'use_peft': False,
+            'vlm_model_name': 'HuggingFaceTB/SmolVLM2-500M-Video-Instruct'},
+ 'resume': False,
+ 'robot': {'calibration_dir': None,
+           'cameras': {'cam_high': {'color_mode': <ColorMode.RGB: 'rgb'>,
+                                    'fps': 30,
+                                    'height': 480,
+                                    'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                    'serial_number_or_name': '230422273501',
+                                    'use_depth': False,
+                                    'warmup_s': 1,
+                                    'width': 640},
+                       'cam_left_wrist': {'color_mode': <ColorMode.RGB: 'rgb'>,
+                                          'fps': 30,
+                                          'height': 480,
+                                          'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                          'serial_number_or_name': '230422271234',
+                                          'use_depth': False,
+                                          'warmup_s': 1,
+                                          'width': 640},
+                       'cam_right_wrist': {'color_mode': <ColorMode.RGB: 'rgb'>,
+                                           'fps': 30,
+                                           'height': 480,
+                                           'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                           'serial_number_or_name': '230322274369',
+                                           'use_depth': False,
+                                           'warmup_s': 1,
+                                           'width': 640}},
+           'enable_base_motor_torque': True,
+           'estop_check': True,
+           'id': 'follower',
+           'include_base_in_state': True,
+           'include_effort': False,
+           'include_external_effort': False,
+           'include_velocity': False,
+           'left_arm_ip_address': '192.168.1.5',
+           'left_arm_max_relative_target': 0.1,
+           'loop_rate': 30,
+           'min_time_to_move_multiplier': 3.0,
+           'right_arm_ip_address': '192.168.1.4',
+           'right_arm_max_relative_target': 0.1,
+           'velocity_safety_factor': 0.4},
+ 'teleop': {'calibration_dir': None,
+            'id': 'leader',
+            'left_arm_ip_address': '192.168.1.3',
+            'right_arm_ip_address': '192.168.1.2'}}
+INFO 2026-09-21 23:01:53 eo_utils.py:106 Using video codec: libsvtav1
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+Reducing the number of VLM layers to 16 ...
+INFO 2026-09-21 23:02:07 follower.py:100 Connecting to the arm controller's TCP server at 192.168.1.5:50001
+INFO 2026-09-21 23:02:07 follower.py:100 Connecting to the arm controller's UDP server at 192.168.1.5:50000
+INFO 2026-09-21 23:02:07 follower.py:100 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:02:07 follower.py:100 Controller firmware version: 'v1.9.1'
+INFO 2026-09-21 23:02:09 follower.py:141 192.168.1.5 joint velocity_max (rad/s; m/s for the gripper carriage): joint_0=6.283185, joint_1=6.283185, joint_2=6.283185, joint_3=9.424778, joint_4=9.424778, joint_5=9.424778, left_carriage_joint=0.250000
+INFO 2026-09-21 23:02:09 follower.py:113 None WidowXAIFollower connected.
+INFO 2026-09-21 23:02:09 follower.py:100 Connecting to the arm controller's TCP server at 192.168.1.4:50001
+INFO 2026-09-21 23:02:09 follower.py:100 Connecting to the arm controller's UDP server at 192.168.1.4:50000
+INFO 2026-09-21 23:02:09 follower.py:100 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:02:09 follower.py:100 Controller firmware version: 'v1.9.1'
+INFO 2026-09-21 23:02:11 follower.py:141 192.168.1.4 joint velocity_max (rad/s; m/s for the gripper carriage): joint_0=6.283185, joint_1=6.283185, joint_2=6.283185, joint_3=9.424778, joint_4=9.424778, joint_5=9.424778, left_carriage_joint=0.250000
+INFO 2026-09-21 23:02:11 follower.py:113 None WidowXAIFollower connected.
+INFO 2026-09-21 23:02:12 ealsense.py:202 RealSenseCamera(230422273501) connected.
+INFO 2026-09-21 23:02:13 ealsense.py:202 RealSenseCamera(230422271234) connected.
+INFO 2026-09-21 23:02:15 ealsense.py:202 RealSenseCamera(230322274369) connected.
+INFO 2026-09-21 23:02:15 ai_leader.py:46 Connecting to the arm controller's TCP server at 192.168.1.3:50001
+INFO 2026-09-21 23:02:15 ai_leader.py:46 Connecting to the arm controller's UDP server at 192.168.1.3:50000
+INFO 2026-09-21 23:02:15 ai_leader.py:46 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:02:15 ai_leader.py:46 Controller firmware version: 'v1.9.1'
+INFO 2026-09-21 23:02:17 ai_leader.py:56 leader_left WidowXAILeaderTeleop connected.
+INFO 2026-09-21 23:02:17 ai_leader.py:46 Connecting to the arm controller's TCP server at 192.168.1.2:50001
+INFO 2026-09-21 23:02:17 ai_leader.py:46 Connecting to the arm controller's UDP server at 192.168.1.2:50000
+INFO 2026-09-21 23:02:17 ai_leader.py:46 Driver version: 'v1.9.0'
+INFO 2026-09-21 23:02:17 ai_leader.py:46 Controller firmware version: 'v1.9.1'
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+INFO 2026-09-21 23:02:19 ai_leader.py:56 leader_right WidowXAILeaderTeleop connected.
+INFO 2026-09-21 23:02:19 t_record.py:526 Streaming encoding is disabled. If you have capable hardware, consider enabling it for way faster episode saving. --dataset.streaming_encoding=true --dataset.encoder_threads=2 # --dataset.vcodec=auto. More info in the documentation: https://huggingface.co/docs/lerobot/streaming_video_encoding
+INFO 2026-09-21 23:02:19 ls/utils.py:227 Recording episode 0
+WARNING 2026-09-21 23:02:19 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+INFO 2026-09-21 23:02:19 bs_patch.py:125 GPU-side observation preprocessing is active (converting images on the device instead of the CPU). Disable with LEROBOT_FAST_OBS=0.
+WARNING 2026-09-21 23:02:21 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+WARNING 2026-09-21 23:02:21 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+INFO 2026-09-21 23:02:22 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.7 Hz, min=22.2 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=29ms
+WARNING 2026-09-21 23:02:22 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:22 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:23 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.8 Hz, min=26.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:23 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:23 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:24 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=26.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:24 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:24 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+WARNING 2026-09-21 23:02:25 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.4444741010665894,
+                   'safe goal_pos': 1.4433661460876466}}
+INFO 2026-09-21 23:02:25 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=26.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:25 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:25 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:26 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=24.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:26 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:26 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:27 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.7 Hz, min=26.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:27 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:27 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:28 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=25.4 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:28 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:28 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:29 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=26.2 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:29 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:29 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:30 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.8 Hz, min=26.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:30 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:30 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:31 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.6 Hz, min=26.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:31 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:31 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:32 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=26.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:32 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:32 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:33 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:33 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:33 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:34 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.8 Hz, min=24.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:34 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:34 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:35 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.7 Hz, min=25.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:35 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:35 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:36 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=25.9 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:36 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:36 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:37 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=26.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:37 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:37 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:38 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=26.2 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:38 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:38 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:39 ls/utils.py:227 Reset the environment
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': -0.00019073777366429567,
+                   'safe goal_pos': 0.3678797721862793},
+    'joint_1': {   'original goal_pos': 1.0568779706954956,
+                   'safe goal_pos': 1.7736171722412108},
+    'joint_2': {   'original goal_pos': 0.5224307775497437,
+                   'safe goal_pos': 0.6928969264030457},
+    'joint_3': {   'original goal_pos': 0.22220951318740845,
+                   'safe goal_pos': 0.9370413064956665},
+    'joint_4': {   'original goal_pos': -0.0009536888683214784,
+                   'safe goal_pos': -0.2973067700862885},
+    'joint_5': {   'original goal_pos': 0.00019073777366429567,
+                   'safe goal_pos': 0.0489662081003189}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.00019073777366429567,
+                   'safe goal_pos': 0.3396505653858185},
+    'joint_1': {   'original goal_pos': 1.0568779706954956,
+                   'safe goal_pos': 1.7427176475524901},
+    'joint_2': {   'original goal_pos': 0.5224307775497437,
+                   'safe goal_pos': 0.6780193686485291},
+    'joint_3': {   'original goal_pos': 0.22220951318740845,
+                   'safe goal_pos': 0.9229266881942749},
+    'joint_4': {   'original goal_pos': -0.0013351644156500697,
+                   'safe goal_pos': -0.26869612336158755},
+    'joint_5': {   'original goal_pos': 0.00019073777366429567,
+                   'safe goal_pos': 0.0333257108926773}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.00019073777366429567,
+                   'safe goal_pos': 0.30112152695655825},
+    'joint_1': {   'original goal_pos': 1.056496500968933,
+                   'safe goal_pos': 1.6885481119155883},
+    'joint_2': {   'original goal_pos': 0.5220493078231812,
+                   'safe goal_pos': 0.627664589881897},
+    'joint_3': {   'original goal_pos': 0.21648737788200378,
+                   'safe goal_pos': 0.8828717708587647},
+    'joint_4': {   'original goal_pos': -0.0009536888683214784,
+                   'safe goal_pos': -0.22864117622375488}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.00019073777366429567,
+                   'safe goal_pos': 0.2595407009124756},
+    'joint_1': {   'original goal_pos': 1.049248456954956,
+                   'safe goal_pos': 1.6446783781051635},
+    'joint_2': {   'original goal_pos': 0.5220493078231812,
+                   'safe goal_pos': 0.5784542798995972},
+    'joint_3': {   'original goal_pos': 0.21076524257659912,
+                   'safe goal_pos': 0.8313725233078003},
+    'joint_4': {   'original goal_pos': -0.0013351644156500697,
+                   'safe goal_pos': -0.20231937766075134}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.000572213320992887,
+                   'safe goal_pos': 0.21338214874267578},
+    'joint_1': {   'original goal_pos': 1.049248456954956,
+                   'safe goal_pos': 1.6069122791290282},
+    'joint_2': {   'original goal_pos': 0.5228122472763062,
+                   'safe goal_pos': 0.5391623020172119},
+    'joint_3': {   'original goal_pos': 0.21229113638401031,
+                   'safe goal_pos': 0.7863584399223328},
+    'joint_4': {   'original goal_pos': -0.002861066721379757,
+                   'safe goal_pos': -0.15425344705581664}}
+WARNING 2026-09-21 23:02:39 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.000572213320992887,
+                   'safe goal_pos': 0.16493477821350097},
+    'joint_1': {   'original goal_pos': 1.0530632734298706,
+                   'safe goal_pos': 1.5611353158950805},
+    'joint_3': {   'original goal_pos': 0.20733195543289185,
+                   'safe goal_pos': 0.7367666006088257},
+    'joint_4': {   'original goal_pos': -0.0032425420358777046,
+                   'safe goal_pos': -0.09893950223922729}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.0009536888683214784,
+                   'safe goal_pos': 0.11686884760856628},
+    'joint_1': {   'original goal_pos': 1.0503928661346436,
+                   'safe goal_pos': 1.5126878261566161},
+    'joint_3': {   'original goal_pos': 0.21190966665744781,
+                   'safe goal_pos': 0.6906080484390259},
+    'joint_4': {   'original goal_pos': -0.00667582219466567,
+                   'safe goal_pos': -0.0508735716342926}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.0009536888683214784,
+                   'safe goal_pos': 0.07223620414733886},
+    'joint_1': {   'original goal_pos': 1.0545891523361206,
+                   'safe goal_pos': 1.4699626207351684},
+    'joint_3': {   'original goal_pos': 0.21648737788200378,
+                   'safe goal_pos': 0.6532234787940979}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': -0.000572213320992887,
+                   'safe goal_pos': 0.02607766687870025},
+    'joint_1': {   'original goal_pos': 1.0618371963500977,
+                   'safe goal_pos': 1.4238040685653686},
+    'joint_3': {   'original goal_pos': 0.2141985148191452,
+                   'safe goal_pos': 0.6066834568977356}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0618371963500977,
+                   'safe goal_pos': 1.3776455163955688},
+    'joint_3': {   'original goal_pos': 0.20809490978717804,
+                   'safe goal_pos': 0.5586175560951233}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0618371963500977,
+                   'safe goal_pos': 1.3345388412475585},
+    'joint_3': {   'original goal_pos': 0.20733195543289185,
+                   'safe goal_pos': 0.5181811094284058}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0629816055297852,
+                   'safe goal_pos': 1.2910505771636962},
+    'joint_3': {   'original goal_pos': 0.20237277448177338,
+                   'safe goal_pos': 0.47774472236633303}}
+WARNING 2026-09-21 23:02:39 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0629816055297852,
+                   'safe goal_pos': 1.2448920249938964},
+    'joint_3': {   'original goal_pos': 0.20084688067436218,
+                   'safe goal_pos': 0.4304417610168457}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0629816055297852,
+                   'safe goal_pos': 1.1994964122772216},
+    'joint_3': {   'original goal_pos': 0.20428015291690826,
+                   'safe goal_pos': 0.38123139142990115}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0641260147094727,
+                   'safe goal_pos': 1.1533378601074218},
+    'joint_3': {   'original goal_pos': 0.20313572883605957,
+                   'safe goal_pos': 0.3365987777709961}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.0660333633422852,
+                   'safe goal_pos': 1.1109941244125365},
+    'joint_3': {   'original goal_pos': 0.20122835040092468,
+                   'safe goal_pos': 0.2965438306331635}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.2004653960466385,
+                   'safe goal_pos': 0.25267415642738345}}
+WARNING 2026-09-21 23:02:39 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.2004653960466385,
+                   'safe goal_pos': 0.208041512966156}}
+INFO 2026-09-21 23:02:40 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=29.0 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:40 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:40 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:41 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:41 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:41 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -0.13065537810325623,
+                   'safe goal_pos': -0.1268940255045891}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.22373540699481964,
+                   'safe goal_pos': 0.1898374915122986}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -0.20237277448177338,
+                   'safe goal_pos': -0.16122682616114617}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.3126192092895508,
+                   'safe goal_pos': 0.2359960287809372}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -0.2935454249382019,
+                   'safe goal_pos': -0.20738536715507508},
+    'joint_5': {   'original goal_pos': 0.1825360506772995,
+                   'safe goal_pos': 0.16885633617639542}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.3999771177768707,
+                   'safe goal_pos': 0.2787212938070297}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.4678797721862793,
+                   'safe goal_pos': 0.45915923118591306},
+    'joint_4': {   'original goal_pos': -0.387006938457489,
+                   'safe goal_pos': -0.24896620810031891},
+    'joint_5': {   'original goal_pos': 0.2317463904619217,
+                   'safe goal_pos': 0.21348897218704224}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.49191272258758545,
+                   'safe goal_pos': 0.325261315703392}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.5220493078231812,
+                   'safe goal_pos': 0.503410404920578},
+    'joint_4': {   'original goal_pos': -0.5025940537452698,
+                   'safe goal_pos': -0.2939803212881088},
+    'joint_5': {   'original goal_pos': 0.27218279242515564,
+                   'safe goal_pos': 0.25812161564826963}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.568970799446106,
+                   'safe goal_pos': 0.36913100481033323}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.569733738899231,
+                   'safe goal_pos': 0.5461356401443481},
+    'joint_4': {   'original goal_pos': -0.6002517938613892,
+                   'safe goal_pos': -0.33785001039505}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.6326771974563599,
+                   'safe goal_pos': 0.41643396615982053}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.6155108213424683,
+                   'safe goal_pos': 0.591149753332138},
+    'joint_4': {   'original goal_pos': -0.7097352743148804,
+                   'safe goal_pos': -0.38133821487426756}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.6689173579216003,
+                   'safe goal_pos': 0.46030364036560056}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.6536583304405212,
+                   'safe goal_pos': 0.6384527444839477},
+    'joint_4': {   'original goal_pos': -0.8154039978981018,
+                   'safe goal_pos': -0.4244449496269226}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.6826505064964294,
+                   'safe goal_pos': 0.5045548141002655}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.6879911422729492,
+                   'safe goal_pos': 0.684229826927185},
+    'joint_4': {   'original goal_pos': -0.9100099205970764,
+                   'safe goal_pos': -0.4717479109764099},
+    'joint_5': {   'original goal_pos': 0.4327840209007263,
+                   'safe goal_pos': 0.42787823677062986}}
+INFO 2026-09-21 23:02:42 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.6826505064964294,
+                   'safe goal_pos': 0.5488059878349304}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -0.9981307983398438,
+                   'safe goal_pos': -0.5144731760025024},
+    'joint_5': {   'original goal_pos': 0.5006866455078125,
+                   'safe goal_pos': 0.4675516843795776}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.6826505064964294,
+                   'safe goal_pos': 0.5907682836055755}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.0667964220046997,
+                   'safe goal_pos': -0.5598687589168548},
+    'joint_5': {   'original goal_pos': 0.5693522691726685,
+                   'safe goal_pos': 0.5125657975673675}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.6841763854026794,
+                   'safe goal_pos': 0.6350194573402405}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.1182955503463745,
+                   'safe goal_pos': -0.6029755234718323},
+    'joint_5': {   'original goal_pos': 0.6227588057518005,
+                   'safe goal_pos': 0.5575799107551574}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.6837949156761169,
+                   'safe goal_pos': 0.6811780095100403}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.1671243906021118,
+                   'safe goal_pos': -0.6495155453681946},
+    'joint_5': {   'original goal_pos': 0.6456473469734192,
+                   'safe goal_pos': 0.6022125840187073}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.199549913406372,
+                   'safe goal_pos': -0.6933852195739746},
+    'joint_5': {   'original goal_pos': 0.647173285484314,
+                   'safe goal_pos': 0.6453193187713623}}
+WARNING 2026-09-21 23:02:42 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.2170977592468262,
+                   'safe goal_pos': -0.7414511203765869}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.2170977592468262,
+                   'safe goal_pos': -0.7830319762229919}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.2117570638656616,
+                   'safe goal_pos': -0.827664589881897}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.2071794271469116,
+                   'safe goal_pos': -0.8734416723251343}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.2006943225860596,
+                   'safe goal_pos': -0.9154039978981018}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.19764244556427,
+                   'safe goal_pos': -0.9604180812835693}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.193827748298645,
+                   'safe goal_pos': -1.0069581031799317}}
+WARNING 2026-09-21 23:02:42 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.1766613721847534,
+                   'safe goal_pos': -1.0531166553497315}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -1.1419470310211182,
+                   'safe goal_pos': -1.0962233901023866}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.8024337887763977,
+                   'safe goal_pos': 0.7967650651931762}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.49114975333213806,
+                   'safe goal_pos': 0.5067368388175965},
+    'joint_4': {   'original goal_pos': -0.9325169920921326,
+                   'safe goal_pos': -0.9812923908233643},
+    'joint_5': {   'original goal_pos': 0.33360037207603455,
+                   'safe goal_pos': 0.3522392749786377}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.8546959757804871,
+                   'safe goal_pos': 0.832623815536499}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.422102689743042,
+                   'safe goal_pos': 0.46095981597900393},
+    'joint_4': {   'original goal_pos': -0.846684992313385,
+                   'safe goal_pos': -0.9408560037612915},
+    'joint_5': {   'original goal_pos': 0.2622644305229187,
+                   'safe goal_pos': 0.3114213883876801}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.8909361362457275,
+                   'safe goal_pos': 0.8803082466125488}}
+WARNING 2026-09-21 23:02:42 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.34542611241340637,
+                   'safe goal_pos': 0.4151827335357666},
+    'joint_4': {   'original goal_pos': -0.7570382356643677,
+                   'safe goal_pos': -0.8935530424118042},
+    'joint_5': {   'original goal_pos': 0.18978407979011536,
+                   'safe goal_pos': 0.2641183972358704}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.28591591119766235,
+                   'safe goal_pos': 0.3697871506214142},
+    'joint_4': {   'original goal_pos': -0.6795986890792847,
+                   'safe goal_pos': -0.853498125076294},
+    'joint_5': {   'original goal_pos': 0.13866636157035828,
+                   'safe goal_pos': 0.22215610146522521}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.24090181291103363,
+                   'safe goal_pos': 0.3240100681781769},
+    'joint_4': {   'original goal_pos': -0.6204699873924255,
+                   'safe goal_pos': -0.8042877554893494},
+    'joint_5': {   'original goal_pos': 0.1024261862039566,
+                   'safe goal_pos': 0.1771419882774353}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.3185702562332153,
+                   'safe goal_pos': 1.3200427532196044}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.20580606162548065,
+                   'safe goal_pos': 0.2793774247169495},
+    'joint_4': {   'original goal_pos': -0.5766003131866455,
+                   'safe goal_pos': -0.7607995510101319},
+    'joint_5': {   'original goal_pos': 0.07343403995037079,
+                   'safe goal_pos': 0.13365376889705657}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.258297085762024,
+                   'safe goal_pos': 1.278843307495117}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.1810101419687271,
+                   'safe goal_pos': 0.23321890234947204},
+    'joint_4': {   'original goal_pos': -0.5510414242744446,
+                   'safe goal_pos': -0.7157854676246643},
+    'joint_5': {   'original goal_pos': 0.056267641484737396,
+                   'safe goal_pos': 0.08711376190185546}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.19459068775177,
+                   'safe goal_pos': 1.2330663442611693}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.1680399775505066,
+                   'safe goal_pos': 0.190112167596817},
+    'joint_4': {   'original goal_pos': -0.5472266674041748,
+                   'safe goal_pos': -0.6726787328720093}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.1263065338134766,
+                   'safe goal_pos': 1.184618854522705}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -0.5537117719650269,
+                   'safe goal_pos': -0.6257572412490845}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.054207682609558,
+                   'safe goal_pos': 1.1399863004684447}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': -0.5743114352226257,
+                   'safe goal_pos': -0.5803616285324097}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.9855420589447021,
+                   'safe goal_pos': 1.09764244556427}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.9130617380142212,
+                   'safe goal_pos': 1.0514838933944701}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.8405813574790955,
+                   'safe goal_pos': 1.0072328090667724}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.7818341255187988,
+                   'safe goal_pos': 0.9603113174438477}}
+INFO 2026-09-21 23:02:43 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=29.0 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.7227054238319397,
+                   'safe goal_pos': 0.9149157047271729}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.6631952524185181,
+                   'safe goal_pos': 0.8691386222839356}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.6181811094284058,
+                   'safe goal_pos': 0.8252689480781555}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.5815594792366028,
+                   'safe goal_pos': 0.7791103959083557}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.5525673031806946,
+                   'safe goal_pos': 0.7344777822494507}}
+WARNING 2026-09-21 23:02:43 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.5395971536636353,
+                   'safe goal_pos': 0.6906080484390259}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.5403600931167603,
+                   'safe goal_pos': 0.6440680265426636}}
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 0.5445563197135925,
+                   'safe goal_pos': 0.5979095339775086}}
+WARNING 2026-09-21 23:02:43 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+WARNING 2026-09-21 23:02:43 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': -0.04482337832450867,
+                   'safe goal_pos': -0.047821769118309015}}
+WARNING 2026-09-21 23:02:44 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': -0.005149920005351305,
+                   'safe goal_pos': -0.005859465897083277}}
+INFO 2026-09-21 23:02:44 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:44 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:44 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:45 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.8 Hz, min=28.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:45 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:45 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:46 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:46 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:46 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:46 ls/utils.py:227 Re-record episode
+INFO 2026-09-21 23:02:46 ls/utils.py:227 Recording episode 0
+WARNING 2026-09-21 23:02:47 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:47 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:48 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.7 Hz, min=24.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:48 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:48 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:49 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.8 Hz, min=26.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:49 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:49 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:50 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.2 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:50 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.9857079982757568,
+                   'safe goal_pos': 1.972091293334961}}
+WARNING 2026-09-21 23:02:50 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:50 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:51 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:51 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:51 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:52 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.8 Hz, min=25.0 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:52 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:52 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:53 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.8 Hz, min=25.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:53 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:53 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:54 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.2 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:54 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:54 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:55 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=25.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:02:55 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:55 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:56 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:56 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:56 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:57 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:57 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:57 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:58 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.0 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:58 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:58 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:02:59 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:02:59 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:02:59 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:00 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:00 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:00 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:01 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.7 Hz, min=26.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:01 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:01 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:02 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=26.4 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+INFO 2026-09-21 23:03:02 ls/utils.py:227 Reset the environment
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_3': {   'original goal_pos': 0.5846112966537476,
+                   'safe goal_pos': 0.581612890958786},
+    'joint_4': {   'original goal_pos': 0.06923781335353851,
+                   'safe goal_pos': 0.4514228940010071}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.2298390120267868,
+                   'safe goal_pos': 0.3438467919826508},
+    'joint_1': {   'original goal_pos': 1.2335011959075928,
+                   'safe goal_pos': 1.9311665534973144},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.6665750980377197},
+    'joint_3': {   'original goal_pos': 0.34962233901023865,
+                   'safe goal_pos': 0.9183489322662354},
+    'joint_4': {   'original goal_pos': 0.029182879254221916,
+                   'safe goal_pos': -0.2110933005809784},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.1078202486038208}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.06923781335353851,
+                   'safe goal_pos': 0.44188603162765505}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.2298390120267868,
+                   'safe goal_pos': 0.31828793287277224},
+    'joint_1': {   'original goal_pos': 1.2335011959075928,
+                   'safe goal_pos': 1.9090410709381103},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.6494087219238281},
+    'joint_3': {   'original goal_pos': 0.35000380873680115,
+                   'safe goal_pos': 0.9088120698928833},
+    'joint_4': {   'original goal_pos': 0.029182879254221916,
+                   'safe goal_pos': -0.17981230616569518},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.11392385736107827}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.06961929053068161,
+                   'safe goal_pos': 0.38046845197677615}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.2298390120267868,
+                   'safe goal_pos': 0.2805218636989594},
+    'joint_1': {   'original goal_pos': 1.2335011959075928,
+                   'safe goal_pos': 1.859067702293396},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.6001983523368836},
+    'joint_3': {   'original goal_pos': 0.34809643030166626,
+                   'safe goal_pos': 0.855024003982544},
+    'joint_4': {   'original goal_pos': 0.029182879254221916,
+                   'safe goal_pos': -0.14204623699188232},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.1730525702238083}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.06771191209554672,
+                   'safe goal_pos': 0.3407950043678284}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.2302204966545105,
+                   'safe goal_pos': 0.2400854468345642},
+    'joint_1': {   'original goal_pos': 1.2315938472747803,
+                   'safe goal_pos': 1.814435029029846},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.550225043296814},
+    'joint_3': {   'original goal_pos': 0.34733349084854126,
+                   'safe goal_pos': 0.8008545279502869},
+    'joint_4': {   'original goal_pos': 0.025749599561095238,
+                   'safe goal_pos': -0.11801327168941497},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.21081864684820176}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.06961929053068161,
+                   'safe goal_pos': 0.2965438306331635}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2315938472747803,
+                   'safe goal_pos': 1.7724727630615233},
+    'joint_2': {   'original goal_pos': 0.28744181990623474,
+                   'safe goal_pos': 0.5113145351409912},
+    'joint_3': {   'original goal_pos': 0.35076677799224854,
+                   'safe goal_pos': 0.7638513684272766},
+    'joint_4': {   'original goal_pos': 0.013542382046580315,
+                   'safe goal_pos': -0.07185473442077636}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.07801175117492676,
+                   'safe goal_pos': 0.2568703830242157}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2365529537200928,
+                   'safe goal_pos': 1.728221559524536},
+    'joint_2': {   'original goal_pos': 0.28744181990623474,
+                   'safe goal_pos': 0.470496678352356},
+    'joint_3': {   'original goal_pos': 0.35000380873680115,
+                   'safe goal_pos': 0.7249408602714539},
+    'joint_4': {   'original goal_pos': 0.021171892061829567,
+                   'safe goal_pos': -0.023407341539859766}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.07724879682064056,
+                   'safe goal_pos': 0.2091859221458435}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2365529537200928,
+                   'safe goal_pos': 1.6782483100891112},
+    'joint_2': {   'original goal_pos': 0.28744181990623474,
+                   'safe goal_pos': 0.4201418995857239},
+    'joint_3': {   'original goal_pos': 0.35000380873680115,
+                   'safe goal_pos': 0.6803082466125489}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.07763027399778366,
+                   'safe goal_pos': 0.15501641631126403}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2361714839935303,
+                   'safe goal_pos': 1.633234167098999},
+    'joint_2': {   'original goal_pos': 0.28744181990623474,
+                   'safe goal_pos': 0.37741663455963137},
+    'joint_3': {   'original goal_pos': 0.35076677799224854,
+                   'safe goal_pos': 0.6364385724067688}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_4': {   'original goal_pos': 0.0875486359000206,
+                   'safe goal_pos': 0.10962081849575042}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2365529537200928,
+                   'safe goal_pos': 1.5912717819213866},
+    'joint_2': {   'original goal_pos': 0.28667888045310974,
+                   'safe goal_pos': 0.33430989980697634},
+    'joint_3': {   'original goal_pos': 0.34657052159309387,
+                   'safe goal_pos': 0.5929503083229065}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2346456050872803,
+                   'safe goal_pos': 1.5477836370468139},
+    'joint_2': {   'original goal_pos': 0.28667888045310974,
+                   'safe goal_pos': 0.2885328471660614},
+    'joint_3': {   'original goal_pos': 0.3370336592197418,
+                   'safe goal_pos': 0.5433585286140442}}
+WARNING 2026-09-21 23:03:02 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2304493188858032,
+                   'safe goal_pos': 1.5012436151504516},
+    'joint_3': {   'original goal_pos': 0.33588922023773193,
+                   'safe goal_pos': 0.4968185067176819}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2308309078216553,
+                   'safe goal_pos': 1.4531777143478393},
+    'joint_3': {   'original goal_pos': 0.33588922023773193,
+                   'safe goal_pos': 0.45752652883529665}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2315938472747803,
+                   'safe goal_pos': 1.4108338594436645},
+    'joint_3': {   'original goal_pos': 0.33627068996429443,
+                   'safe goal_pos': 0.41213091611862185}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2315938472747803,
+                   'safe goal_pos': 1.3646753072738647},
+    'joint_3': {   'original goal_pos': 0.33550775051116943,
+                   'safe goal_pos': 0.36482795476913454}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2315938472747803,
+                   'safe goal_pos': 1.3208056926727294}}
+WARNING 2026-09-21 23:03:02 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2315938472747803,
+                   'safe goal_pos': 1.2731212615966796}}
+WARNING 2026-09-21 23:03:02 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:03 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:03 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:03 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:04 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.5 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:04 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:05 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:05 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:05 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:06 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:06 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.8 Hz, min=28.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:06 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:07 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:07 rate_log.py:205 Control loop rate over last 30 frames (phase=teleop, target=30 Hz): mean=29.9 Hz, min=28.8 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:07 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:08 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:08 ls/utils.py:227 Re-record episode
+INFO 2026-09-21 23:03:08 ls/utils.py:227 Recording episode 0
+WARNING 2026-09-21 23:03:08 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:09 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:09 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.7 Hz, min=24.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:09 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:10 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:10 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.3 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:10 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:11 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:11 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.4 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:11 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:12 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:12 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=24.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:12 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:13 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:13 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=24.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:13 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:14 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:14 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.7 Hz, min=25.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:14 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:15 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:15 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=30.0 Hz, min=26.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:15 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:16 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:16 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=23.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=30ms
+WARNING 2026-09-21 23:03:16 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:17 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:17 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.9 Hz, min=25.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:17 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:18 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:18 rate_log.py:205 Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=29.6 Hz, min=24.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=0ms  base_write=0ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=31ms
+WARNING 2026-09-21 23:03:18 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:19 /mobileai.py:72 Mobile AI base transaction failed: the velocity command may not have been applied and the cached base velocity is now stale.
+INFO 2026-09-21 23:03:19 ls/utils.py:227 Reset the environment
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.22259098291397095,
+                   'safe goal_pos': 0.26488136649131777},
+    'joint_1': {   'original goal_pos': 1.2350270748138428,
+                   'safe goal_pos': 1.8186313152313232},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.6715343236923218},
+    'joint_3': {   'original goal_pos': 0.33550775051116943,
+                   'safe goal_pos': 0.6616159319877625},
+    'joint_4': {   'original goal_pos': 0.00667582219466567,
+                   'safe goal_pos': -0.3556725323200226},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.13223468363285065}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_0': {   'original goal_pos': 0.22259098291397095,
+                   'safe goal_pos': 0.2427557647228241},
+    'joint_1': {   'original goal_pos': 1.2350270748138428,
+                   'safe goal_pos': 1.7915464878082275},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.6551308274269104},
+    'joint_3': {   'original goal_pos': 0.33550775051116943,
+                   'safe goal_pos': 0.6410162687301636},
+    'joint_4': {   'original goal_pos': 0.00667582219466567,
+                   'safe goal_pos': -0.3247730076313019},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.13795681521296502}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2350270748138428,
+                   'safe goal_pos': 1.739284300804138},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.6089722752571106},
+    'joint_3': {   'original goal_pos': 0.33474478125572205,
+                   'safe goal_pos': 0.6024872303009033},
+    'joint_4': {   'original goal_pos': 0.00667582219466567,
+                   'safe goal_pos': -0.2881513774394989},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.19403372555971146}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2350270748138428,
+                   'safe goal_pos': 1.6904554605484008},
+    'joint_2': {   'original goal_pos': 0.28706035017967224,
+                   'safe goal_pos': 0.5536583304405213},
+    'joint_3': {   'original goal_pos': 0.3377965986728668,
+                   'safe goal_pos': 0.5383993029594422},
+    'joint_4': {   'original goal_pos': 0.006294346414506435,
+                   'safe goal_pos': -0.2625925183296204},
+    'joint_5': {   'original goal_pos': -0.24280919134616852,
+                   'safe goal_pos': -0.2375219374895096}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2365529537200928,
+                   'safe goal_pos': 1.6534523010253905},
+    'joint_2': {   'original goal_pos': 0.28782328963279724,
+                   'safe goal_pos': 0.5162737607955933},
+    'joint_3': {   'original goal_pos': 0.34580758213996887,
+                   'safe goal_pos': 0.4998703241348267},
+    'joint_4': {   'original goal_pos': 0.00667582219466567,
+                   'safe goal_pos': -0.21528952717781066}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2403677701950073,
+                   'safe goal_pos': 1.6099641561508178},
+    'joint_2': {   'original goal_pos': 0.28782328963279724,
+                   'safe goal_pos': 0.47545584440231325},
+    'joint_3': {   'original goal_pos': 0.344663143157959,
+                   'safe goal_pos': 0.46286716461181643},
+    'joint_4': {   'original goal_pos': 0.007057297509163618,
+                   'safe goal_pos': -0.1626459002494812}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2396048307418823,
+                   'safe goal_pos': 1.5577019691467284},
+    'joint_2': {   'original goal_pos': 0.28782328963279724,
+                   'safe goal_pos': 0.4239566564559937},
+    'joint_3': {   'original goal_pos': 0.34542611241340637,
+                   'safe goal_pos': 0.41251238584518435},
+    'joint_4': {   'original goal_pos': 0.00667582219466567,
+                   'safe goal_pos': -0.10046539604663848}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2388418912887573,
+                   'safe goal_pos': 1.5142138242721557},
+    'joint_2': {   'original goal_pos': 0.28782328963279724,
+                   'safe goal_pos': 0.38161289095878603},
+    'joint_3': {   'original goal_pos': 0.34771496057510376,
+                   'safe goal_pos': 0.3678797721862793},
+    'joint_4': {   'original goal_pos': 0.007057297509163618,
+                   'safe goal_pos': -0.05583276748657226}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2392233610153198,
+                   'safe goal_pos': 1.4703440904617309},
+    'joint_2': {   'original goal_pos': 0.28782328963279724,
+                   'safe goal_pos': 0.338506156206131},
+    'joint_4': {   'original goal_pos': 0.008201723918318748,
+                   'safe goal_pos': -0.016159304976463312}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2350270748138428,
+                   'safe goal_pos': 1.423422598838806},
+    'joint_2': {   'original goal_pos': 0.28667888045310974,
+                   'safe goal_pos': 0.2908216953277588}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2296863794326782,
+                   'safe goal_pos': 1.3795528650283813}}
+WARNING 2026-09-21 23:03:19 /mobileai.py:72 Failed to refresh Mobile AI base state; using last cached velocity.
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2296863794326782,
+                   'safe goal_pos': 1.3318684339523315}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2308309078216553,
+                   'safe goal_pos': 1.2887617588043212}}
+WARNING 2026-09-21 23:03:19 ts/utils.py:113 Relative goal position magnitude had to be clamped to be safe.
+{   'joint_1': {   'original goal_pos': 1.2315938472747803,
+                   'safe goal_pos': 1.2410773277282714}}
+Process ensemble-inference:
+Traceback (most recent call last):
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/trossen-ai/NAJY/lerobot_trossen/scripts/record_ensemble.py", line 219, in _proc_main
+    msg = requests.get()
+          ^^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/queues.py", line 103, in get
+    res = self._recv_bytes()
+          ^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/connection.py", line 216, in recv_bytes
+    buf = self._recv_bytes(maxlength)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/connection.py", line 430, in _recv_bytes
+    buf = self._recv(4)
+          ^^^^^^^^^^^^^
+  File "/home/trossen-ai/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/multiprocessing/connection.py", line 395, in _recv
+    chunk = read(handle, remaining)
+            ^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Reducing the number of VLM layers to 16 ...
+Loading weights from local directory
+INFO 2026-09-21 23:03:20 ls/utils.py:227 Stop recording
+WARNING 2026-09-21 23:03:21 mobileai.py:491 Failed to stop Mobile AI base during disconnect.
+INFO 2026-09-21 23:03:25 follower.py:328 None WidowXAIFollower disconnected.
+INFO 2026-09-21 23:03:29 follower.py:328 None WidowXAIFollower disconnected.
+INFO 2026-09-21 23:03:30 ealsense.py:639 RealSenseCamera(230422273501) disconnected.
+INFO 2026-09-21 23:03:30 ealsense.py:639 RealSenseCamera(230422271234) disconnected.
+INFO 2026-09-21 23:03:30 ealsense.py:639 RealSenseCamera(230322274369) disconnected.
+INFO 2026-09-21 23:03:34 i_leader.py:122 leader_left WidowXAILeaderTeleop disconnected.
+INFO 2026-09-21 23:03:38 i_leader.py:122 leader_right WidowXAILeaderTeleop disconnected.
+INFO 2026-09-21 23:03:38 ls/utils.py:227 Exiting
+INFO 2026-09-21 23:03:38 ensemble.py:954 추론 166회 · 평균 247.0 ms (최악 497.9 ms) -> 동기로 돌렸다면 지속 가능한 제어 주파수 약 4 Hz · 비행 중 지연 평균 7.9 스텝 (최악 8) · 프로세스 워커: 제출(관측 복사) 평균 1.0 ms/회 | 내역: 큐 대기 1.2 ms (최악 31.9)
+Loading weights from local directory
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Left arrow key pressed. Exiting loop and rerecord the last episode...
+Traceback (most recent call last):
+  File "/home/trossen-ai/NAJY/lerobot_trossen/scripts/record_ensemble.py", line 958, in <module>
+    main()
+  File "/home/trossen-ai/NAJY/lerobot_trossen/scripts/record_ensemble.py", line 952, in main
+    lerobot_record.main()
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/scripts/lerobot_record.py", line 608, in main
+    record()
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/configs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/scripts/lerobot_record.py", line 563, in record
+    record_loop(
+  File "/home/trossen-ai/NAJY/lerobot_trossen/packages/lerobot_robot_trossen/src/lerobot_robot_trossen/loop_rate_log.py", line 270, in record_loop
+    return original(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/datasets/image_writer.py", line 29, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/scripts/lerobot_record.py", line 427, in record_loop
+    precise_sleep(max(sleep_time_s, 0.0))
+  File "/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/lerobot/utils/robot_utils.py", line 55, in precise_sleep
+    time.sleep(seconds)
+KeyboardInterrupt
