@@ -268,12 +268,12 @@ rm -rf /home/trossen-ai/daehee/datasets/eval_result_act_task09_close_refrigerato
 rm -rf ~/.cache/huggingface/lerobot/kiroaiseoul/eval_foundation_smolvla_v1
 
 uv run python scripts/record_ensemble.py \
-  --ensemble.commit=40 \
+  --ensemble.commit=50 \
   --ensemble.coeff=-1.5 \
   --ensemble.amp=bf16 \
   --ensemble.noise_scale=0.9 \
-  --ensemble.samples=1 \
-  --policy.num_steps=20 \
+  --ensemble.samples=7 \
+  --policy.num_steps=10 \
   --robot.type=mobileai_robot \
   --robot.left_arm_ip_address=192.168.1.5 \
   --robot.right_arm_ip_address=192.168.1.4 \
@@ -293,8 +293,8 @@ uv run python scripts/record_ensemble.py \
   --teleop.id=leader \
   --dataset.repo_id=kiroaiseoul/eval_foundation_smolvla_v1 \
   --dataset.num_episodes=1 \
-  --dataset.reset_time_s=30 \
-  --dataset.single_task="Move to the tube rack" \
+  --dataset.reset_time_s=90 \
+  --dataset.single_task="Pick up the two tubes from the rack with both hands" \
   --dataset.push_to_hub=false \
   --policy.device=cuda \
   --policy.path=/home/trossen-ai/daehee/models/smolvla_190k_30k_aug_80k_kirogist/pretrained_model \
