@@ -94,6 +94,15 @@ minus the stall at the boundary. N cannot usefully exceed ``chunk_size - lag``: 
 is taken over `lag` steps after its observation has only that many actions left, and the
 switch happens early when it runs out. Asynchronous mode only; leave ``every`` at 1.
 
+What happens to the chunks that land *during* a commit window depends on ``--ensemble.merge``.
+With ``average`` (the default) they are not thrown away: each is trimmed to the current
+timestep and folded into a pending ensemble (same ``--ensemble.coeff`` weighting), so the
+chunk the robot switches to is the mean of the ~N/lag predictions made while it was busy --
+sampling noise down by roughly the square root of that count, from GPU time that was being
+spent anyway. The switch itself is then a linear cross-fade over whatever is left of the old
+chunk rather than a cut, so a smaller N buys a longer fade (N=30 leaves ~12 steps). With
+``latest`` only the newest landed chunk is kept and the switch is a hard replacement.
+
 ``--ensemble.worker=process`` (the default) runs the asynchronous forward in a *separate
 process* instead of a thread. On this robot a thread cannot work: the Mobile AI base driver
 (``trossen_slate``, pybind11) holds the GIL for the whole of ``update_state()`` and
@@ -767,7 +776,7 @@ class _State:
         # Far enough back that the first step is always due.
         self.last_submit = -(1 << 30)
         self.worker: _Worker | None = None
-        self.pending = None  # newest landed chunk not yet taken over (--ensemble.commit)
+        self.pending: ACTTemporalEnsembler | None = None  # chunks landed mid-commit
         self.since_switch = 0
 
 
@@ -795,6 +804,8 @@ def install(
         if state is None:
             state = _State(ACTTemporalEnsembler(coeff, self.config.chunk_size))
             state.ens.reset()
+            state.pending = ACTTemporalEnsembler(coeff, self.config.chunk_size)
+            state.pending.reset()
             self._ens_state = state
         return state
 
@@ -808,8 +819,8 @@ def install(
             return w
         return _Worker(next(self.parameters()).device, amp, profile, sampler)
 
-    def _fold(self, state: _State, landed, replace: bool = False) -> None:
-        """Align a landed chunk to the current timestep and merge it."""
+    def _trim(self, state: _State, landed):
+        """Record a landed chunk and cut it to start at the current timestep (None if too late)."""
         actions, request_step, elapsed, prof = landed
         lag = state.step - request_step if align else 0
         stats.observe(elapsed, state.step - request_step, prof)
@@ -821,11 +832,54 @@ def install(
             actions = actions[:, :chunk]
         if lag >= actions.shape[1]:
             stats.dropped += 1
-            return
+            return None
         if lag > 0:
             # actions[:, j] is the prediction for timestep request_step + j; the buffer head
             # is timestep state.step. Drop the j < lag entries that are already in the past.
             actions = actions[:, lag:]
+        return actions
+
+    def _has(e: ACTTemporalEnsembler) -> bool:
+        return e.ensembled_actions is not None and e.ensembled_actions.shape[1] > 0
+
+    def _set(e: ACTTemporalEnsembler, actions: torch.Tensor) -> None:
+        e.ensembled_actions = actions.clone()
+        e.ensembled_actions_count = torch.ones(
+            (actions.shape[1], 1), dtype=torch.long, device=actions.device
+        )
+
+    def _land(self, state: _State, landed) -> None:
+        """commit mode: park a landed chunk in the pending buffer instead of executing it."""
+        actions = _trim(self, state, landed)
+        if actions is None:
+            return
+        if merge == "latest":
+            if _has(state.pending):
+                stats.superseded += 1
+            _set(state.pending, actions)
+        else:
+            _merge(state.pending, actions)
+
+    def _switch(state: _State) -> None:
+        """commit mode: the pending buffer takes over, cross-fading in under `average`."""
+        new = state.pending.ensembled_actions
+        old = state.ens.ensembled_actions
+        if merge != "latest" and old is not None and old.shape[1] > 0:
+            n = min(old.shape[1], new.shape[1])
+            w = torch.linspace(1 / (n + 1), n / (n + 1), n, device=new.device, dtype=new.dtype)
+            w = w.view(1, n, 1)
+            new = new.clone()
+            new[:, :n] = (1 - w) * old[:, :n].to(new.dtype) + w * new[:, :n]
+        _set(state.ens, new)
+        state.pending.ensembled_actions = None
+        state.pending.ensembled_actions_count = None
+        state.since_switch = 0
+
+    def _fold(self, state: _State, landed, replace: bool = False) -> None:
+        """Align a landed chunk to the current timestep and merge it."""
+        actions = _trim(self, state, landed)
+        if actions is None:
+            return
         if merge == "latest" or replace:
             # No averaging: the newest chunk, already trimmed to the current timestep, takes
             # over outright. Its horizon is shorter than the old buffer's by `lag`, which is
@@ -844,7 +898,8 @@ def install(
         state.ens.reset()
         state.step = 0
         state.last_submit = -(1 << 30)
-        state.pending = None
+        state.pending = ACTTemporalEnsembler(coeff, self.config.chunk_size)
+        state.pending.reset()
         state.since_switch = 0
         if state.worker is not None:
             state.worker.flush()
@@ -893,16 +948,11 @@ def install(
         landed = worker.poll()
         if landed is not None:
             if commit:
-                # Hold it: the robot is still committed to the chunk it is running.
-                if state.pending is not None:
-                    stats.superseded += 1
-                state.pending = landed
+                _land(self, state, landed)  # parked: the robot is committed to its chunk
             else:
                 _fold(self, state, landed)
-        if commit and state.pending is not None and (dry() or state.since_switch >= commit):
-            _fold(self, state, state.pending, replace=True)
-            state.pending = None
-            state.since_switch = 0
+        if commit and _has(state.pending) and (dry() or state.since_switch >= commit):
+            _switch(state)
 
         # 2. Queue the next prediction. `dict(batch)` because _get_action_chunk mutates it.
         if not worker.busy and state.step - state.last_submit >= every:
@@ -912,16 +962,23 @@ def install(
         # 3. Only ever block when there is genuinely nothing to send -- the first step of an
         #    episode, or a stall long enough to drain a whole chunk.
         while dry():
+            if commit and _has(state.pending):
+                _switch(state)
+                continue
             if not worker.busy:
                 worker.submit(functools.partial(_predict, self), dict(batch), state.step)
                 state.last_submit = state.step
             landed = worker.wait()
             if landed is not None:
-                _fold(self, state, landed, replace=bool(commit))
-                state.since_switch = 0
+                if commit:
+                    _land(self, state, landed)
+                else:
+                    _fold(self, state, landed)
 
         state.step += 1
         state.since_switch += 1
+        if commit and _has(state.pending):
+            _pop(state.pending)  # keep the parked chunks aligned to the advancing timestep
         return _pop(ens)
 
     SmolVLAPolicy.reset = reset
@@ -988,7 +1045,8 @@ def main() -> None:
             raise ValueError("--ensemble.commit 은 비동기 모드 전용이다 (--ensemble.async=false 와 같이 못 쓴다)")
         logging.info(
             f"commit={commit}: 워커는 쉬지 않고 추론하고, 로봇은 청크 하나를 {commit} 스텝 실행한 뒤 "
-            "그때 도착해 있는 가장 새 청크로 갈아탄다 (평균 없음, coeff/merge 무시)"
+            + ("그 사이 도착한 청크들의 가중평균으로 크로스페이드해 갈아탄다 (TA, coeff 적용)"
+               if merge != "latest" else "그때 도착해 있는 가장 새 청크로 통째로 갈아탄다 (평균 없음)")
             + ("" if every == 1 else f" -- 경고: every={every} 라 GPU 가 다시 쉰다. every 는 빼는 게 맞다")
         )
     if merge == "latest":
