@@ -1,0 +1,300 @@
+Teleoperation
+----------------------------------------
+uv run lerobot-teleoperate \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --display_data=true \
+  --robot.cameras="{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}"
+
+--------------------------------
+
+
+Record Video
+
+
+change data repo_id & single_task
+
+if you do first time ->   --resume=false
+else                 ->   --resume=true 
+
+-----------------------------------------------------------------------
+uv run lerobot-record \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --robot.cameras="{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}" \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --display_data=true \
+  --dataset.repo_id=kiroaiseoul/task03_turn_to_face_beaker \
+  --dataset.num_episodes=25 \
+  --dataset.episode_time_s=90 \
+  --dataset.reset_time_s=10 \
+  --dataset.single_task="Turn in place to face the beaker" \
+  --resume=true
+  
+  # Server Error Issue
+uv run python -c "
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+dataset = LeRobotDataset('kiroaiseoul/task03_turn_to_face_beaker', root='~/.cache/huggingface/lerobot/kiroaiseoul/task03_turn_to_face_beaker')
+dataset.push_to_hub()
+"
+
+# Rerun Off Mode
+RERUN_ENABLED=false uv run lerobot-record \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --robot.cameras="{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}" \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --display_data=false \
+  --dataset.repo_id=kiroaiseoul/task02_pickup_tubes \
+  --dataset.num_episodes=30 \
+  --dataset.episode_time_s=90 \
+  --dataset.reset_time_s=5\
+  --dataset.single_task="Pick up the two tubes from the rack with both hands" \
+  --resume=true
+  
+  
+  ---------------------------------------------------------------------
+  language instruction (dataset.single_task)					데이터셋 이름 (dataset.repo_id)
+1. Move to the tube rack							kiroaiseoul/move_to_tube_rack
+2. Pick up the two tubes from the rack with both hands				kiroaiseoul/pickup_tubes
+3. Turn in place to face the beaker						kiroaiseoul/turn_to_face_beaker
+4. Pour the liquid from the tubes into the leftmost beaker			kiroaiseoul/pour_liquid_from_tubes_to_beaker
+5. Drop the two empty tubes into the tube disposal tray				kiroaiseoul/tube_disposal
+6. Grab and shake the filled beaker, then move to the front of the fridge	kiroaiseoul/pickup_beaker_and_move_to_refrigerator
+7. Open the fridge door while holding the beaker				kiroaiseoul/open_refrigerator
+8. Take out the stored beaker and put the held beaker into the fridge		kiroaiseoul/task08_takeout_and_put_beaker
+9. Close the fridge door while holding the beaker				kiroaiseoul/task09_close_refrigerator
+10. Move to the beaker storage shelf						kiroaiseoul/task10_move_to_beaker_shelf
+11. Place the beaker on the shelf						kiroaiseoul/task11_place_beaker_on_the_shelf
+
+Move to the tube rack
+Pick up the two tubes from the rack with both hands
+Turn in place to face the beaker
+Pour the liquid from the tubes into the leftmost beaker
+Drop the two empty tubes into the tube disposal tray
+Grab and shake the filled beaker, then move to the front of the fridge
+Open the fridge door while holding the beaker
+Take out the stored beaker and put the held beaker into the fridge
+Close the fridge door while holding the beaker
+Move to the beaker storage shelf
+Place the beaker on the shelf
+
+_____________________________________________________________________________________
+Data delete
+
+uv run lerobot-edit-dataset \
+    --repo_id kiroaiseoul/pickup_tubes \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[36]" \
+    --push_to_hub true
+    
+    
+______________________________________________________________________________________
+# Eval
+
+## download Model
+uvx hf download \
+  kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist \
+  --local-dir ~/daehee/models/smolvla_190k_30k_aug_80k_kirogist
+
+kiroaiseoul/task02_pickup_tubes_14D
+kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist
+kiroaiseoul/task01_move_to_tube_rack_14D
+kiroaiseoul/task03_turn_to_face_beaker_14D
+
+## clean cache the 
+## run eval with teleop
+rm -rf ~/.cache/huggingface/lerobot/kiroaiseoul/act_task08_task09_mixed_14D_490data_200k
+
+
+##use pert erase
+python3 - <<'PY'
+import json
+path = "/home/trossen-ai/daehee/models/act_task08_task09_mixed_14D_490data_200k/config.json"
+with open(path, "r") as f:
+    config = json.load(f)
+print("기존 use_peft:", config.get("use_peft"))
+config.pop("use_peft", None)
+with open(path, "w") as f:
+    json.dump(config, f, indent=2)
+print("use_peft 제거 완료")
+PY
+
+
+
+#14D
+rm -rf /home/trossen-ai/daehee/datasets/eval_task03_turn_to_face_beaker_14D
+
+uv run lerobot-record \
+--robot.type=mobileai_robot \
+--robot.left_arm_ip_address=192.168.1.5 \
+--robot.right_arm_ip_address=192.168.1.4 \
+--robot.id=follower \
+--robot.cameras='{
+cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}' \
+--robot.enable_base_motor_torque=true \
+--robot.left_arm_max_relative_target=0.1 \
+--robot.right_arm_max_relative_target=0.1 \
+--robot.include_base_in_state=false \
+--teleop.type=mobileai_leader_teleop \
+--teleop.left_arm_ip_address=192.168.1.3 \
+--teleop.right_arm_ip_address=192.168.1.2 \
+--teleop.id=leader \
+--display_data=true \
+--dataset.repo_id=kiroaiseoul/eval_task03_turn_to_face_beaker_14D \
+--dataset.root=/home/trossen-ai/daehee/datasets/eval_task03_turn_to_face_beaker_14D \
+--dataset.num_episodes=5 \
+--dataset.episode_time_s=120 \
+--dataset.reset_time_s=90 \
+--dataset.single_task="Move to the tube rack" \
+--dataset.push_to_hub=true \
+--policy.path=/home/trossen-ai/daehee/models/task03_turn_to_face_beaker_14D/pretrained_model \
+--resume=false
+
+  
+  
+  \
+  --policy.temporal_ensemble_coeff=0.001 \
+  --policy.n_action_steps=1
+
+
+
+#16D
+uv run lerobot-record \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --robot.cameras='{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+  }' \
+  --robot.enable_base_motor_torque=true \
+  --robot.left_arm_max_relative_target=0.1 \
+  --robot.right_arm_max_relative_target=0.1 \
+  --robot.include_base_in_state=true \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --display_data=true \
+  --dataset.repo_id=kiroaiseoul/eval_result_act_task09_close_refrigerator_250data_60k \
+  --dataset.root=/home/trossen-ai/daehee/datasets/eval_result_act_task09_close_refrigerator_250data_60k \
+  --dataset.num_episodes=10 \
+  --dataset.episode_time_s=120 \
+  --dataset.reset_time_s=90 \
+  --dataset.single_task="Take out the stored beaker and put the held beaker into the fridge and Close the fridge door while holding the beaker" \
+  --dataset.push_to_hub=true \
+  --policy.path=/home/trossen-ai/daehee/models/act_task09_close_refrigerator_250data_60k \
+  --resume=false 
+  
+  \
+  --policy.temporal_ensemble_coeff=0.05 \
+  --policy.n_action_steps=1
+  
+  
+ #local data delete 
+rm -rf /home/trossen-ai/daehee/datasets/eval_result_act_task09_close_refrigerator_250data_60k  
+
+  
+  
+  
+  
+---------------------------------------------------------------------------------------------------------------------------
+  
+  ## Eval SmolVLA
+  rm -rf ~/.cache/huggingface/lerobot/kiroaiseoul/eval_smolvla_190k_30k_aug_80k_kirogist
+  
+  uv run lerobot-record \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --robot.cameras="{
+    cam_high: {type: intelrealsense, serial_number_or_name: \"230422273501\", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: \"230422271234\", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: \"230322274369\", width: 640, height: 480, fps: 30}
+  }" \
+  --robot.enable_base_motor_torque=true \
+  --robot.left_arm_max_relative_target=0.1 \
+  --robot.right_arm_max_relative_target=0.1 \
+  --robot.include_base_in_state=true \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --dataset.repo_id=kiroaiseoul/eval_smolvla_190k_30k_aug_80k_kirogist \
+  --dataset.num_episodes=2 \
+  --dataset.reset_time_s=90 \
+  --dataset.single_task="Grab and shake the filled beaker, then move to the front of the fridge" \
+  --dataset.push_to_hub=false \
+  --policy.device=cuda \
+  --policy.path=/home/trossen-ai/daehee/models/smolvla_190k_30k_aug_80k_kirogist/pretrained_model
+
+
+## EVAL SmolVLA TA
+rm -rf ~/.cache/huggingface/lerobot/kiroaiseoul/eval_foundation_smolvla_v1
+
+uv run python scripts/record_ensemble.py \
+  --ensemble.merge=latest \
+  --ensemble.amp=bf16 \
+  --ensemble.noise_scale=1 \
+  --ensemble.samples=4 \
+  --policy.num_steps=25 \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --robot.cameras="{
+    cam_high: {type: intelrealsense, serial_number_or_name: \"230422273501\", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: \"230422271234\", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: \"230322274369\", width: 640, height: 480, fps: 30}
+  }" \
+  --robot.enable_base_motor_torque=true \
+  --robot.left_arm_max_relative_target=0.1 \
+  --robot.right_arm_max_relative_target=0.1 \
+  --robot.include_base_in_state=true \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --dataset.repo_id=kiroaiseoul/eval_foundation_smolvla_v1 \
+  --dataset.num_episodes=1 \
+  --dataset.reset_time_s=30 \
+  --dataset.single_task="Grab and shake the filled beaker, then move to the front of the fridge" \
+  --dataset.push_to_hub=false \
+  --policy.device=cuda \
+  --policy.path=/home/trossen-ai/daehee/models/smolvla_190k_30k_aug_80k_kirogist/pretrained_model \
+  2>&1 | tee -i /tmp/smolvla_async_latest_$(date +%H%M%S).log
