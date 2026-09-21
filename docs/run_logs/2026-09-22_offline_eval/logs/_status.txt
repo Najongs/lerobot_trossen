@@ -1,0 +1,36 @@
+EXIT smolvla_190k_30k_aug_10k_kirogist_t02 0
+EXIT smolvla_190k_30k_aug_10k_kirogist_t06 0
+EXIT m80_t02gist 1
+EXIT m80_t06gist 1
+EXIT foundation_smolvla_v1_190k_30k_aug_t02 0
+EXIT foundation_smolvla_v1_190k_30k_aug_t06 0
+EXIT foundation_smolvla_v1_190000_t02 0
+EXIT m80_t02gist 0
+EXIT foundation_smolvla_v1_190000_t06 0
+EXIT m80_t06gist 0
+EXIT m80_t02_pGIST 0
+EXIT m80_t02_pWRONG 0
+EXIT m80_t02 0
+EXIT m80_t06_pWRONG 0
+EXIT m80_t06_pPICK 0
+EXIT m80_t02_shift15 0
+EXIT cl_t02_perfect 0
+EXIT m80_t06_shift15 0
+PHASE2 ALLDONE
+EXIT m80_t06_zbase 0
+EXIT m80_t06_s3ref 0
+PHASE4 ALLDONE
+EXIT m80_t06 0
+PHASE1 ALLDONE
+EXIT m80_t02_p3 0
+EXIT cl_t02_drift_nooff 0
+EXIT cl_t02_m80_offset 0
+EXIT cl_t02_drift_off 0
+EXIT m80_t06_p3 0
+PHASE3 ALLDONE
+EXIT cl_t02_m80 0
+EXIT cl36_c 0
+EXIT cl36_b 0
+EXIT cl36_a 0
+EXIT cl36_perfect 0
+CL36 ALLDONE

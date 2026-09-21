@@ -1,0 +1,31 @@
+{
+ "argv": [
+  "scripts/offline_eval/act_chunks.py",
+  "--policy",
+  "kiroaiseoul/task06_pickup_beaker_and_move_to_refrigerator_260907",
+  "--dataset",
+  "kiroaiseoul/task06_pickup_beaker_and_move_to_refrigerator",
+  "--stride",
+  "3",
+  "--out",
+  "docs/run_logs/2026-09-22_offline_eval/chunks",
+  "--tag",
+  "act60k_t06"
+ ],
+ "policy_path": "/home/najo/.cache/huggingface/hub/models--kiroaiseoul--task06_pickup_beaker_and_move_to_refrigerator_260907/snapshots/cb5471d62652a09f482f4ab5c7a715d5d346e9ac",
+ "episodes": [
+  0,
+  18,
+  36,
+  54,
+  72,
+  90,
+  109,
+  127,
+  145,
+  163,
+  181,
+  199
+ ],
+ "seconds": 62.9
+}

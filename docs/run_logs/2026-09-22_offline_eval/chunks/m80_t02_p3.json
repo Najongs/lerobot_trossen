@@ -1,0 +1,75 @@
+{
+ "argv": [
+  "scripts/offline_eval/predict_chunks.py",
+  "--out",
+  "docs/run_logs/2026-09-22_offline_eval/chunks",
+  "--tag",
+  "m80_t02_p3",
+  "--policy",
+  "kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist",
+  "--dataset",
+  "kiroaiseoul/task02_pickup_tubes",
+  "--n-episodes",
+  "12",
+  "--configs",
+  "k4med:10:1.0:4:medoid,k7med:10:0.9:7:medoid,k4mean1:10:1.0:4:mean,ns12:10:1.2:1",
+  "--seed",
+  "1"
+ ],
+ "git_sha": "15f667ffabb3b83c9ba21e4211b8432fecbfcc1d",
+ "policy_path": "/home/najo/.cache/huggingface/hub/models--kiroaiseoul--smolvla_190k_30k_aug_80k_kirogist/snapshots/8c7b3f2ffea91c29a597b120ac93783a786d8d77/pretrained_model",
+ "dataset": "kiroaiseoul/task02_pickup_tubes",
+ "episodes": [
+  0,
+  12,
+  24,
+  36,
+  48,
+  60,
+  72,
+  84,
+  96,
+  108,
+  120,
+  132
+ ],
+ "fps": 30,
+ "configs": [
+  {
+   "name": "k4med",
+   "num_steps": 10,
+   "noise_scale": 1.0,
+   "samples": 4,
+   "reduce": "medoid"
+  },
+  {
+   "name": "k7med",
+   "num_steps": 10,
+   "noise_scale": 0.9,
+   "samples": 7,
+   "reduce": "medoid"
+  },
+  {
+   "name": "k4mean1",
+   "num_steps": 10,
+   "noise_scale": 1.0,
+   "samples": 4,
+   "reduce": "mean"
+  },
+  {
+   "name": "ns12",
+   "num_steps": 10,
+   "noise_scale": 1.2,
+   "samples": 1,
+   "reduce": "mean"
+  }
+ ],
+ "frames": 5280,
+ "seconds": 2796.6,
+ "gpu": "NVIDIA GeForce RTX 3090",
+ "task_override": "",
+ "state_shift": 0,
+ "tasks_in_dataset": [
+  "Pick up the two tubes from the rack with both hands"
+ ]
+}

@@ -210,3 +210,6 @@ __marimo__/
 
 # Other
 outputs/
+
+# 오프라인 평가의 예측 청크 (수백 MB, scripts/offline_eval 로 재생성)
+/docs/run_logs/*/chunks/*.npz

@@ -1,0 +1,60 @@
+{
+ "argv": [
+  "scripts/offline_eval/predict_chunks.py",
+  "--out",
+  "docs/run_logs/2026-09-22_offline_eval/chunks",
+  "--tag",
+  "foundation_smolvla_v1_190k_30k_aug_t06",
+  "--policy",
+  "kiroaiseoul/foundation_smolvla_v1_190k_30k_aug",
+  "--dataset",
+  "kiroaiseoul/task06_pickup_beaker_and_move_to_refrigerator",
+  "--n-episodes",
+  "12",
+  "--stride",
+  "3",
+  "--configs",
+  "stock:10:1.0:1,det:10:0.0:1"
+ ],
+ "git_sha": "15f667ffabb3b83c9ba21e4211b8432fecbfcc1d",
+ "policy_path": "/home/najo/.cache/huggingface/hub/models--kiroaiseoul--foundation_smolvla_v1_190k_30k_aug/snapshots/6ea81323d9a7ec76d40ba8ed218eac718c2f513f/pretrained_model",
+ "dataset": "kiroaiseoul/task06_pickup_beaker_and_move_to_refrigerator",
+ "episodes": [
+  0,
+  18,
+  36,
+  54,
+  72,
+  90,
+  109,
+  127,
+  145,
+  163,
+  181,
+  199
+ ],
+ "fps": 30,
+ "configs": [
+  {
+   "name": "stock",
+   "num_steps": 10,
+   "noise_scale": 1.0,
+   "samples": 1
+  },
+  {
+   "name": "det",
+   "num_steps": 10,
+   "noise_scale": 0.0,
+   "samples": 1
+  }
+ ],
+ "frames": 2631,
+ "seconds": 236.2,
+ "gpu": "NVIDIA GeForce RTX 3090",
+ "task_override": "",
+ "state_shift": 0,
+ "tasks_in_dataset": [
+  "Grab and shake the filled beaker, then move to the front of the fridge",
+  "Pick up the beaker and move to the refrigerator"
+ ]
+}

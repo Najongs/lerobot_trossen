@@ -1,0 +1,61 @@
+{
+ "argv": [
+  "scripts/offline_eval/predict_chunks.py",
+  "--out",
+  "docs/run_logs/2026-09-22_offline_eval/chunks",
+  "--tag",
+  "m80_t02gist",
+  "--policy",
+  "kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist",
+  "--dataset",
+  "kiroaiseoul/task02_pickup_tubes_gist",
+  "--root",
+  "/home/najo/.cache/huggingface/lerobot/kiroaiseoul/task02_pickup_tubes_gist",
+  "--n-episodes",
+  "12",
+  "--stride",
+  "3",
+  "--configs",
+  "stock:10:1.0:1,det:10:0.0:1"
+ ],
+ "git_sha": "15f667ffabb3b83c9ba21e4211b8432fecbfcc1d",
+ "policy_path": "/home/najo/.cache/huggingface/hub/models--kiroaiseoul--smolvla_190k_30k_aug_80k_kirogist/snapshots/8c7b3f2ffea91c29a597b120ac93783a786d8d77/pretrained_model",
+ "dataset": "kiroaiseoul/task02_pickup_tubes_gist",
+ "episodes": [
+  0,
+  183,
+  367,
+  550,
+  734,
+  917,
+  1101,
+  1284,
+  1468,
+  1651,
+  1835,
+  2018
+ ],
+ "fps": 30,
+ "configs": [
+  {
+   "name": "stock",
+   "num_steps": 10,
+   "noise_scale": 1.0,
+   "samples": 1
+  },
+  {
+   "name": "det",
+   "num_steps": 10,
+   "noise_scale": 0.0,
+   "samples": 1
+  }
+ ],
+ "frames": 1946,
+ "seconds": 264.8,
+ "gpu": "NVIDIA RTX A6000",
+ "task_override": "",
+ "state_shift": 0,
+ "tasks_in_dataset": [
+  "Pick two tubes out of the rack with both hands"
+ ]
+}

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # SmolVLA eval — temporal ensembling (비동기)
 #
+# ⚠️ 2026-09-22 이후 권장 실행은 scripts/eval_smolvla.sh 다 (task02/task06, 설정 A/B).
+#    아래 연속 TA(coeff 0.01) 설정은 오프라인 폐루프 근사에서 청크를 길게 실행하는 설정보다 못 끝냈다.
+#    근거: docs/offline_eval_2026-09-22.md
+#
 # 매번 바꾸는 3줄: --policy.path (모델) / --dataset.repo_id / --ensemble.coeff
 # (bash 는 \ 로 이어진 줄에 주석을 못 달아서 표시를 못 박았다)
 #

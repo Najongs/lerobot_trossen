@@ -103,6 +103,20 @@ spent anyway. The switch itself is then a linear cross-fade over whatever is lef
 chunk rather than a cut, so a smaller N buys a longer fade (N=30 leaves ~12 steps). With
 ``latest`` only the newest landed chunk is kept and the switch is a hard replacement.
 
+``--ensemble.fade=F`` bounds that cross-fade to F steps (0, the default, keeps the behaviour
+above). It matters at both ends of N: at ``commit=50`` the chunk runs dry at ``50 - lag`` and the
+switch has nothing left to fade over -- measured offline at up to 0.64 rad per step on one joint --
+while at a small N the whole-remainder fade keeps the robot on the old plan for most of the window.
+``--ensemble.commit=30 --ensemble.fade=5`` kept the seam under ~0.13 rad and completed as often as
+``commit=50`` in the closed-loop replay (docs/offline_eval_2026-09-22.md).
+
+``--ensemble.reduce=medoid`` returns the one sample (of ``--ensemble.samples``) closest to the
+others instead of their mean. Tested offline against the mean at noise 1.0: no gain, jerkier.
+
+``--ensemble.base_rate_hz=H`` scales the base velocity command by ``measured loop Hz / H`` when the
+loop runs slower than the recording did (H = 21.5 on this robot), so each control step drives the
+base as far as a demonstration step did. Off by default; not yet tried on the robot.
+
 ``--ensemble.worker=process`` (the default) runs the asynchronous forward in a *separate
 process* instead of a thread. On this robot a thread cannot work: the Mobile AI base driver
 (``trossen_slate``, pybind11) holds the GIL for the whole of ``update_state()`` and
@@ -204,8 +218,30 @@ def _amp(mode: str, device: torch.device):
     )
 
 
-def _predict_chunk(policy, batch, noise, samples: int, noise_scale: float) -> torch.Tensor:
-    """One chunk, from `samples` noise draws scaled by `noise_scale`.
+def _reduce_samples(actions: torch.Tensor, reduce: str) -> torch.Tensor:
+    """(K, chunk, dim) -> (1, chunk, dim).
+
+    ``mean`` averages the K chunks. ``medoid`` returns the one real sample whose summed distance
+    to the other K-1 is smallest: it rejects an outlier draw the way the mean does, but it does not
+    shrink the motion -- the mean of K draws that disagree on *when* or *how far* to move is a
+    chunk that moves less than any of them (measured offline on task02/task06: see
+    docs/offline_eval_2026-09-22.md).
+    """
+    if actions.shape[0] == 1:
+        return actions
+    if reduce == "mean":
+        return actions.mean(dim=0, keepdim=True)
+    if reduce == "medoid":
+        flat = actions.reshape(actions.shape[0], -1).float()
+        i = torch.cdist(flat, flat).sum(dim=1).argmin()
+        return actions[i : i + 1]
+    raise ValueError(f"unknown reduce {reduce!r}")
+
+
+def _predict_chunk(
+    policy, batch, noise, samples: int, noise_scale: float, reduce: str = "mean"
+) -> torch.Tensor:
+    """One chunk, from `samples` noise draws scaled by `noise_scale`, reduced by `reduce`.
 
     Module-level so the worker process can call exactly what the control thread calls.
     """
@@ -225,10 +261,12 @@ def _predict_chunk(policy, batch, noise, samples: int, noise_scale: float) -> to
     if noise_scale != 1.0:
         noise = noise * noise_scale
     actions = policy._get_action_chunk(batch, noise)  # (samples, chunk, action_dim)
-    return actions.mean(dim=0, keepdim=True) if samples > 1 else actions
+    return _reduce_samples(actions, reduce)
 
 
-def _proc_main(requests, results, config, path, device_str, amp, samples, noise_scale) -> None:
+def _proc_main(
+    requests, results, config, path, device_str, amp, samples, noise_scale, reduce="mean"
+) -> None:
     """Worker process: own interpreter, own GIL, own copy of the policy."""
     try:
         device = torch.device(device_str)
@@ -256,7 +294,7 @@ def _proc_main(requests, results, config, path, device_str, amp, samples, noise_
             batch.update(extras)
             t_h2d = time.perf_counter()
             with torch.inference_mode(), _amp(amp, device):
-                out = _predict_chunk(policy, batch, None, samples, noise_scale)
+                out = _predict_chunk(policy, batch, None, samples, noise_scale, reduce)
             t_launch = time.perf_counter()
             actions = out.float().cpu()  # also the synchronisation point
             if os.environ.get("RECORD_ENSEMBLE_DEBUG"):
@@ -284,7 +322,7 @@ class _ProcWorker:
     buffers are never rewritten under a reader.
     """
 
-    def __init__(self, policy, amp: str, samples: int, noise_scale: float):
+    def __init__(self, policy, amp: str, samples: int, noise_scale: float, reduce: str = "mean"):
         import torch.multiprocessing as mp
 
         ctx = mp.get_context("spawn")  # CUDA cannot survive a fork
@@ -305,7 +343,8 @@ class _ProcWorker:
         self._proc = ctx.Process(
             target=_proc_main,
             args=(self._requests, self._results, policy.config,
-                  str(policy.config.pretrained_path), str(worker_device), amp, samples, noise_scale),
+                  str(policy.config.pretrained_path), str(worker_device), amp, samples, noise_scale,
+                  reduce),
             name="ensemble-inference",
             daemon=True,
         )
@@ -608,6 +647,28 @@ def _merge(ens: ACTTemporalEnsembler, actions: torch.Tensor) -> None:
     ens.ensembled_actions_count = torch.cat([head_count, tail_count])
 
 
+def _crossfade(old: torch.Tensor | None, new: torch.Tensor, merge: str, fade: int) -> torch.Tensor:
+    """commit-mode switch: blend the head of `new` in from what is left of `old`.
+
+    ``fade=0`` keeps the original behaviour: under ``average`` the fade spans the *whole* overlap
+    with the old chunk (``chunk - lag - commit`` steps, ~40 at commit=5), so a short commit spends
+    most of its time executing the old plan; under ``latest`` the switch is a hard cut.
+    ``fade=F>0`` fades over at most F steps under either merge -- the new chunk is fully in
+    charge F steps after the switch, whatever N is.
+    """
+    if old is None or old.shape[1] == 0:
+        return new
+    if fade <= 0 and merge == "latest":
+        return new
+    n = min(old.shape[1], new.shape[1])
+    if fade > 0:
+        n = min(n, fade)
+    w = torch.linspace(1 / (n + 1), n / (n + 1), n, device=new.device, dtype=new.dtype).view(1, n, 1)
+    new = new.clone()
+    new[:, :n] = (1 - w) * old[:, :n].to(new.dtype) + w * new[:, :n]
+    return new
+
+
 def _pop(ens: ACTTemporalEnsembler) -> torch.Tensor:
     """Consume the action for the current timestep."""
     action = ens.ensembled_actions[:, 0]
@@ -792,6 +853,8 @@ def install(
     worker_kind: str = "process",
     merge: str = "average",
     commit: int = 0,
+    reduce: str = "mean",
+    fade: int = 0,
 ) -> _Stats:
     """Replace SmolVLA's chunk queue with a temporal ensembler."""
     stats = _Stats()
@@ -810,11 +873,11 @@ def install(
         return state
 
     def _predict(self, batch, noise=None) -> torch.Tensor:
-        return _predict_chunk(self, batch, noise, samples, noise_scale)
+        return _predict_chunk(self, batch, noise, samples, noise_scale, reduce)
 
     def _make_worker(self):
         if worker_kind == "process":
-            w = _ProcWorker(self, amp, samples, noise_scale)
+            w = _ProcWorker(self, amp, samples, noise_scale, reduce)
             stats.proc_worker = w
             return w
         return _Worker(next(self.parameters()).device, amp, profile, sampler)
@@ -862,14 +925,7 @@ def install(
 
     def _switch(state: _State) -> None:
         """commit mode: the pending buffer takes over, cross-fading in under `average`."""
-        new = state.pending.ensembled_actions
-        old = state.ens.ensembled_actions
-        if merge != "latest" and old is not None and old.shape[1] > 0:
-            n = min(old.shape[1], new.shape[1])
-            w = torch.linspace(1 / (n + 1), n / (n + 1), n, device=new.device, dtype=new.dtype)
-            w = w.view(1, n, 1)
-            new = new.clone()
-            new[:, :n] = (1 - w) * old[:, :n].to(new.dtype) + w * new[:, :n]
+        new = _crossfade(state.ens.ensembled_actions, state.pending.ensembled_actions, merge, fade)
         _set(state.ens, new)
         state.pending.ensembled_actions = None
         state.pending.ensembled_actions_count = None
@@ -986,6 +1042,59 @@ def install(
     return stats
 
 
+def install_base_rate_compensation(record_hz: float, floor: float = 0.7) -> None:
+    """Scale the Mobile AI base velocity command so each control step covers the demo's distance.
+
+    The policy's actions are indexed in *steps* of the recording run (~21.5 Hz on this robot,
+    whatever the dataset's nominal fps says). The arms honour that -- one position target per step
+    -- but the base velocity is held for however long the eval step actually lasts, so a loop at
+    18.6 Hz (``--ensemble.samples=7``) drives every base segment 21.5/18.6 = 1.16x as far as the
+    demonstration did while the arms follow the demonstration's path. Multiplying the command by
+    ``measured_hz / record_hz`` keeps arm and base on the same per-step geometry.
+
+    Only ever slows the base (factor capped at 1.0, floored at ``floor``); the period is an EMA of
+    the interval between ``send_action`` calls; a gap over 1 s (episode save/reset) clears it, so the
+    first command of each phase goes out unscaled. Applies to every ``send_action``, so the teleop
+    reset phase is scaled too.
+    """
+    from lerobot_robot_trossen.mobileai import MobileAIRobot
+
+    original = MobileAIRobot.send_action
+    state = {"prev": None, "ema_dt": None, "calls": 0, "scale_sum": 0.0}
+    period = 1.0 / record_hz
+
+    @functools.wraps(original)
+    def send_action(self, action):
+        now = time.perf_counter()
+        prev, state["prev"] = state["prev"], now
+        if prev is not None and now - prev >= 1.0:
+            # Episode save/reset pause: the next phase (teleop reset <-> policy) can run at a
+            # different rate, so do not carry the old phase's period into it.
+            state["ema_dt"] = None
+        elif prev is not None:
+            dt = now - prev
+            state["ema_dt"] = dt if state["ema_dt"] is None else 0.9 * state["ema_dt"] + 0.1 * dt
+        scale = 1.0
+        if state["ema_dt"] is not None:
+            scale = max(floor, min(1.0, period / state["ema_dt"]))
+        if scale < 1.0 and ("x.vel" in action or "theta.vel" in action):
+            action = dict(action)
+            for k in ("x.vel", "theta.vel"):
+                if k in action:
+                    action[k] = float(action[k]) * scale
+        state["calls"] += 1
+        state["scale_sum"] += scale
+        if state["calls"] % 300 == 0 and state["ema_dt"] is not None:
+            logging.info(
+                f"base rate compensation: 최근 루프 {1 / state['ema_dt']:.1f} Hz vs 녹화 {record_hz:g} Hz "
+                f"-> 베이스 속도 x{scale:.3f} (평균 x{state['scale_sum'] / state['calls']:.3f})"
+            )
+        return original(self, action)
+
+    MobileAIRobot.send_action = send_action
+    logging.info(f"base rate compensation 켬: 녹화 주파수 {record_hz:g} Hz 기준으로 베이스 속도를 줄인다 (늘리지 않음)")
+
+
 def _report_registered() -> None:
     """Log which robot/teleop types the parser will accept, so a missing plugin is obvious."""
     try:
@@ -1014,16 +1123,23 @@ def main() -> None:
     commit = int(_pop_arg("--ensemble.commit", "0"))
     if commit < 0:
         raise ValueError(f"--ensemble.commit 은 0 이상이어야 한다 (받은 값: {commit})")
+    fade = int(_pop_arg("--ensemble.fade", "0"))
+    if fade < 0:
+        raise ValueError(f"--ensemble.fade 는 0 이상이어야 한다 (받은 값: {fade})")
     worker_kind = _pop_arg("--ensemble.worker", "process").strip().lower()
     if worker_kind not in ("process", "thread"):
         raise ValueError(f"--ensemble.worker 는 process/thread 여야 한다 (받은 값: {worker_kind!r})")
     samples = int(_pop_arg("--ensemble.samples", "1"))
     if samples < 1:
         raise ValueError(f"--ensemble.samples 는 1 이상이어야 한다 (받은 값: {samples})")
+    reduce = _pop_arg("--ensemble.reduce", "mean").strip().lower()
+    if reduce not in ("mean", "medoid"):
+        raise ValueError(f"--ensemble.reduce 는 mean/medoid 여야 한다 (받은 값: {reduce!r})")
     amp = _pop_arg("--ensemble.amp", "off").strip().lower()
     if amp not in ("off", "bf16", "fp16"):
         raise ValueError(f"--ensemble.amp 은 off/bf16/fp16 이어야 한다 (받은 값: {amp!r})")
     extra = _pop_arg("--ensemble.plugin", "")
+    base_rate_hz = float(_pop_arg("--ensemble.base_rate_hz", "0"))
     init_logging()
 
     # main() 안에서도 호출되지만, 여기서 먼저 부르고 결과를 찍어 둔다 -- 플러그인이 안 잡힌 채
@@ -1035,10 +1151,12 @@ def main() -> None:
         importlib.import_module(extra)
         logging.info(f"추가 플러그인 임포트: {extra}")
     _report_registered()
+    if base_rate_hz > 0:
+        install_base_rate_compensation(base_rate_hz)
 
     stats = install(
         coeff, every, use_async, align, amp, profile, noise_scale, samples, worker_kind, merge,
-        commit,
+        commit, reduce, fade,
     )
     if commit:
         if not use_async:
@@ -1053,7 +1171,8 @@ def main() -> None:
         logging.info("청크 병합: latest -- 시간축 평균(TA) 없음, 새 청크가 도착하면 통째로 교체 (coeff 무시)")
     if noise_scale != 1.0 or samples != 1:
         logging.info(
-            f"샘플링 조정: 초기 노이즈 x{noise_scale:g}, 추론당 노이즈 샘플 {samples}개 평균"
+            f"샘플링 조정: 초기 노이즈 x{noise_scale:g}, 추론당 노이즈 샘플 {samples}개 "
+            + ("평균" if reduce == "mean" else "중 medoid 하나 (평균 안 함)")
             + (" (결정적: 같은 관측이면 같은 청크)" if noise_scale == 0 else "")
         )
     cadence = "매 제어 스텝마다" if every == 1 else f"{every} 스텝마다"

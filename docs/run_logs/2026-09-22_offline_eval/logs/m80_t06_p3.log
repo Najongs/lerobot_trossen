@@ -1,0 +1,22 @@
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Fetching 7 files: 100%|██████████| 7/7 [00:00<00:00, 23870.02it/s]
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+Reducing the number of VLM layers to 16 ...
+Loading weights from local directory
+[m80_t06_p3] 24/7880 frames  15s  eta 4984s
+[m80_t06_p3] 504/7880 frames  300s  eta 4386s
+[m80_t06_p3] 984/7880 frames  547s  eta 3835s
+[m80_t06_p3] 1464/7880 frames  794s  eta 3478s
+[m80_t06_p3] 1944/7880 frames  1041s  eta 3178s
+[m80_t06_p3] 2424/7880 frames  1288s  eta 2899s
+[m80_t06_p3] 2904/7880 frames  1535s  eta 2629s
+[m80_t06_p3] 3384/7880 frames  1781s  eta 2367s
+[m80_t06_p3] 3864/7880 frames  2029s  eta 2109s
+[m80_t06_p3] 4344/7880 frames  2277s  eta 1854s
+[m80_t06_p3] 4824/7880 frames  2525s  eta 1599s
+[m80_t06_p3] 5304/7880 frames  2772s  eta 1346s
+[m80_t06_p3] 5784/7880 frames  3019s  eta 1094s
+[m80_t06_p3] 6264/7880 frames  3267s  eta 843s
+[m80_t06_p3] 6744/7880 frames  3505s  eta 590s
+[m80_t06_p3] 7224/7880 frames  3708s  eta 337s
+[m80_t06_p3] 7704/7880 frames  3911s  eta 89s
+[m80_t06_p3] DONE 7880 frames in 3992s -> docs/run_logs/2026-09-22_offline_eval/chunks/m80_t06_p3.npz

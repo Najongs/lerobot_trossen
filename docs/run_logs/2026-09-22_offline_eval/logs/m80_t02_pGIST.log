@@ -1,0 +1,11 @@
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Fetching 7 files: 100%|██████████| 7/7 [00:00<00:00, 25959.44it/s]
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+Reducing the number of VLM layers to 16 ...
+Loading weights from local directory
+[m80_t02_pGIST] 16/1765 frames  6s  eta 611s
+[m80_t02_pGIST] 336/1765 frames  49s  eta 209s
+[m80_t02_pGIST] 656/1765 frames  92s  eta 155s
+[m80_t02_pGIST] 976/1765 frames  136s  eta 110s
+[m80_t02_pGIST] 1296/1765 frames  179s  eta 65s
+[m80_t02_pGIST] 1616/1765 frames  221s  eta 20s
+[m80_t02_pGIST] DONE 1765 frames in 242s -> docs/run_logs/2026-09-22_offline_eval/chunks/m80_t02_pGIST.npz

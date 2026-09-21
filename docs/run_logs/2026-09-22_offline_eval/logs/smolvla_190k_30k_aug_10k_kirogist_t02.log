@@ -1,0 +1,11 @@
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Fetching 7 files: 100%|██████████| 7/7 [00:00<00:00, 14021.07it/s]
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+Reducing the number of VLM layers to 16 ...
+Loading weights from local directory
+[smolvla_190k_30k_aug_10k_kirogist_t02] 16/1765 frames  4s  eta 452s
+[smolvla_190k_30k_aug_10k_kirogist_t02] 336/1765 frames  34s  eta 143s
+[smolvla_190k_30k_aug_10k_kirogist_t02] 656/1765 frames  63s  eta 106s
+[smolvla_190k_30k_aug_10k_kirogist_t02] 976/1765 frames  92s  eta 74s
+[smolvla_190k_30k_aug_10k_kirogist_t02] 1296/1765 frames  120s  eta 43s
+[smolvla_190k_30k_aug_10k_kirogist_t02] 1616/1765 frames  149s  eta 14s
+[smolvla_190k_30k_aug_10k_kirogist_t02] DONE 1765 frames in 163s -> docs/run_logs/2026-09-22_offline_eval/chunks/smolvla_190k_30k_aug_10k_kirogist_t02.npz

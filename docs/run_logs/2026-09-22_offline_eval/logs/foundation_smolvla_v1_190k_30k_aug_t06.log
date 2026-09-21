@@ -1,0 +1,14 @@
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Fetching 7 files: 100%|██████████| 7/7 [00:00<00:00, 29867.88it/s]
+You have video processor config saved in `preprocessor.json` file which is deprecated. Video processor configs should be saved in their own `video_preprocessor.json` file. You can rename the file or load and save the processor back which renames it automatically. Loading from `preprocessor.json` will be removed in v5.0.
+Reducing the number of VLM layers to 16 ...
+Loading weights from local directory
+[foundation_smolvla_v1_190k_30k_aug_t06] 16/2631 frames  4s  eta 603s
+[foundation_smolvla_v1_190k_30k_aug_t06] 336/2631 frames  32s  eta 220s
+[foundation_smolvla_v1_190k_30k_aug_t06] 656/2631 frames  61s  eta 182s
+[foundation_smolvla_v1_190k_30k_aug_t06] 976/2631 frames  88s  eta 150s
+[foundation_smolvla_v1_190k_30k_aug_t06] 1296/2631 frames  116s  eta 120s
+[foundation_smolvla_v1_190k_30k_aug_t06] 1616/2631 frames  144s  eta 91s
+[foundation_smolvla_v1_190k_30k_aug_t06] 1936/2631 frames  173s  eta 62s
+[foundation_smolvla_v1_190k_30k_aug_t06] 2256/2631 frames  202s  eta 34s
+[foundation_smolvla_v1_190k_30k_aug_t06] 2576/2631 frames  230s  eta 5s
+[foundation_smolvla_v1_190k_30k_aug_t06] DONE 2631 frames in 236s -> docs/run_logs/2026-09-22_offline_eval/chunks/foundation_smolvla_v1_190k_30k_aug_t06.npz
