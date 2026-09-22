@@ -122,9 +122,10 @@ ________________________________________________________________________________
 
 ## download Model
 uvx hf download \
-  kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist \
-  --local-dir ~/daehee/models/smolvla_190k_30k_aug_80k_kirogist
+  kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist_10k_kiro \
+  --local-dir ~/daehee/models/smolvla_190k_30k_aug_80k_kirogist_10k_kiro
 
+kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist_10k_kiro
 kiroaiseoul/task02_pickup_tubes_14D
 kiroaiseoul/smolvla_190k_30k_aug_80k_kirogist
 kiroaiseoul/task01_move_to_tube_rack_14D
@@ -268,11 +269,11 @@ rm -rf /home/trossen-ai/daehee/datasets/eval_result_act_task09_close_refrigerato
 rm -rf ~/.cache/huggingface/lerobot/kiroaiseoul/eval_foundation_smolvla_v1
 
 uv run python scripts/record_ensemble.py \
-  --ensemble.commit=50 \
-  --ensemble.coeff=-1.5 \
+  --ensemble.every=50 \
+  --ensemble.coeff=0 \
   --ensemble.amp=bf16 \
-  --ensemble.noise_scale=0.9 \
-  --ensemble.samples=7 \
+  --ensemble.noise_scale=0.5 \
+  --ensemble.samples=1 \
   --policy.num_steps=10 \
   --robot.type=mobileai_robot \
   --robot.left_arm_ip_address=192.168.1.5 \
@@ -284,18 +285,20 @@ uv run python scripts/record_ensemble.py \
     cam_right_wrist: {type: intelrealsense, serial_number_or_name: \"230322274369\", width: 640, height: 480, fps: 30}
   }" \
   --robot.enable_base_motor_torque=true \
-  --robot.left_arm_max_relative_target=0.1 \
-  --robot.right_arm_max_relative_target=0.1 \
   --robot.include_base_in_state=true \
+  --robot.left_arm_max_relative_target=0.5 \
+  --robot.right_arm_max_relative_target=0.5 \
   --teleop.type=mobileai_leader_teleop \
   --teleop.left_arm_ip_address=192.168.1.3 \
   --teleop.right_arm_ip_address=192.168.1.2 \
   --teleop.id=leader \
   --dataset.repo_id=kiroaiseoul/eval_foundation_smolvla_v1 \
-  --dataset.num_episodes=1 \
+  --dataset.num_episodes=2 \
   --dataset.reset_time_s=90 \
   --dataset.single_task="Pick up the two tubes from the rack with both hands" \
   --dataset.push_to_hub=false \
   --policy.device=cuda \
-  --policy.path=/home/trossen-ai/daehee/models/smolvla_190k_30k_aug_80k_kirogist/pretrained_model \
-  2>&1 | tee -i /tmp/smolvla_commit40_$(date +%H%M%S).log
+  --policy.path=/home/trossen-ai/daehee/models/smolvla_190k_30k_aug_80k_kirogist_10k_kiro/pretrained_model
+  
+  
+
