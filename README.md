@@ -346,6 +346,7 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - `--dataset.reset_time_s` — 리셋 구간이 자세 잡기까지 맡으므로 upstream 기본값 60이 아니라 **90**.
 - `--robot.include_base_in_state` — **2026-09-16 이전 체크포인트(16-dim)면 `true`로 줄 것.** 그 뒤 학습본은 14-dim이라 안 줘도 된다(기본값). 안 맞으면 정규화 버퍼에서 즉시 죽는다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
 - `LEROBOT_BASE_SERIAL_REARM=1` + `--dataset.fps=21` — base 과회전의 루프 주기 몫 처방(실험용, 기본 꺼짐). **기본 eval 명령엔 넣지 않는다** → [Base Serial Re-arm](#base-serial-re-arm)
+- base 과회전 지연 처방 스위치(`LEROBOT_CHUNK_PREFETCH_TICKS`·`LEROBOT_BASE_LEAD_TICKS`, 재생 벤치) — **실험용, 전부 기본 꺼짐. 기본 eval 명령엔 넣지 않는다.** 쓰는 법·판독·주의 → [Base Latency Switches](#base-latency-switches)
 
 **확인 범위** — lerobot 0.4.0~0.4.4에서 동일. 0.6.0부터는 정책 배포가 `lerobot-rollout`으로 분리되고 `lerobot-record`가 `--policy.path`를 거부하나, 체크포인트로 타입을 판별하는 원칙은 유지된다.
 
@@ -520,6 +521,7 @@ uv run accelerate launch \
 | **`LEROBOT_LOOP_HZ_LOG`** | Control-loop rate and per-section timing meter, one summary line per 30 frames. On by default; setting `0` turns it off and restores upstream's per-frame fps warning, which this replaces. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6), [#46](https://github.com/kiro-ai-division/lerobot_trossen/pull/46) |
 | **`LEROBOT_BASE_VEL_LOG`** | Writes one CSV row per control-loop iteration pairing the base velocity the robot measured with the command written in that same iteration, tagged `policy` or `teleop`. A 14-dim eval dataset keeps the command but not the measurement, and base latency needs both. Off unless the variable names a path. | [below](#environment-variables) · [#43](https://github.com/kiro-ai-division/lerobot_trossen/issues/43) |
 | **`LEROBOT_BASE_SERIAL_REARM`** (experimental) | Removes a 20 ms dead wait from each of the two base Modbus transactions per tick, caused by a `trossen_slate` 0.0.3 driver bug; on the robot 20.4 ms → 10.0 ms per transaction. Off by default; acts only in a policy phase at `--dataset.fps` ≤ 21. | [below](#base-serial-re-arm) |
+| **Base latency switches** (experimental) | Switches for two latency causes of base over-rotation during eval — the chunk boundary stall and the command-to-velocity lag — plus a demo replay bench, for A/B runs with one checkpoint. All off by default; with none set nothing is installed. | [below](#base-latency-switches) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
 
 See the [LeRobot documentation](https://huggingface.co/docs/lerobot) and the [Trossen AI documentation](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin.html) for anything beyond this fork.
@@ -700,6 +702,131 @@ LEROBOT_BASE_SERIAL_REARM=1 uv run lerobot-record ... --dataset.fps=21
 - The binding holds the GIL through each transaction, so any background Python thread (a
   prefetching inference, for one) gets far more time with the re-arm on: ~20 ms of GIL per tick
   instead of ~41.
+## Base Latency Switches
+
+**Experimental, all off by default.** The SLATE base holds each velocity command until the next
+`send_action`, so every latency in the eval loop becomes extra rotation. Three separate latencies
+do that, and each has its own switch so they can be measured one at a time with the same
+checkpoint in the same session:
+
+| Cause | Switch | What it does |
+| ----- | ------ | ------------ |
+| Chunk boundary stall (pi0: ~236 ms every 50 ticks) | `LEROBOT_CHUNK_PREFETCH_TICKS=<k>` | Infers the next chunk in a background thread from the observation `k` ticks before the boundary, and drops that chunk's first `k` actions at the boundary, so action `j` still runs `j` ticks after its observation. |
+| Loop period (eval slower than the recording) | not here — `LEROBOT_BASE_SERIAL_REARM=1` + `--dataset.fps=21`, a separate switch | Removes the base driver's 20 ms receive wait per Modbus transaction, then paces the loop at 21 Hz against the ~20.4 Hz recordings. |
+| Command-to-velocity lag (~0.10–0.16 s) | `LEROBOT_BASE_LEAD_TICKS=<d>` | Tick `t` sends the arms' action `t` but the base's action `t + d` of the same chunk (Mobile ALOHA's `BASE_DELAY`, at inference time). The demos' base labels are measured velocities, so they trail the commands by that lag. |
+
+**Measured on the robot (2026-09-24, task10)** — full numbers in PR #61.
+
+- Use the prefetch **together with** `LEROBOT_BASE_SERIAL_REARM=1` + `--dataset.fps=21` — alone it
+  does not help: the background inference slows from ~185 ms to ~570 ms (the base driver holds the
+  GIL) and the chunk-boundary stall stays. Together: loop 18 → 21.0 Hz, stall ~185 → 4–11 ms.
+- For pi0 with the re-arm, use `LEROBOT_CHUNK_PREFETCH_TICKS=12` — the background inference takes
+  ~8 ticks, so 8 leaves no room for the chunk tail.
+- First-turn over-rotation against the demos: pi0 +18.8° → +9.5° (5 episodes each), ACT
+  +22.2° → +13.9° (10 each). All of the reduction is the loop-period share; the rotation the policy
+  commands does not change.
+- Leave `LEROBOT_BASE_LEAD_TICKS` unset — no measurable effect. Demo replay with d = 2, 3, 5 all
+  ended at −4.7° against the demo, and the base turns only 0–0.6° after its command stops, which
+  is all a lead can remove. The switch stays for re-measurement.
+
+With none of the variables set, nothing is installed and the loop is exactly upstream's plus the
+fork's other patches. Every policy phase with any switch set logs one `WARNING` banner listing
+the variables and what each resolved to:
+
+```bash
+grep "Base latency switches" eval_run.log
+```
+
+**Usage** — put the variables in front of the usual eval command (not `export`, so they cannot
+leak into the next run), give each arm its own `--dataset.repo_id`, and keep the log:
+
+```bash
+LEROBOT_CHUNK_PREFETCH_TICKS=8 \
+LEROBOT_CHUNK_EXECUTION_LOG=~/eval_logs/pi0_prefetch8.csv \
+uv run lerobot-record ... --dataset.repo_id=<user>/eval_<task>_prefetch8 \
+  2>&1 | tee ~/eval_logs/pi0_prefetch8.log
+```
+
+Every set variable installs the switches, including one that ends up doing nothing (for
+example `LEROBOT_CHUNK_PREFETCH_INLINE` without `LEROBOT_CHUNK_PREFETCH_TICKS`, or a value that
+is not an integer): the banner then names it under `problems:` instead of the run quietly
+behaving like a baseline.
+
+**Before judging the lead: measured base velocity.** The lead's effect only shows in the base's
+*measured* velocity, and 14-dim runs record none — the recorded `action` column holds what was
+sent, i.e. the shifted command. That measurement comes from `LEROBOT_BASE_VEL_LOG`
+([#57](https://github.com/kiro-ai-division/lerobot_trossen/pull/57)), which is not on `main`
+yet. Both logs stamp `t_mono` with `time.perf_counter()`: this one when the executor hands out
+the action, that one after `set_cmd_vel` at the end of the same tick, so rows of one tick are
+a few milliseconds apart.
+
+**Reading and caveats**
+
+- `LEROBOT_CHUNK_EXECUTION_LOG=<file.csv>` writes one row per tick: `loop` (per process) and
+  `episode`, whether an inference is still running (`in_flight`), how long the tick blocked on
+  inference, the planned (before the lead) and sent base command in robot units (before the
+  robot's own command guard), and the seam at each chunk swap. `#` lines carry the process and
+  each loop's context (dataset, checkpoint, `git describe --dirty` of the fork, the full
+  banner). Turn it on for every arm of an A/B, including the baseline: it costs one or two
+  extra postprocessor calls per tick.
+- Each episode ends with an `INFO` line `Chunk execution summary (...)`: time blocked per chunk,
+  inference time, and the `LEROBOT_CHUNK_PREFETCH_TICKS` that would hide that inference at the
+  measured tick interval. Read it from a run with the prefetch on: without it the inference is
+  timed with the loop stopped, which underestimates what a background inference needs.
+- **The prefetch needs `LEROBOT_BASE_SERIAL_REARM` to be effective.** The `trossen_slate`
+  binding never releases the GIL, so the inference thread barely runs while the loop sits in the
+  two Modbus waits (~41 ms per tick as shipped, ~20 ms with the re-arm). An offline proxy
+  (launch-bound transformer on an RTX 3060, GIL held like the driver) needed a much larger `k`
+  with today's waits than with the re-arm on; the exact ratio varied between runs, so only the
+  direction is established. Not measured with pi0 on the robot: start around `k = 8` and take
+  the summary line's value.
+- **The prefetch also re-plans more often**: pi0 has `chunk_size = n_action_steps = 50`, so after
+  the first chunk the policy re-plans every `50 − k` ticks. `LEROBOT_CHUNK_PREFETCH_INLINE=1`
+  (together with `LEROBOT_CHUNK_PREFETCH_TICKS`) runs the identical schedule with the inference
+  in the loop thread — same actions, stall kept — so prefetch vs inline isolates the stall. The
+  prefetch alone is switched off (noted in the banner) for compiled models and for
+  `2k > n_action_steps`; temporal ensembling, RTC, and policy types other than ACT, pi0, pi0.5
+  and SmolVLA leave the policy untouched altogether (no lead, no log).
+- **Choosing `d`**: `d ≈ lag × fps` — convert the lag in seconds, not ticks: 2–3 ticks at 21 Hz for
+  this base's 0.10–0.16 s. Mobile ALOHA's `BASE_DELAY = 13` is 13 ticks at 50 Hz, i.e. 0.26 s of
+  its own base's lag, about 5.5 ticks here.
+- **End of a chunk**: where `t + d` runs past the chunk, the base takes what the prefetched next
+  chunk planned for `t + d` if that chunk has already arrived (`lead_source=next`), and holds the
+  chunk's last value otherwise (`held`). A held tail is never later than no lead, but it gives up
+  the lead's `d`-tick head start at that chunk end — exactly where a stop can land — so with the
+  lead on, pick `LEROBOT_CHUNK_PREFETCH_TICKS` ≥ `d` + inference ticks (the episode summary's
+  suggestion already adds `d`, and counts `next`/`held` tail ticks). With the prefetch off the
+  tail always holds; the inline control holds only when `d` > `k`.
+  Mobile ALOHA avoids the tail by re-planning `d` ticks earlier instead, which would also change
+  the re-planning period.
+- A background inference that raises is redone synchronously. One that does not finish in time
+  (60 s for the first, which pays the CUDA warm-up; afterwards 5× the slowest so far, at least
+  2 s) stops the base and ends the run — until then the base keeps its last command, as it does
+  during any stall.
+
+**Replay bench** — replays a demo episode's `action` rows through the same eval loop, so the
+difference between the demo's heading and the measured heading is the loop's, not a policy's:
+
+```bash
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task10_move_to_beaker_shelf LEROBOT_REPLAY_EPISODES=46,72,35,34 \
+uv run lerobot-record ... --policy.path=<checkpoint> --dataset.repo_id=<user>/eval_replay_task10_...
+```
+
+- The checkpoint still runs its real inference on every chunk request and the result is
+  discarded, so the stall and its GIL contention are real (`LEROBOT_REPLAY_RUN_POLICY=0` skips
+  it).
+- If `--dataset.repo_id` does not contain `replay`, the banner says the replay was refused and
+  the policy runs as usual (a variable left in the shell). Anything else that keeps the replay
+  from running — the demo does not load, its action names differ from the robot's, a listed
+  episode is missing — stops the run instead.
+- The first row is an absolute arm target: start each episode from the demo's start pose (reset
+  with the leader arm), and make `--dataset.episode_time_s` at least the demo's length, or the
+  episode ends mid-demo with the base still moving (the banner warns). After the demo's last row
+  the arms hold and the base is commanded to stop.
+- Episode `i` of the run replays the `i`-th listed episode (cycling by the number of saved
+  episodes, so a re-recorded episode replays the same demo and `--resume` continues the cycle).
+- The replayed base labels are themselves measured velocities, so compare switch settings with
+  each other rather than reading the error as absolute.
 
 ## Upstream flags (not fork changes)
 
@@ -728,6 +855,11 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_PACING_LOG` | unset (off) | Set `1` to log the joint velocity pacing decision on *every* frame. Frames where pacing actually fired are logged either way. |
 | `LEROBOT_BASE_VEL_LOG` | unset (off) | Set a file path to write the commanded-vs-measured base velocity of every loop iteration to that CSV, one row per iteration tagged `policy` or `teleop`. |
 | `LEROBOT_BASE_SERIAL_REARM` | unset (off) | Set `1` to remove the driver's 20 ms wait per base transaction; acts only in a policy phase at `--dataset.fps` ≤ 21 → [Base Serial Re-arm](#base-serial-re-arm) |
+| `LEROBOT_CHUNK_PREFETCH_TICKS` | unset (off) | Integer `k`: infer the next chunk in the background `k` ticks before the boundary → [Base Latency Switches](#base-latency-switches) |
+| `LEROBOT_CHUNK_PREFETCH_INLINE` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: same schedule, inference kept in the loop thread (control arm) |
+| `LEROBOT_BASE_LEAD_TICKS` | unset (off) | Integer `d`: send the base's action `d` ticks ahead of the arms' |
+| `LEROBOT_REPLAY_DATASET` · `LEROBOT_REPLAY_EPISODES` · `LEROBOT_REPLAY_RUN_POLICY` | unset (off) · all episodes · `1` | Replay bench: demo repo id, episode list, whether the checkpoint's real inference still runs |
+| `LEROBOT_CHUNK_EXECUTION_LOG` | unset (off) | Path of a per-tick CSV of the chunk schedule and base commands |
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
 camera frames CPU-side and only then copies them to the GPU, shipping 4× the bytes over PCIe
