@@ -12,6 +12,7 @@ from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots import Robot
 
 from lerobot_robot_trossen import BiWidowXAIFollowerRobot, BiWidowXAIFollowerRobotConfig
+from lerobot_robot_trossen.base_serial_rearm import create_base_serial_rearm
 from lerobot_robot_trossen.config_mobileai import MobileAIRobotConfig
 from lerobot_robot_trossen.base_vel_log import flush as flush_base_vel_log
 from lerobot_robot_trossen.base_vel_log import record_sample as record_base_vel_sample
@@ -235,6 +236,9 @@ class MobileAIRobot(Robot):
         # of an emergency stop, and keying the closing line off the previous state
         # alone would swallow it whenever it does.
         self._base_warning_active = False
+        # Opt-in fix for the driver's 20 ms receive wait (base_serial_rearm.py);
+        # None unless LEROBOT_BASE_SERIAL_REARM is set and its guards pass.
+        self._base_serial_rearm = None
 
         self.cameras = make_cameras_from_configs(config.cameras)
 
@@ -271,6 +275,7 @@ class MobileAIRobot(Robot):
         base_init_success, message = self.base.init_base()
         if not base_init_success:
             raise ConnectionError(f"Failed to connect to Mobile AI base: {message}")
+        self._base_serial_rearm = create_base_serial_rearm()
 
         # Refuse to start a run against a base that cannot move: an emergency stop
         # left engaged used to be noticed only once the recording was over. Runs
@@ -415,6 +420,8 @@ class MobileAIRobot(Robot):
         # does not return a stale/uninitialized buffer (the cause of garbage base
         # velocities on the first frame of an episode), then sanity-check the result.
         _t = time.perf_counter()
+        if self._base_serial_rearm is not None:
+            self._base_serial_rearm.rearm_if_permitted()
         if not self.base.update_state():
             _warn_throttled(
                 "base_read",
@@ -473,6 +480,8 @@ class MobileAIRobot(Robot):
         # failure means both that the command may not have been applied and that
         # the cached state get_vel() returns is now stale -- the driver leaves the
         # cache untouched on failure and never recovers on its own.
+        if self._base_serial_rearm is not None:
+            self._base_serial_rearm.rearm_if_permitted()
         if not self.base.set_cmd_vel(action_base_x_vel, action_base_theta_vel):
             _warn_throttled(
                 "base_write",

@@ -133,6 +133,11 @@ def current_phase() -> str | None:
     return _phase
 
 
+def current_target_fps() -> float | None:
+    """The fps the running ``record_loop`` was asked for, or None outside one."""
+    return _target_fps
+
+
 def add_loop_section(name: str, seconds: float) -> None:
     """Accumulate wall time for a named loop section (see ``record_loop_tick``)."""
     if not LOOP_HZ_LOG_ENABLED:
