@@ -517,6 +517,7 @@ uv run accelerate launch \
 | **`include_base_in_state` flag** | Gates whether the base velocity lands in `observation.state`. Defaults to `false` (14-dim) since 2026-09-16; pass `true` for datasets and checkpoints from before that. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4), [#44](https://github.com/kiro-ai-division/lerobot_trossen/issues/44) |
 | **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
 | **`LEROBOT_LOOP_HZ_LOG`** | Control-loop rate and per-section timing meter, one summary line per 30 frames. On by default; setting `0` turns it off and restores upstream's per-frame fps warning, which this replaces. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6), [#46](https://github.com/kiro-ai-division/lerobot_trossen/pull/46) |
+| **`LEROBOT_BASE_VEL_LOG`** | Writes one CSV row per control-loop iteration pairing the base velocity the robot measured with the command written in that same iteration, tagged `policy` or `teleop`. A 14-dim eval dataset keeps the command but not the measurement, and base latency needs both. Off unless the variable names a path. | [below](#environment-variables) · [#43](https://github.com/kiro-ai-division/lerobot_trossen/issues/43) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
 
 See the [LeRobot documentation](https://huggingface.co/docs/lerobot) and the [Trossen AI documentation](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin.html) for anything beyond this fork.
@@ -678,6 +679,7 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_FAST_OBS` | `1` (on) | Converts camera frames to float32 and permutes HWC→CHW **on the GPU** instead of the CPU. Set `0` to fall back to the stock lerobot path. |
 | `LEROBOT_LOOP_HZ_LOG` | `1` (on) | Logs the achieved control-loop rate and a per-frame section breakdown, one line per 30 frames. Set `0` to turn it off, which also restores upstream's per-frame fps warning. |
 | `LEROBOT_PACING_LOG` | unset (off) | Set `1` to log the joint velocity pacing decision on *every* frame. Frames where pacing actually fired are logged either way. |
+| `LEROBOT_BASE_VEL_LOG` | unset (off) | Set a file path to write the commanded-vs-measured base velocity of every loop iteration to that CSV, one row per iteration tagged `policy` or `teleop`. |
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
 camera frames CPU-side and only then copies them to the GPU, shipping 4× the bytes over PCIe
@@ -749,3 +751,39 @@ adds an `idle` line for every other frame, which is what separates "pacing never
 "pacing fired and was not enough". `avg_v` is the average velocity the pacing model believes it
 commanded; compare it against that joint's `velocity_max`, and remember the measured peak runs
 about twice the average.
+
+**`LEROBOT_BASE_VEL_LOG`** — since `observation.state` went 14-dim the base velocity the robot
+actually reached is no longer recorded anywhere: the dataset keeps `action`, which is what the
+policy *commanded*. Base latency questions need the pair — how long the chassis takes to reach a
+commanded velocity, and how far it keeps going after the command drops to zero. Set the variable
+to a path and every loop iteration appends one row:
+
+```bash
+LEROBOT_BASE_VEL_LOG=~/eval_logs/20260922_task01.csv uv run lerobot-record ...
+```
+
+```
+t_wall,t_mono,meas_x_vel,meas_theta_vel,cmd_x_vel,cmd_theta_vel,phase
+```
+
+Both halves come from the *same* iteration — the measurement `get_observation()` read at the top
+of it, and the sanitized command `send_action()` wrote at the bottom — so no timestamp join
+against the dataset is needed to pair them. Turning `include_base_in_state` back on is not an
+alternative: it makes the observation 16-dim and the policy normalisation buffers reject it.
+
+Rows are buffered in memory and written once at `disconnect()`, with an `atexit` fallback for
+runs cut short mid-episode. The loop itself never touches the disk, because a write inside it
+would perturb the timing the log exists to measure.
+
+**`record_loop` is shared by the recording and the reset phase, so the CSV spans both** — the
+`phase` column says which a row belongs to (`policy`, `teleop`, or empty outside a tagged record
+loop), read from the same tag `LEROBOT_LOOP_HZ_LOG` puts on its summary lines. Filter to
+`policy` before judging a policy:
+
+```bash
+awk -F, 'NR==1 || $7=="policy"' base_vel.csv > policy_only.csv
+```
+
+The column marks the **policy/reset boundary, not the episode boundary**. An eval run with a
+leader arm separates consecutive episodes with a `teleop` stretch, so each `policy` run is one
+episode; a run without one has no reset rows in between and still needs the dataset to split.

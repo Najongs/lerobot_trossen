@@ -122,6 +122,17 @@ def _reset_phase(phase: str | None, target_fps: float | None) -> None:
     _reset_window()
 
 
+def current_phase() -> str | None:
+    """Which phase the running ``record_loop`` is in, or None outside one.
+
+    ``record()`` drives the episode and the reset phase through the same
+    ``record_loop``, so anything logging per iteration needs this to tell a
+    policy-driven row from a leader-teleop one. Reading the tag this module
+    already keeps costs nothing; deriving it again would mean a second wrapper.
+    """
+    return _phase
+
+
 def add_loop_section(name: str, seconds: float) -> None:
     """Accumulate wall time for a named loop section (see ``record_loop_tick``)."""
     if not LOOP_HZ_LOG_ENABLED:
