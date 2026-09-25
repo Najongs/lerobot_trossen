@@ -169,6 +169,33 @@ def test_not_requested_means_nothing_is_touched(monkeypatch):
     assert create_base_serial_rearm() is None
 
 
+@pytest.mark.parametrize(
+    "setting, requested, explicit",
+    [(None, True, False), ("1", True, True), ("0", False, True), ("", False, True)],
+)
+def test_on_by_default_and_off_only_when_set_off(setting, requested, explicit):
+    """The module reads the variable at import, so check it in a fresh process."""
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "LEROBOT_BASE_SERIAL_REARM"}
+    if setting is not None:
+        env["LEROBOT_BASE_SERIAL_REARM"] = setting
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from lerobot_robot_trossen import base_serial_rearm as m;"
+            "print(m.REQUESTED, m.EXPLICIT)",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert out[-2:] == [str(requested), str(explicit)]
+
+
 def test_other_trossen_slate_versions_are_refused(monkeypatch, caplog):
     from importlib import metadata
 

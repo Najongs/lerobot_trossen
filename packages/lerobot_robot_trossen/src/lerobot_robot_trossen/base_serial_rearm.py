@@ -44,14 +44,25 @@ after ``init_base()``. A set bit would otherwise survive on its own: ``select()`
 only empties the set when it times out, and replies keep arriving, so a reset or
 teleop phase after an eval phase would silently keep the fast driver.
 
+Why only policy loops at 21 fps or less -- and when to lift that
+----------------------------------------------------------------
+The limit is not a property of the fix but of the data we have: every dataset
+so far was recorded with this driver bug in place, at ~20.4 Hz, and a policy
+reproduces those demos best when eval runs at the same period. So eval is paced
+at 21 Hz and teleop is left alone, or new episodes would stop matching old ones.
+If all the data a policy trains on (KIRO and GIST alike) is re-recorded under
+one condition, turn it on for teleop too -- measure the resulting teleop loop
+rate first, and pace eval at that rate instead of 21.
+
 Usage
 -----
-Off by default. Turn on for an eval run, together with the 21 Hz pacing it is
-meant to be paired with::
+On by default since 2026-09-25 (issue #62): measured on the robot, it removed
+the loop-period share of base over-rotation. It still acts only where the guards
+above allow, so an eval does nothing different unless it is paced at 21 Hz::
 
-    LEROBOT_BASE_SERIAL_REARM=1 uv run lerobot-record --dataset.fps=21 ...
+    uv run lerobot-record --dataset.fps=21 ...
 
-The log says when it switches on or off and why
+``LEROBOT_BASE_SERIAL_REARM=0`` turns it off. The log says when it switches on or off and why
 (``grep LEROBOT_BASE_SERIAL_REARM <run log>``), and the ``base_read`` /
 ``base_write`` sections of the loop rate summary show the saving.
 """
@@ -73,7 +84,8 @@ READ_SET_BYTES = 128  # sizeof(fd_set) on x86_64 Linux
 
 # Highest loop rate the switch may run at. The fix is paired with 21 Hz eval
 # pacing: the teleop recordings run at ~20.4 Hz, and 21 is the nearest integer
-# fps that errs towards slight under-rotation rather than over-rotation.
+# fps that errs towards slight under-rotation rather than over-rotation. Tied to
+# today's recordings -- revisit it if the data is re-recorded (see the module doc).
 MAXIMUM_LOOP_FPS = 21.0
 
 
@@ -81,7 +93,12 @@ def _switch_on(value: str) -> bool:
     return value.strip().lower() not in ("", "0", "false", "no")
 
 
-REQUESTED = _switch_on(os.getenv(ENVIRONMENT_VARIABLE, ""))
+_SETTING = os.getenv(ENVIRONMENT_VARIABLE)
+# Set by hand, as opposed to on by default. Only a hand-set switch announces
+# itself at WARNING on every connect; the default stays at INFO so teleop runs,
+# where it never acts, do not grow a warning line.
+EXPLICIT = _SETTING is not None
+REQUESTED = _switch_on(_SETTING) if EXPLICIT else True
 
 
 def loop_refusal_reason(phase: str | None, fps: float | None) -> str | None:
@@ -162,7 +179,7 @@ class BaseSerialRearm:
 
 
 def _refuse(reason: str) -> None:
-    logger.warning(f"{ENVIRONMENT_VARIABLE} requested but left off: {reason}.")
+    logger.warning(f"{ENVIRONMENT_VARIABLE} is on but left off: {reason}.")
 
 
 def create_base_serial_rearm() -> BaseSerialRearm | None:
@@ -211,10 +228,11 @@ def create_base_serial_rearm() -> BaseSerialRearm | None:
             return None
 
         rearm = BaseSerialRearm(driver_address, file_descriptor, device_path)
-        logger.warning(
+        logger.log(
+            logging.WARNING if EXPLICIT else logging.INFO,
             f"{ENVIRONMENT_VARIABLE}: ready (fd {file_descriptor} -> {device_path}, "
             f"armed after init: {rearm.initially_armed}); acts only in policy "
-            f"loops at --dataset.fps <= {MAXIMUM_LOOP_FPS:g}."
+            f"loops at --dataset.fps <= {MAXIMUM_LOOP_FPS:g}.",
         )
         return rearm
     except Exception as error:

@@ -243,10 +243,12 @@ uv run lerobot-record \
   --policy.path="$POLICY" \
   --dataset.episode_time_s=120 \
   --dataset.reset_time_s=90 \
-  --dataset.num_episodes=10
+  --dataset.num_episodes=10 \
+  --dataset.fps=21
 ```
 
 - 리셋 구간 = 리더암으로 시작 자세·파지, 끝나면 `→`. 에피소드 구간은 정책 구동.
+- `--dataset.fps=21` = 녹화 주기(약 20.4 Hz)에 맞춘 페이싱 — base 과회전 처방이 이때만 켜진다 → [Base Serial Re-arm](#base-serial-re-arm)
 - ACT temporal ensembling은 **기본에서 뺐다**(제어 루프 20.8% 저하) — 붙이려면 [Eval](#eval)
 
 ---
@@ -345,8 +347,8 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - `--robot.velocity_safety_factor` — **기본값 `0.4`를 올리지 말 것.** `0.8`·`0.5`는 둘 다 실기에서 트립했다(조건은 `sf ≤ 1/2.07 = 0.483`) → [Joint Velocity Pacing](#joint-velocity-pacing)
 - `--dataset.reset_time_s` — 리셋 구간이 자세 잡기까지 맡으므로 upstream 기본값 60이 아니라 **90**.
 - `--robot.include_base_in_state` — **2026-09-16 이전 체크포인트(16-dim)면 `true`로 줄 것.** 그 뒤 학습본은 14-dim이라 안 줘도 된다(기본값). 안 맞으면 정규화 버퍼에서 즉시 죽는다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state)
-- `LEROBOT_BASE_SERIAL_REARM=1` + `--dataset.fps=21` — base 과회전의 루프 주기 몫 처방(실험용, 기본 꺼짐). **기본 eval 명령엔 넣지 않는다** → [Base Serial Re-arm](#base-serial-re-arm)
-- base 과회전 지연 처방 스위치(`LEROBOT_CHUNK_PREFETCH_TICKS`·`LEROBOT_BASE_LEAD_TICKS`, 재생 벤치) — **실험용, 전부 기본 꺼짐. 기본 eval 명령엔 넣지 않는다.** 쓰는 법·판독·주의 → [Base Latency Switches](#base-latency-switches)
+- `--dataset.fps=21` — **eval엔 줄 것** — 빼면(기본 30) base 과회전의 루프 주기 몫 처방이 꺼진 채 돈다. 베이스 시리얼 재등록(`LEROBOT_BASE_SERIAL_REARM`, 2026-09-25부터 기본 켬)이 정책 구간·fps ≤ 21에서만 동작하기 때문 → [Base Serial Re-arm](#base-serial-re-arm)
+- pi0면 `LEROBOT_CHUNK_PREFETCH_TICKS=12`를 명령 앞에 붙일 것 — 청크 경계 정체 제거(로봇 실측 약 185 → 0 ms). ACT엔 효과 없음(정체 약 13 ms). `LEROBOT_BASE_LEAD_TICKS`·재생 벤치는 실험용·기본 꺼짐 → [Base Latency Switches](#base-latency-switches)
 
 **확인 범위** — lerobot 0.4.0~0.4.4에서 동일. 0.6.0부터는 정책 배포가 `lerobot-rollout`으로 분리되고 `lerobot-record`가 `--policy.path`를 거부하나, 체크포인트로 타입을 판별하는 원칙은 유지된다.
 
@@ -520,7 +522,7 @@ uv run accelerate launch \
 | **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
 | **`LEROBOT_LOOP_HZ_LOG`** | Control-loop rate and per-section timing meter, one summary line per 30 frames. On by default; setting `0` turns it off and restores upstream's per-frame fps warning, which this replaces. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6), [#46](https://github.com/kiro-ai-division/lerobot_trossen/pull/46) |
 | **`LEROBOT_BASE_VEL_LOG`** | Writes one CSV row per control-loop iteration pairing the base velocity the robot measured with the command written in that same iteration, tagged `policy` or `teleop`. A 14-dim eval dataset keeps the command but not the measurement, and base latency needs both. Off unless the variable names a path. | [below](#environment-variables) · [#43](https://github.com/kiro-ai-division/lerobot_trossen/issues/43) |
-| **`LEROBOT_BASE_SERIAL_REARM`** (experimental) | Removes a 20 ms dead wait from each of the two base Modbus transactions per tick, caused by a `trossen_slate` 0.0.3 driver bug; on the robot 20.4 ms → 10.0 ms per transaction. Off by default; acts only in a policy phase at `--dataset.fps` ≤ 21. | [below](#base-serial-re-arm) |
+| **`LEROBOT_BASE_SERIAL_REARM`** | Removes a 20 ms dead wait from each of the two base Modbus transactions per tick, caused by a `trossen_slate` 0.0.3 driver bug; on the robot 20.4 ms → 10.0 ms per transaction. On by default (#62); acts only in a policy phase at `--dataset.fps` ≤ 21. | [below](#base-serial-re-arm) |
 | **Base latency switches** (experimental) | Switches for two latency causes of base over-rotation during eval — the chunk boundary stall and the command-to-velocity lag — plus a demo replay bench, for A/B runs with one checkpoint. All off by default; with none set nothing is installed. | [below](#base-latency-switches) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
 
@@ -660,13 +662,14 @@ keeps the escape codes; `NO_COLOR=1` disables colour everywhere.
 
 ## Base Serial Re-arm
 
-**Experimental, off by default.** Each control-loop tick makes two base Modbus transactions —
+**On by default since #62** — set `LEROBOT_BASE_SERIAL_REARM=0` to keep the driver as shipped.
+It acts only in eval runs given `--dataset.fps=21` (below). Each control-loop tick makes two base Modbus transactions —
 `update_state()` in `get_observation()` and `set_cmd_vel()` in `send_action()` — and each takes
 ~20 ms, about 41 ms of a ~49 ms eval tick. Half of it is a `trossen_slate` 0.0.3 driver bug, not
 the device: the driver keeps the serial fd in a `select()` set that it fills once and never
 refills, `select()` empties the set on its first timeout (inside `init_base()`), and from then on
 every receive sleeps the full 20 ms before reading bytes that were already there.
-`LEROBOT_BASE_SERIAL_REARM=1` sets the fd's bit back before each transaction, which is all `FD_SET`
+The re-arm sets the fd's bit back before each transaction, which is all `FD_SET`
 would have done: the same bytes go out and come back, only without the wait.
 
 | Measured on the robot (2026-09-23, 100 calls each) | median | fail |
@@ -678,7 +681,7 @@ So the loop saves about 20 ms per tick — the ~10 ms left per transaction is th
 trip. That is the room eval needs to be paced at the recordings' rate:
 
 ```bash
-LEROBOT_BASE_SERIAL_REARM=1 uv run lerobot-record ... --dataset.fps=21
+uv run lerobot-record ... --dataset.fps=21
 ```
 
 - **Acts only in a policy phase at `--dataset.fps` ≤ 21**, read from the phase tag the loop rate
@@ -687,6 +690,13 @@ LEROBOT_BASE_SERIAL_REARM=1 uv run lerobot-record ... --dataset.fps=21
   was not tuned at); a teleop recording must keep the rate its datasets were taken at, or new
   episodes stop matching old ones. With `LEROBOT_LOOP_HZ_LOG=0` there is no phase tag and it stays
   off.
+- **That limit comes from today's data, not from the fix** — every dataset so far was recorded
+  with this driver bug at ~20.4 Hz. If all the data a policy trains on (KIRO and GIST alike) is
+  re-recorded under one condition, turn it on for teleop too: measure the teleop loop rate that
+  results first, and pace eval at that rate instead of 21.
+- 21 rather than 20: 21 Hz errs towards slight under-rotation (~3° on a 86° turn, measured), 20
+  towards over-rotation (computed, not run). On the robot (2026-09-24) the demo replay over-rotation went from +5.7° to +0.6°
+  with this alone → [Base Latency Switches](#base-latency-switches).
 - **Guards** — it writes into the driver's C++ object by offset, so it stays off unless
   `trossen_slate` is exactly 0.0.3, the driver symbol resolves, and the driver's fd is a
   `/dev/tty*` device. `connect()` logs `ready` or the reason it stayed off, and the first tick of
@@ -712,12 +722,12 @@ checkpoint in the same session:
 | Cause | Switch | What it does |
 | ----- | ------ | ------------ |
 | Chunk boundary stall (pi0: ~236 ms every 50 ticks) | `LEROBOT_CHUNK_PREFETCH_TICKS=<k>` | Infers the next chunk in a background thread from the observation `k` ticks before the boundary, and drops that chunk's first `k` actions at the boundary, so action `j` still runs `j` ticks after its observation. |
-| Loop period (eval slower than the recording) | not here — `LEROBOT_BASE_SERIAL_REARM=1` + `--dataset.fps=21`, a separate switch | Removes the base driver's 20 ms receive wait per Modbus transaction, then paces the loop at 21 Hz against the ~20.4 Hz recordings. |
+| Loop period (eval slower than the recording) | not here — `--dataset.fps=21`, with the serial re-arm that is on by default | Removes the base driver's 20 ms receive wait per Modbus transaction, then paces the loop at 21 Hz against the ~20.4 Hz recordings. |
 | Command-to-velocity lag (~0.10–0.16 s) | `LEROBOT_BASE_LEAD_TICKS=<d>` | Tick `t` sends the arms' action `t` but the base's action `t + d` of the same chunk (Mobile ALOHA's `BASE_DELAY`, at inference time). The demos' base labels are measured velocities, so they trail the commands by that lag. |
 
 **Measured on the robot (2026-09-24, task10)** — full numbers in PR #61.
 
-- Use the prefetch **together with** `LEROBOT_BASE_SERIAL_REARM=1` + `--dataset.fps=21` — alone it
+- Use the prefetch **together with** `--dataset.fps=21` (the serial re-arm acts only there) — alone it
   does not help: the background inference slows from ~185 ms to ~570 ms (the base driver holds the
   GIL) and the chunk-boundary stall stays. Together: loop 18 → 21.0 Hz, stall ~185 → 4–11 ms.
 - For pi0 with the re-arm, use `LEROBOT_CHUNK_PREFETCH_TICKS=12` — the background inference takes
@@ -773,7 +783,7 @@ a few milliseconds apart.
   inference time, and the `LEROBOT_CHUNK_PREFETCH_TICKS` that would hide that inference at the
   measured tick interval. Read it from a run with the prefetch on: without it the inference is
   timed with the loop stopped, which underestimates what a background inference needs.
-- **The prefetch needs `LEROBOT_BASE_SERIAL_REARM` to be effective.** The `trossen_slate`
+- **The prefetch needs the serial re-arm, i.e. `--dataset.fps=21`, to be effective.** The `trossen_slate`
   binding never releases the GIL, so the inference thread barely runs while the loop sits in the
   two Modbus waits (~41 ms per tick as shipped, ~20 ms with the re-arm). An offline proxy
   (launch-bound transformer on an RTX 3060, GIL held like the driver) needed a much larger `k`
@@ -854,7 +864,7 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_LOOP_HZ_LOG` | `1` (on) | Logs the achieved control-loop rate and a per-frame section breakdown, one line per 30 frames. Set `0` to turn it off, which also restores upstream's per-frame fps warning. |
 | `LEROBOT_PACING_LOG` | unset (off) | Set `1` to log the joint velocity pacing decision on *every* frame. Frames where pacing actually fired are logged either way. |
 | `LEROBOT_BASE_VEL_LOG` | unset (off) | Set a file path to write the commanded-vs-measured base velocity of every loop iteration to that CSV, one row per iteration tagged `policy` or `teleop`. |
-| `LEROBOT_BASE_SERIAL_REARM` | unset (off) | Set `1` to remove the driver's 20 ms wait per base transaction; acts only in a policy phase at `--dataset.fps` ≤ 21 → [Base Serial Re-arm](#base-serial-re-arm) |
+| `LEROBOT_BASE_SERIAL_REARM` | unset (on) | Removes the driver's 20 ms wait per base transaction; set `0` to keep the driver as shipped; acts only in a policy phase at `--dataset.fps` ≤ 21 → [Base Serial Re-arm](#base-serial-re-arm) |
 | `LEROBOT_CHUNK_PREFETCH_TICKS` | unset (off) | Integer `k`: infer the next chunk in the background `k` ticks before the boundary → [Base Latency Switches](#base-latency-switches) |
 | `LEROBOT_CHUNK_PREFETCH_INLINE` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: same schedule, inference kept in the loop thread (control arm) |
 | `LEROBOT_BASE_LEAD_TICKS` | unset (off) | Integer `d`: send the base's action `d` ticks ahead of the arms' |
