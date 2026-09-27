@@ -41,10 +41,36 @@ session with the same checkpoint. This module holds two of them:
    ``BASE_DELAY`` applied at inference time; Mobile ALOHA instead re-plans ``d``
    ticks earlier, which would change the re-planning period too.
 
+Two more switches smooth the arms where a new chunk takes over. With the
+prefetch, the new chunk comes from an observation ``k`` ticks old and from its
+own noise sample, so its first executed action need not continue from where the
+old chunk left the arms (9/25 pi0 eval: 12% of arm swaps jumped over 0.2 rad in
+one tick, none without the prefetch).
+
+4. **RTC guidance** (``LEROBOT_CHUNK_RTC=1``, needs the prefetch). The prefetched
+   inference is steered with LeRobot's Real-Time Chunking so that its first
+   ``k`` steps -- the ticks the old chunk still runs while it infers, dropped
+   at the swap -- follow the old chunk's remaining ``k`` actions. LeRobot 0.4.4
+   guides only those steps; step ``k``, the first one executed, follows them
+   through the model's own conditioning, so the jump shrinks but need not
+   vanish (offline, 140 recorded swaps: median 0.22 -> 0.07 rad, max 1.13 ->
+   0.21 rad). Flow-matching policies only (pi0, pi0.5, SmolVLA).
+   ``LEROBOT_CHUNK_RTC_MAX_GUIDANCE`` overrides LeRobot's guidance clip.
+5. **Seam blend** (``LEROBOT_CHUNK_SEAM_BLEND_TICKS=<m>``). At every swap, the
+   arm joints of the new chunk get an offset that starts at the gap between the
+   last sent command and the new chunk (position and per-tick velocity) and
+   fades to zero along a quintic over at least ``m`` ticks -- longer when the
+   gap is large, up to ``SEAM_BLEND_MAX_TICKS`` (or ``m`` if larger) and the
+   ticks left in the chunk, aiming to move no joint more than
+   ``SEAM_BLEND_MAX_STEP_RAD`` per tick; a gap too large for the cap exceeds
+   it. Grippers and base are left alone. This
+   is bumpless transfer: it removes the jump but still arrives on the new
+   chunk's path, so it complements RTC rather than replacing it.
+
 The switches change nothing unless set: with none of the variables set this
 module is not installed at all. When the chunk executor is installed with the
-prefetch and the lead both off (e.g. for the execution log alone), it reproduces
-``select_action`` exactly.
+prefetch, the lead and the seam blend all off (e.g. for the execution log
+alone), it reproduces ``select_action`` exactly.
 
 Judging the switches
 --------------------
@@ -91,11 +117,17 @@ PREFETCH_TICKS_VARIABLE = "LEROBOT_CHUNK_PREFETCH_TICKS"
 PREFETCH_INLINE_VARIABLE = "LEROBOT_CHUNK_PREFETCH_INLINE"
 BASE_LEAD_TICKS_VARIABLE = "LEROBOT_BASE_LEAD_TICKS"
 EXECUTION_LOG_VARIABLE = "LEROBOT_CHUNK_EXECUTION_LOG"
+RTC_VARIABLE = "LEROBOT_CHUNK_RTC"
+RTC_MAX_GUIDANCE_VARIABLE = "LEROBOT_CHUNK_RTC_MAX_GUIDANCE"
+SEAM_BLEND_TICKS_VARIABLE = "LEROBOT_CHUNK_SEAM_BLEND_TICKS"
 
 SWITCH_VARIABLES = (
     PREFETCH_TICKS_VARIABLE,
     PREFETCH_INLINE_VARIABLE,
     BASE_LEAD_TICKS_VARIABLE,
+    RTC_VARIABLE,
+    RTC_MAX_GUIDANCE_VARIABLE,
+    SEAM_BLEND_TICKS_VARIABLE,
     replay_policy.DATASET_ENVIRONMENT_VARIABLE,
     replay_policy.EPISODES_ENVIRONMENT_VARIABLE,
     replay_policy.RUN_POLICY_ENVIRONMENT_VARIABLE,
@@ -103,6 +135,14 @@ SWITCH_VARIABLES = (
 )
 
 BASE_ACTION_NAMES = ("x.vel", "theta.vel")
+# Action names containing any of these are not arm joints for the seam blend.
+NON_ARM_JOINT_MARKERS = ("carriage", "gripper")
+
+# The seam blend lengthens its window until its offset moves no arm joint more
+# than this per tick (0.1 rad/tick = 2.1 rad/s at 21 Hz; the 9/25 pi0 eval's
+# ordinary ticks stayed under 0.062 rad in 99% of cases), up to the cap.
+SEAM_BLEND_MAX_STEP_RAD = 0.1
+SEAM_BLEND_MAX_TICKS = 20
 
 # Policies whose select_action is "queue of predict_action_chunk outputs" and
 # nothing else, so the executor can take its place. Diffusion and VQ-BeT fill
@@ -149,6 +189,21 @@ def _read_tick_count(variable: str, problems: list[str]) -> int:
     return count
 
 
+def _read_positive_float(variable: str, problems: list[str]) -> float | None:
+    value = os.getenv(variable, "").strip()
+    if not value:
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        problems.append(f"{variable}={value!r} is not a number; default kept")
+        return None
+    if not math.isfinite(number) or number <= 0:
+        problems.append(f"{variable}={value!r} is not positive; default kept")
+        return None
+    return number
+
+
 @dataclass(frozen=True)
 class ChunkExecutionSettings:
     prefetch_ticks: int
@@ -156,12 +211,16 @@ class ChunkExecutionSettings:
     base_lead_ticks: int
     execution_log_path: str | None
     problems: tuple[str, ...] = field(default=())
+    rtc: bool = False
+    rtc_max_guidance: float | None = None
+    seam_blend_ticks: int = 0
 
     @property
     def wants_executor(self) -> bool:
         return (
             self.prefetch_ticks > 0
             or self.base_lead_ticks > 0
+            or self.seam_blend_ticks > 0
             or self.execution_log_path is not None
         )
 
@@ -175,6 +234,18 @@ def read_settings() -> ChunkExecutionSettings:
             f"{PREFETCH_INLINE_VARIABLE} does nothing without {PREFETCH_TICKS_VARIABLE}"
         )
     base_lead_ticks = _read_tick_count(BASE_LEAD_TICKS_VARIABLE, problems)
+    rtc = switch_on(os.getenv(RTC_VARIABLE, ""))
+    if rtc and prefetch_ticks == 0:
+        problems.append(
+            f"{RTC_VARIABLE} does nothing without {PREFETCH_TICKS_VARIABLE}: it steers "
+            "the prefetched inference toward the actions the old chunk runs meanwhile"
+        )
+    rtc_max_guidance = _read_positive_float(RTC_MAX_GUIDANCE_VARIABLE, problems)
+    if rtc_max_guidance is not None and not rtc:
+        problems.append(
+            f"{RTC_MAX_GUIDANCE_VARIABLE} does nothing without {RTC_VARIABLE}"
+        )
+    seam_blend_ticks = _read_tick_count(SEAM_BLEND_TICKS_VARIABLE, problems)
     execution_log_path = os.getenv(EXECUTION_LOG_VARIABLE, "").strip() or None
     if replay_policy.EPISODES_PROBLEM:
         problems.append(replay_policy.EPISODES_PROBLEM)
@@ -192,6 +263,9 @@ def read_settings() -> ChunkExecutionSettings:
         base_lead_ticks=base_lead_ticks,
         execution_log_path=execution_log_path,
         problems=tuple(problems),
+        rtc=rtc and prefetch_ticks > 0,
+        rtc_max_guidance=rtc_max_guidance,
+        seam_blend_ticks=seam_blend_ticks,
     )
 
 
@@ -231,6 +305,56 @@ def shift_base_channels(chunk, lead_ticks: int, base_indices: tuple[int, ...]):
     return shifted
 
 
+def seam_blend_offsets(gap_position, gap_velocity, ticks: int):
+    """Offsets to add to the first ``ticks`` executed steps of a new chunk.
+
+    ``gap_position`` and ``gap_velocity`` are ``[dims]`` tensors: where the old
+    command stream is minus where the new chunk would be, one tick before its
+    first executed step (position, and per-tick change). The offset samples,
+    once per tick, a quintic that starts at that gap with that slope and ends
+    at zero with zero slope and curvature on step ``ticks - 1``; from there on
+    the new chunk runs exactly. Sampled at few ticks, the first step carries
+    only part of the velocity gap (about 3/4 of it at 4 ticks) -- position
+    continuity is what the window size controls. Returns ``[ticks, dims]``; the
+    last row is zero.
+    """
+    import torch
+
+    s = torch.arange(1, ticks + 1, dtype=gap_position.dtype, device=gap_position.device)
+    s = (s / ticks).unsqueeze(1)
+    fade = 1 - 10 * s**3 + 15 * s**4 - 6 * s**5
+    slope = s - 6 * s**3 + 8 * s**4 - 3 * s**5
+    return gap_position.unsqueeze(0) * fade + ticks * gap_velocity.unsqueeze(0) * slope
+
+
+def choose_seam_blend_ticks(
+    gap_position,
+    gap_velocity,
+    minimum_ticks: int,
+    maximum_ticks: int = SEAM_BLEND_MAX_TICKS,
+    max_step: float = SEAM_BLEND_MAX_STEP_RAD,
+) -> int:
+    """Shortest window >= ``minimum_ticks`` whose offset moves no joint more than
+    ``max_step`` per tick (inputs in the same unit as ``max_step``), searched up
+    to ``maximum_ticks``. If none qualifies, the window with the smallest
+    largest step: a longer window is not always gentler -- the velocity part of
+    the offset grows with its length -- so the cap is no safe default.
+    """
+    import torch
+
+    maximum_ticks = max(minimum_ticks, maximum_ticks)
+    best_ticks, best_step = minimum_ticks, math.inf
+    for ticks in range(minimum_ticks, maximum_ticks + 1):
+        offsets = seam_blend_offsets(gap_position, gap_velocity, ticks)
+        path = torch.cat([gap_position.unsqueeze(0), offsets])
+        largest_step = float(path.diff(dim=0).abs().max())
+        if largest_step <= max_step:
+            return ticks
+        if largest_step < best_step:
+            best_ticks, best_step = ticks, largest_step
+    return best_ticks
+
+
 class _CompletedInference:
     """An inference already run in the loop thread (inline prefetch)."""
 
@@ -239,6 +363,7 @@ class _CompletedInference:
         self.error = None
         self.observation_tick = observation_tick
         self.inference_seconds = inference_seconds
+        self.overlap_prefix = None
 
     def finished(self) -> bool:
         return True
@@ -260,6 +385,7 @@ class _BackgroundInference:
         self.error: BaseException | None = None
         self.observation_tick = observation_tick
         self.inference_seconds: float | None = None
+        self.overlap_prefix = None
         self._finished = threading.Event()
         self._ready_event = None
         if stream is not None:
@@ -358,6 +484,16 @@ class ExecutionLog:
         "planned_theta_vel",
         "sent_x_vel",
         "sent_theta_vel",
+        # Swap ticks only, arm joints (grippers excluded), radians. The raw seam
+        # is where the new chunk would have jumped; the sent seam is what was sent.
+        "arm_seam_raw",
+        "arm_seam_joint",
+        "arm_seam_sent",
+        "blend_ticks",
+        # With the prefetch: largest gap between the new chunk's first k steps
+        # (dropped at the swap) and what the old chunk sent at those ticks. Without
+        # RTC it measures how far the two plans disagree; RTC steers it to zero.
+        "prefix_gap",
     )
 
     def __init__(self, path: str):
@@ -434,11 +570,15 @@ class ChunkExecutor:
         prefetch_ticks: int,
         prefetch_inline: bool,
         base_lead_ticks: int,
+        rtc: bool = False,
+        seam_blend_ticks: int = 0,
     ):
         self.policy = policy
         self.prefetch_ticks = prefetch_ticks
         self.prefetch_inline = prefetch_inline
         self.base_lead_ticks = base_lead_ticks
+        self.rtc = rtc and prefetch_ticks > 0
+        self.seam_blend_ticks = seam_blend_ticks
         self.action_steps = policy.config.n_action_steps
         self._original_reset = policy.reset
         self._passes_observation_tick = isinstance(policy, replay_policy.ReplayPolicy)
@@ -448,6 +588,8 @@ class ChunkExecutor:
         # Rebound on every record_loop call (see begin_loop).
         self.base_indices: tuple[int, ...] = ()
         self.base_index_by_name: dict[str, int] = {}
+        self.arm_indices: tuple[int, ...] = ()
+        self._action_scale = None
         self.postprocessor = None
         self.execution_log: ExecutionLog | None = None
         self.loop_label = None
@@ -469,6 +611,21 @@ class ChunkExecutor:
                 parts.append(f"base lead {self.base_lead_ticks} ticks")
             else:
                 parts.append("base lead OFF (no x.vel/theta.vel in the action names)")
+        if self.rtc:
+            rtc_config = getattr(self.policy.config, "rtc_config", None)
+            guidance = getattr(rtc_config, "max_guidance_weight", None)
+            parts.append(
+                f"RTC guidance on the first {self.prefetch_ticks} steps "
+                f"(max guidance {guidance})"
+            )
+        if self.seam_blend_ticks:
+            if self.arm_indices:
+                parts.append(
+                    f"seam blend >= {self.seam_blend_ticks} ticks on "
+                    f"{len(self.arm_indices)} arm joints"
+                )
+            else:
+                parts.append("seam blend OFF (no arm joints in the action names)")
         if not parts:
             parts.append("synchronous (same schedule as select_action)")
         return ", ".join(parts)
@@ -482,6 +639,7 @@ class ChunkExecutor:
         execution_log,
         episode_label,
         loop_label=None,
+        arm_indices=(),
     ):
         self.base_index_by_name = dict(base_index_by_name)
         self.base_indices = tuple(
@@ -489,6 +647,8 @@ class ChunkExecutor:
             for name in BASE_ACTION_NAMES
             if name in base_index_by_name
         )
+        self.arm_indices = tuple(arm_indices)
+        self._action_scale = None
         self.postprocessor = postprocessor
         self.execution_log = execution_log
         self.episode_label = episode_label
@@ -513,6 +673,9 @@ class ChunkExecutor:
         self._tick_times: list[float] = []
         self._held_ticks = 0
         self._next_filled_ticks = 0
+        # The last two actions select_action returned, for the seam blend.
+        self._last_sent = None
+        self._previous_sent = None
         # Loop-thread time spent inferring since the last swap: the inline control
         # stalls at the launch tick rather than at the swap.
         self._blocked_seconds_since_swap = 0.0
@@ -527,12 +690,47 @@ class ChunkExecutor:
 
     # ----- inference -----------------------------------------------------------
 
-    def _predict(self, batch, observation_tick: int):
+    def _predict(self, batch, observation_tick: int, prefix=None):
         if self._passes_observation_tick:
             return self.policy.predict_action_chunk(
                 batch, observation_tick=observation_tick
             )
-        return self.policy.predict_action_chunk(batch)
+        if prefix is None:
+            return self.policy.predict_action_chunk(batch)
+        import torch
+
+        # RTC's guidance takes a gradient with respect to the noisy actions, which
+        # inference_mode forbids (both predict_action and the worker open it).
+        # Leaving it is enough: the policy's parameters were frozen when RTC was
+        # switched on, so nothing but that one elementwise step is recorded. The
+        # prefix may itself be an inference tensor; cloning it here makes it a
+        # normal one.
+        with torch.inference_mode(False), torch.no_grad():
+            prefix = prefix.clone()
+            return self.policy.predict_action_chunk(
+                batch,
+                inference_delay=prefix.shape[1],
+                prev_chunk_left_over=prefix,
+                execution_horizon=prefix.shape[1],
+            )
+
+    def _overlap_prefix(self):
+        """The ``k`` actions the current chunk sends while the next one infers.
+
+        Normalized, as the policy produced them, with the arm joints as actually
+        sent (after any seam blend) and the base channels as planned (before any
+        lead). Step ``j`` of the next chunk is planned for the same tick as step
+        ``j`` of this prefix.
+        """
+        step = self._current_elapsed + self._position
+        prefix = self._current_chunk[:, step : step + self.prefetch_ticks].clone()
+        if self.arm_indices:
+            arms = list(self.arm_indices)
+            sent = self._executing[:, self._position : self._position + prefix.shape[1]]
+            prefix[:, :, arms] = sent[:, :, arms].to(
+                device=prefix.device, dtype=prefix.dtype
+            )
+        return prefix
 
     def _uses_worker(self) -> bool:
         return self.prefetch_ticks > 0 and not self.prefetch_inline
@@ -547,9 +745,14 @@ class ChunkExecutor:
             self._stream = torch.cuda.Stream(device=device)
         return self._stream
 
-    def _start_worker(self, batch, observation_tick: int) -> _BackgroundInference:
+    def _start_worker(
+        self, batch, observation_tick: int, prefix=None
+    ) -> _BackgroundInference:
+        predict = self._predict
+        if prefix is not None:
+            predict = functools.partial(self._predict, prefix=prefix)
         return _BackgroundInference(
-            self._predict,
+            predict,
             batch,
             observation_tick,
             self._use_amp,
@@ -643,6 +846,9 @@ class ChunkExecutor:
         action = self._executing[:, self._position]
         chunk_step = self._current_elapsed + self._position
         action, lead_source = self._apply_lead_tail(action, tick, chunk_step)
+        if self.arm_indices:
+            self._previous_sent = self._last_sent
+            self._last_sent = action.detach().clone()
         if self.execution_log is not None:
             self._write_tick(tick, tick_record, action, chunk_step, lead_source)
         self._position += 1
@@ -651,21 +857,35 @@ class ChunkExecutor:
 
     def _launch(self, batch, tick: int, tick_record: dict) -> None:
         tick_record["launched"] = 1
+        prefix = self._overlap_prefix()
+        guide = prefix if self.rtc else None
         if self.prefetch_inline:
             start = time.perf_counter()
-            result = self._predict(batch, tick)
+            try:
+                result = self._predict(batch, tick, guide)
+            except Exception as error:
+                if guide is None:
+                    raise
+                # Same as a failed background inference: infer unguided instead.
+                logger.warning(
+                    f"Guided chunk inference failed ({error!r}); inferring "
+                    "without RTC instead."
+                )
+                result = self._predict(batch, tick)
             seconds = time.perf_counter() - start
             tick_record["blocked_ms"] += seconds * 1e3
             self._blocked_seconds_since_swap += seconds
             self._pending = _CompletedInference(result, tick, seconds)
         else:
-            self._pending = self._start_worker(batch, tick)
+            self._pending = self._start_worker(batch, tick, guide)
+        self._pending.overlap_prefix = prefix
 
     def _swap(self, batch, tick: int, tick_record: dict) -> None:
         result = None
         observation_tick = tick
         blocked_seconds = 0.0
         inference_seconds = None
+        overlap_prefix = None
         pending = self._pending
         if pending is not None:
             result, blocked_seconds = self._collect(pending)
@@ -673,6 +893,7 @@ class ChunkExecutor:
             if result is not None:
                 observation_tick = pending.observation_tick
                 inference_seconds = pending.inference_seconds
+                overlap_prefix = pending.overlap_prefix
         if result is None:
             result, extra_blocked, inference_seconds = self._infer_now(batch, tick)
             blocked_seconds += extra_blocked
@@ -680,7 +901,12 @@ class ChunkExecutor:
 
         elapsed = tick - observation_tick
         seam = self._seam_step(result, elapsed)
-        self._install(result, observation_tick, elapsed)
+        arm_seam = self._install(result, observation_tick, elapsed)
+        tick_record.update(arm_seam)
+        if overlap_prefix is not None:
+            tick_record["prefix_gap"] = self._arm_gap(
+                result[:, : overlap_prefix.shape[1]], overlap_prefix
+            )
 
         chunk_blocked_seconds = self._blocked_seconds_since_swap + blocked_seconds
         self._blocked_seconds_since_swap = 0.0
@@ -699,10 +925,15 @@ class ChunkExecutor:
                 if inference_seconds is None
                 else inference_seconds * 1e3,
                 "seam_theta_step": seam,
+                "arm_seam_raw": arm_seam.get("arm_seam_raw"),
+                "arm_seam_sent": arm_seam.get("arm_seam_sent"),
+                "blend_ticks": arm_seam.get("blend_ticks"),
+                "prefix_gap": tick_record.get("prefix_gap"),
             }
         )
 
-    def _install(self, chunk, observation_tick: int, elapsed: int) -> None:
+    def _install(self, chunk, observation_tick: int, elapsed: int) -> dict:
+        """Make ``chunk`` the executing one; return the arm seam for the log."""
         shifted = shift_base_channels(chunk, self.base_lead_ticks, self.base_indices)
         executing = shifted[:, : self.action_steps]
         if elapsed >= executing.shape[1]:
@@ -711,11 +942,96 @@ class ChunkExecutor:
                 f"{executing.shape[1]} actions; running only its last action."
             )
             elapsed = executing.shape[1] - 1
-        self._executing = executing[:, elapsed:]
+        executing = executing[:, elapsed:]
+        arm_seam = {}
+        if self._last_sent is not None and self.arm_indices:
+            executing, arm_seam = self._blend_seam(executing)
+        self._executing = executing
         self._current_chunk = chunk
         self._current_observation_tick = observation_tick
         self._current_elapsed = elapsed
         self._position = 0
+        return arm_seam
+
+    # ----- seam blend ------------------------------------------------------------
+
+    def _scale(self, like):
+        """Per-channel radians per normalized unit (the postprocessor is affine)."""
+        import torch
+
+        if self._action_scale is None:
+            dimension = like.shape[-1]
+            try:
+                zeros = torch.zeros(1, dimension, dtype=like.dtype, device=like.device)
+                ones = torch.ones(1, dimension, dtype=like.dtype, device=like.device)
+                scale = self.postprocessor(ones.clone()) - self.postprocessor(
+                    zeros.clone()
+                )
+                scale = torch.as_tensor(scale).detach().to("cpu", torch.float32)
+                scale = scale.reshape(-1)
+                if scale.shape[0] != dimension or not torch.isfinite(scale).all():
+                    raise ValueError(f"unexpected scale {scale}")
+            except Exception:
+                logger.debug("No action scale from the postprocessor", exc_info=True)
+                scale = torch.ones(dimension)
+            self._action_scale = scale.abs()
+        return self._action_scale
+
+    def _arm_gap(self, first, second) -> float | None:
+        """Largest |first - second| over arm joints and steps, in radians."""
+        if not self.arm_indices:
+            return None
+        arms = list(self.arm_indices)
+        scale = self._scale(first)[arms]
+        difference = first[..., arms].float().cpu() - second[..., arms].float().cpu()
+        return float((difference.abs() * scale).max())
+
+    def _blend_seam(self, executing):
+        """Offset the arm joints of ``executing`` so they continue the sent stream."""
+        import torch
+
+        arms = list(self.arm_indices)
+        last = self._last_sent[0, arms].float().cpu()
+        previous = (
+            self._previous_sent[0, arms].float().cpu()
+            if self._previous_sent is not None
+            else last
+        )
+        head = executing[0, :2, arms].float().cpu()
+        scale = self._scale(executing)[arms]
+        new_first = head[0]
+        new_velocity = (
+            head[1] - head[0] if head.shape[0] > 1 else torch.zeros_like(last)
+        )
+        # Gap one tick before the first executed step, where the old stream sits.
+        gap_position = last - (new_first - new_velocity)
+        gap_velocity = (last - previous) - new_velocity
+        raw = (new_first - last).abs() * scale
+        arm_seam = {
+            "arm_seam_raw": float(raw.max()),
+            "arm_seam_joint": self.arm_indices[int(raw.argmax())],
+            "arm_seam_sent": float(raw.max()),
+            "blend_ticks": 0,
+        }
+        if not self.seam_blend_ticks:
+            return executing, arm_seam
+        available = executing.shape[1]
+        minimum = min(self.seam_blend_ticks, available)
+        ticks = choose_seam_blend_ticks(
+            gap_position * scale,
+            gap_velocity * scale,
+            minimum,
+            maximum_ticks=min(SEAM_BLEND_MAX_TICKS, available),
+        )
+        offsets = seam_blend_offsets(gap_position, gap_velocity, ticks)
+        blended = executing.clone()
+        blended[0, :ticks, arms] += offsets.to(
+            device=blended.device, dtype=blended.dtype
+        )
+        sent = (blended[0, 0, arms].float().cpu() - last).abs() * scale
+        arm_seam["arm_seam_sent"] = float(sent.max())
+        arm_seam["blend_ticks"] = ticks
+        return blended, arm_seam
 
     def _apply_lead_tail(self, action, tick: int, chunk_step: int):
         """Return this tick's action and where its base command came from.
@@ -871,6 +1187,22 @@ class ChunkExecutor:
                 f"seam |d theta.vel| median={statistics.median(seams):.3f} "
                 f"max={max(seams):.3f} rad/s"
             )
+        for key, label in (
+            ("arm_seam_raw", "arm seam raw"),
+            ("arm_seam_sent", "arm seam sent"),
+            ("prefix_gap", "prefix gap"),
+        ):
+            values = [record[key] for record in later if record.get(key) is not None]
+            if values:
+                parts.append(
+                    f"{label} median={statistics.median(values):.3f} "
+                    f"max={max(values):.3f} rad"
+                )
+        blend = [record["blend_ticks"] for record in later if record.get("blend_ticks")]
+        if blend:
+            parts.append(
+                f"blend ticks median={statistics.median(blend):g} max={max(blend)}"
+            )
         if self.base_lead_ticks and self.base_indices:
             parts.append(
                 f"base lead tail ticks: from next chunk={self._next_filled_ticks}, "
@@ -936,6 +1268,17 @@ def attach_chunk_executor(policy, settings: ChunkExecutionSettings | None = None
             f"n_action_steps >= {2 * prefetch_ticks} (policy has {action_steps})"
         )
         prefetch_ticks = 0
+    rtc = settings.rtc
+    if rtc and not prefetch_ticks:
+        notes.append("RTC off: it needs the prefetch, which is off")
+        rtc = False
+    if rtc and not (
+        hasattr(policy, "init_rtc_processor") and hasattr(config, "rtc_config")
+    ):
+        notes.append(
+            f"RTC off: policy type {policy_type!r} has no RTC (flow matching only)"
+        )
+        rtc = False
     if prefetch_ticks and settings.base_lead_ticks >= prefetch_ticks:
         notes.append(
             f"{BASE_LEAD_TICKS_VARIABLE}={settings.base_lead_ticks} is not below "
@@ -944,11 +1287,16 @@ def attach_chunk_executor(policy, settings: ChunkExecutionSettings | None = None
             "inference lands (with the inline control too, when the lead is longer)"
         )
 
+    if rtc:
+        _enable_rtc(policy, prefetch_ticks, settings.rtc_max_guidance)
+
     executor = ChunkExecutor(
         policy,
         prefetch_ticks=prefetch_ticks,
         prefetch_inline=settings.prefetch_inline,
         base_lead_ticks=settings.base_lead_ticks,
+        rtc=rtc,
+        seam_blend_ticks=settings.seam_blend_ticks,
     )
     # Instance attributes shadow the class methods; the class is left untouched.
     policy.select_action = executor.select_action
@@ -957,10 +1305,49 @@ def attach_chunk_executor(policy, settings: ChunkExecutionSettings | None = None
     return executor, "; ".join(notes)
 
 
+# Mark a policy whose RTC we switched on: the rtc_config it had before, and the
+# parameters we froze.
+RTC_PREVIOUS_CONFIG_ATTRIBUTE = "_chunk_rtc_previous_config"
+RTC_TRAINABLE_ATTRIBUTE = "_chunk_rtc_frozen_parameters"
+
+
+def _enable_rtc(policy, prefix_ticks: int, max_guidance: float | None) -> None:
+    """Switch LeRobot's RTC on for the executor's prefetched inferences only.
+
+    The policy's own select_action refuses RTC, but the executor replaces it.
+    The parameters are frozen so that RTC's gradient step records nothing but
+    itself (and does not need the batch outside inference_mode).
+    """
+    from lerobot.policies.rtc.configuration_rtc import RTCConfig
+
+    values = {"enabled": True, "execution_horizon": prefix_ticks}
+    if max_guidance is not None:
+        values["max_guidance_weight"] = max_guidance
+    setattr(policy, RTC_PREVIOUS_CONFIG_ATTRIBUTE, policy.config.rtc_config)
+    policy.config.rtc_config = RTCConfig(**values)
+    policy.init_rtc_processor()
+    parameters = getattr(policy, "parameters", None)
+    if callable(parameters):
+        trainable = [parameter for parameter in parameters() if parameter.requires_grad]
+        setattr(policy, RTC_TRAINABLE_ATTRIBUTE, trainable)
+        for parameter in trainable:
+            parameter.requires_grad_(False)
+
+
 def detach_chunk_executor(policy) -> None:
     """Undo ``attach_chunk_executor`` (used when a loop cannot be set up)."""
     for name in ("select_action", "reset", "_chunk_executor"):
         policy.__dict__.pop(name, None)
+    if RTC_PREVIOUS_CONFIG_ATTRIBUTE in policy.__dict__:
+        policy.config.rtc_config = policy.__dict__.pop(RTC_PREVIOUS_CONFIG_ATTRIBUTE)
+        policy.init_rtc_processor()
+        model = getattr(policy, "model", None)
+        if policy.config.rtc_config is None and model is not None:
+            # pi0's init_rtc_processor leaves the model's copy in place when the
+            # config is None.
+            model.rtc_processor = None
+        for parameter in policy.__dict__.pop(RTC_TRAINABLE_ATTRIBUTE, ()):
+            parameter.requires_grad_(True)
 
 
 # ----- record_loop wiring --------------------------------------------------------
@@ -993,6 +1380,20 @@ def _action_index_by_name(dataset) -> dict[str, int]:
     except Exception:
         return {}
     return {name: names.index(name) for name in BASE_ACTION_NAMES if name in names}
+
+
+def _arm_joint_indices(dataset) -> tuple[int, ...]:
+    """Action indices of arm joints: everything but base channels and grippers."""
+    try:
+        names = list(dataset.features["action"]["names"])
+    except Exception:
+        return ()
+    return tuple(
+        index
+        for index, name in enumerate(names)
+        if name not in BASE_ACTION_NAMES
+        and not any(marker in name for marker in NON_ARM_JOINT_MARKERS)
+    )
 
 
 def _prepare_replay(policy, dataset, base_index_by_name, control_time_seconds=None):
@@ -1141,6 +1542,7 @@ def _prepare_loop(args, kwargs, attached_policies: list) -> _LoopState | None:
                 execution_log,
                 episode_label,
                 loop_label,
+                arm_indices=_arm_joint_indices(dataset),
             )
             executor_note = executor.describe() + (
                 f" ({executor_note})" if executor_note else ""

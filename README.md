@@ -524,6 +524,7 @@ uv run accelerate launch \
 | **`LEROBOT_BASE_VEL_LOG`** | Writes one CSV row per control-loop iteration pairing the base velocity the robot measured with the command written in that same iteration, tagged `policy` or `teleop`. A 14-dim eval dataset keeps the command but not the measurement, and base latency needs both. Off unless the variable names a path. | [below](#environment-variables) · [#43](https://github.com/kiro-ai-division/lerobot_trossen/issues/43) |
 | **`LEROBOT_BASE_SERIAL_REARM`** | Removes a 20 ms dead wait from each of the two base Modbus transactions per tick, caused by a `trossen_slate` 0.0.3 driver bug; on the robot 20.4 ms → 10.0 ms per transaction. On by default (#62); acts only in a policy phase at `--dataset.fps` ≤ 21. | [below](#base-serial-re-arm) |
 | **Base latency switches** (experimental) | Switches for two latency causes of base over-rotation during eval — the chunk boundary stall and the command-to-velocity lag — plus a demo replay bench, for A/B runs with one checkpoint. All off by default; with none set nothing is installed. | [below](#base-latency-switches) |
+| **Chunk seam smoothing** (experimental) | RTC guidance for the prefetched chunk and a quintic blend of the arm jump at each chunk swap, plus arm-seam columns in the execution log. Off by default. | [below](#chunk-seam-smoothing) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
 
 See the [LeRobot documentation](https://huggingface.co/docs/lerobot) and the [Trossen AI documentation](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin.html) for anything beyond this fork.
@@ -795,8 +796,9 @@ a few milliseconds apart.
   (together with `LEROBOT_CHUNK_PREFETCH_TICKS`) runs the identical schedule with the inference
   in the loop thread — same actions, stall kept — so prefetch vs inline isolates the stall. The
   prefetch alone is switched off (noted in the banner) for compiled models and for
-  `2k > n_action_steps`; temporal ensembling, RTC, and policy types other than ACT, pi0, pi0.5
-  and SmolVLA leave the policy untouched altogether (no lead, no log).
+  `2k > n_action_steps`; temporal ensembling, RTC set in the policy config, and policy types
+  other than ACT, pi0, pi0.5 and SmolVLA leave the policy untouched altogether (no lead, no log).
+  To use RTC with the prefetch, see [Chunk Seam Smoothing](#chunk-seam-smoothing).
 - **Choosing `d`**: `d ≈ lag × fps` — convert the lag in seconds, not ticks: 2–3 ticks at 21 Hz for
   this base's 0.10–0.16 s. Mobile ALOHA's `BASE_DELAY = 13` is 13 ticks at 50 Hz, i.e. 0.26 s of
   its own base's lag, about 5.5 ticks here.
@@ -838,6 +840,68 @@ uv run lerobot-record ... --policy.path=<checkpoint> --dataset.repo_id=<user>/ev
 - The replayed base labels are themselves measured velocities, so compare switch settings with
   each other rather than reading the error as absolute.
 
+## Chunk Seam Smoothing
+
+**Experimental, off by default, not yet measured on the robot.** Two switches for the arm jump
+where a prefetched chunk takes over. Use them together with the prefetch:
+
+| Switch | What it does |
+| ------ | ------------ |
+| `LEROBOT_CHUNK_RTC=1` | Steers the prefetched inference with LeRobot's Real-Time Chunking so that the new chunk's first `k` steps (dropped at the swap) follow the `k` actions the old chunk sends while it infers; step `k`, the first one executed, follows them through the model's conditioning (LeRobot 0.4.4 guides only the first `k`), so the jump shrinks but need not vanish. Needs `LEROBOT_CHUNK_PREFETCH_TICKS`; flow-matching policies only (pi0, pi0.5, SmolVLA). `LEROBOT_CHUNK_RTC_MAX_GUIDANCE=<w>` overrides LeRobot's guidance clip (default 10). |
+| `LEROBOT_CHUNK_SEAM_BLEND_TICKS=<m>` | At every swap, adds to the arm joints of the new chunk an offset that starts at the gap to the last sent command (position and per-tick velocity) and fades out along a quintic over at least `m` ticks — longer when the gap is large, up to 20 ticks (or `m` if larger), aiming to move no joint more than 0.1 rad per tick; a gap too large for that window exceeds it. Grippers and base are untouched. |
+
+```bash
+LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4 \
+LEROBOT_CHUNK_EXECUTION_LOG=~/eval_logs/pi0_rtc_blend.csv \
+uv run lerobot-record ... --dataset.fps=21 --dataset.repo_id=<user>/eval_<task>_rtc_blend \
+  2>&1 | tee ~/eval_logs/pi0_rtc_blend.log
+```
+
+- Pass criterion: the banner shows `RTC guidance on the first 12 steps` and `seam blend >= 4 ticks
+  on 12 arm joints` (`grep "Base latency switches" <log>`).
+- Compare with a run that has only `LEROBOT_CHUNK_PREFETCH_TICKS=12` and the execution log: the
+  columns below are logged either way.
+
+**Why** — with the prefetch, the new chunk comes from an observation `k` ticks old and its own
+noise sample, and the executor dropped its first `k` actions without matching the rest to what
+the arm was doing. In the 2026-09-25 pi0 eval (11 tasks, 52 episodes) 12% of arm swaps jumped
+more than 0.2 rad in one tick (largest 1.24 rad), against none in the same checkpoint's
+synchronous eval of 2026-09-22; ordinary ticks never exceeded 0.2 rad in either. All four
+velocity-limit trips during a policy phase came on the tick right after a swap. The two
+switches address different parts: RTC pulls the new plan onto the old one, the blend removes
+whatever jump is left (and cannot change which path the new chunk takes). Offline, with the
+real checkpoint on 140 recorded swaps of that eval (same noise with and without RTC), RTC cut
+the arm jump at the first executed step from median 0.22 / max 1.13 rad to 0.07 / 0.21 rad,
+at +12 ms per inference on an RTX A6000 (126 → 138 ms median).
+
+**Reading** — `LEROBOT_CHUNK_EXECUTION_LOG` gains five columns, filled on swap ticks, arm joints
+only, radians:
+
+- `arm_seam_raw` — how far the new chunk's first executed action is from the last sent one, i.e.
+  the jump without the blend; `arm_seam_joint` is its action index.
+- `arm_seam_sent` — the jump actually sent; `blend_ticks` — the window used (0 when off).
+- `prefix_gap` — with the prefetch, the largest gap between the new chunk's first `k` steps
+  (dropped at the swap) and what the old chunk sent at those ticks. Without RTC this measures
+  how far the two plans disagree; RTC steers it toward zero.
+
+The episode summary line adds their medians and maxima.
+
+**Caveats**
+
+- RTC is switched on inside the executor: the policy config needs no RTC flag (setting one
+  yourself still leaves the policy untouched, as before). Switching it on freezes the policy's
+  parameters and runs guided inferences outside `inference_mode`, because RTC takes a gradient
+  with respect to the noisy actions; LeRobot 0.4.4's guidance treats the denoiser as constant, so
+  that gradient is one elementwise step.
+- Guided inference is slower; the episode summary's `inference` and suggested
+  `LEROBOT_CHUNK_PREFETCH_TICKS` show whether 12 still covers it.
+- With pi0's `chunk_size = n_action_steps = 50` the whole overlap is the `k` ticks the old chunk
+  runs during the inference, so RTC fixes those steps outright (no soft-weighted tail).
+- The blend offsets are computed in normalized action space and converted with the
+  postprocessor's scale, so the 0.1 rad target is in joint radians. At a 4-tick window the
+  first sent step carries about 3/4 of a velocity difference between the chunks; the window
+  controls the position jump.
+
 ## Upstream flags (not fork changes)
 
 ### Optional Observation Features
@@ -869,7 +933,10 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_CHUNK_PREFETCH_INLINE` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: same schedule, inference kept in the loop thread (control arm) |
 | `LEROBOT_BASE_LEAD_TICKS` | unset (off) | Integer `d`: send the base's action `d` ticks ahead of the arms' |
 | `LEROBOT_REPLAY_DATASET` · `LEROBOT_REPLAY_EPISODES` · `LEROBOT_REPLAY_RUN_POLICY` | unset (off) · all episodes · `1` | Replay bench: demo repo id, episode list, whether the checkpoint's real inference still runs |
-| `LEROBOT_CHUNK_EXECUTION_LOG` | unset (off) | Path of a per-tick CSV of the chunk schedule and base commands |
+| `LEROBOT_CHUNK_EXECUTION_LOG` | unset (off) | Path of a per-tick CSV of the chunk schedule, base commands and arm seams |
+| `LEROBOT_CHUNK_RTC` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: steer the prefetched chunk toward the old chunk's remaining actions → [Chunk Seam Smoothing](#chunk-seam-smoothing) |
+| `LEROBOT_CHUNK_RTC_MAX_GUIDANCE` | unset (10) | RTC guidance clip |
+| `LEROBOT_CHUNK_SEAM_BLEND_TICKS` | unset (off) | Integer `m`: fade the arm jump at each swap over at least `m` ticks |
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
 camera frames CPU-side and only then copies them to the GPU, shipping 4× the bytes over PCIe

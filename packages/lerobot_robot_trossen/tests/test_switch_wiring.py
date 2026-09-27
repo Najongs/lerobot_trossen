@@ -239,6 +239,11 @@ def test_csv_header_is_pinned():
         "planned_theta_vel",
         "sent_x_vel",
         "sent_theta_vel",
+        "arm_seam_raw",
+        "arm_seam_joint",
+        "arm_seam_sent",
+        "blend_ticks",
+        "prefix_gap",
     )
 
 
