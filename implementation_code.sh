@@ -156,53 +156,36 @@ uv run --extra pi0 python scripts/record_ensemble.py \
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# ACT 태스크 전문가 평가 — temporal ensembling 필수  (2026-09-25)
+# ACT 평가 — 앙상블 쓰지 않음, 기본 n_action_steps=30  (2026-10-02 정정)
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# SmolVLA 와 별개로 task01/02/03 전담 ACT 를 구웠다. ACT 는 52M 라 SmolVLA(450M)의 1/9,
-# 추론도 훨씬 빨라 매 스텝 재질의해도 30Hz 를 지킨다.
+# ⛔ 2026-09-25 판의 「temporal_ensemble_coeff 를 반드시 켤 것」 은 철회한다.
+#    근거 표(청크30 팔MAE 0.198 / 앙상블 0.0073)는 채점 스크립트가 정규화(pre())를 빠뜨리고
+#    학습 에피소드로 채점하던 시절 값이다 (trossen-ai-simulation docs §20·§21·§37: 앙상블 조건의
+#    회전은 「state 를 그대로 베끼는 정책」 도 0% 를 받는 퇴화 지표였다).
+#    실기 A/B 에서도 앙상블은 루프를 19.96 → 15.81 Hz 로 늦춰 과회전 1.02 → 1.29× 였다
+#    (조직 README §Eval, PR #53) — 조직 main 은 이미 기본 명령에서 뺐다.
 #
-# 🔑 **--policy.temporal_ensemble_coeff 를 반드시 켤 것.** 오프라인 롤아웃 실측에서
-#    회전 오차가 27% -> 3~5% 로 줄었다 (task01 은 2%). 학습을 건드리지 않는 추론 설정이다.
+# 지금 기준 (trossen-ai-simulation docs/real_robot_eval.md 가 정본):
+#   - --policy.temporal_ensemble_coeff 는 주지 않는다. (n_action_steps>1 과 같이 주면 로드에서 죽는다)
+#   - --policy.n_action_steps 는 기본 30. exec=5 는 녹화 재생 채점에서는 좋았지만 재생 폐루프
+#     근사에서는 오히려 나빴다(docs §84) — 실기 A/B(task04·05, 30 vs 5)로 정한다.
+#   - --dataset.fps=21 필수 (조직 README §3-3).
+#
+# 11단계 단일 ACT (state 27D = 팔14 + 베이스0 2칸 + 단계 원핫 11) 는 LEROBOT_TASK_ONEHOT 이 필요하다:
 #
 #   cd ~/lerobot_trossen
-#   uv run --extra pi0 lerobot-record \
-#     --policy.path=/home/trossen-ai/daehee/models/act_task03/pretrained_model \
-#     --policy.temporal_ensemble_coeff=0.01 \
-#     --policy.n_action_steps=1 \
-#     --robot.type=mobileai_robot \
-#     ... (로봇/카메라/teleop 인자는 SmolVLA 명령과 동일) \
-#     --dataset.single_task="Turn in place to face the beaker"
+#   LEROBOT_TASK_ONEHOT=4/11 uv run lerobot-record \
+#     --policy.path=<act_all11_hot_27D_120k_s1000>/pretrained_model \
+#     --policy.n_action_steps=30 \
+#     --robot.type=mobileai_robot --robot.enable_base_motor_torque=true \
+#     ... (로봇/카메라/teleop 인자는 조직 README §3-3 과 동일) \
+#     --dataset.repo_id=kiroaiseoul/eval_act_all11_t4_e30_<회차> \
+#     --dataset.fps=21
+#   → 로그에 「LEROBOT_TASK_ONEHOT=4/11 installed」 와 「stage 4/11 active」 가 없으면 즉시 중단.
 #
-# ⚠️ ACT 는 temporal_ensemble_coeff 를 쓰면 n_action_steps==1 을 강제한다
-#    (configuration_act.py:148). 둘을 같이 줘야 한다.
-# ⚠️ record_ensemble.py 는 **필요 없다.** 그건 SmolVLA 가 앙상블을 지원하지 않아 만든
-#    패치다. ACT 는 lerobot 이 네이티브로 갖고 있으므로 stock lerobot-record 를 쓴다.
-#
-# ── 왜 앙상블이 필요한가 (실측 근거) ──────────────────────────────────────────
-#
-# task03 60k 체크포인트, 기록된 에피소드 10개를 끝까지 재생한 결과:
-#
-#   실행 방식                        팔 MAE    회전 절대오차   총회전 비율
-#   청크 30 열고 진행 (기본)          0.198     15.3° (27%)    0.88  (덜 돔)
-#   매 스텝 재질의, 앙상블 없음        0.206     24.6° (44%)    1.29  (과회전)
-#   매 스텝 재질의 + 앙상블           0.0073     2.7° (5%)     1.01
-#
-# **재질의만 자주 하면 오히려 나빠진다.** 매 프레임 재질의하면 청크 앞부분만 반복
-# 실행되는데 거기가 속도 절정이라 과회전한다. 앙상블이 겹친 청크를 평균해 상쇄한다.
-# coeff 는 +0.01 / 0.0 / -0.01 이 소수점까지 같았다 -- 가중 방식이 아니라 **평균한다는
-# 사실 자체**가 핵심이므로 논문 기본값 0.01 을 쓰면 된다.
-#
-# ⚠️ 위 수치는 **기록된 관측**을 재생한 것이다. 실기는 정책 출력이 다음 관측을 바꾸는
-#    진짜 폐루프라 오차가 더 클 수 있다. 세 설정을 같은 조건에서 비교했으므로
-#    상대 순위는 유효하지만, 절대값을 기대치로 삼지 말 것.
-#
-# 체크포인트 가져오기:
-#   DST=/home/trossen-ai/daehee/models/act_task03
-#   mkdir -p $DST
-#   scp -r kiro-ai@172.16.201.166:/raid/kiro-ai/outputs/act/task03/checkpoints/060000/pretrained_model $DST/
-#
-# 배경: trossen-ai-simulation/docs/mobile_base_investigation.md Part 2
+# 단계 번호표·모델 목록·평가 순서: trossen-ai-simulation/docs/real_robot_eval.md
+# ⚠️ record_ensemble.py 는 SmolVLA 전용이다. ACT 는 stock lerobot-record 를 쓴다.
 
 
 # ═══════════════════════════════════════════════════════════════════════════
