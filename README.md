@@ -902,6 +902,39 @@ The episode summary line adds their medians and maxima.
   first sent step carries about 3/4 of a velocity difference between the chunks; the window
   controls the position jump.
 
+## Stage One-Hot for Multi-Stage ACT
+
+`trossen-ai-simulation` trains one ACT over several stages and tells it which stage it is in
+through a one-hot appended to the state (`scripts/train_multi.py`, `task_onehot`), with the two
+base slots of the state trained as zeros (`base_state: zero`). Such a checkpoint declares
+`observation.state` as `16 + K` (27 for the 11-stage model, 20 for the 4 locomotion stages),
+which the robot cannot produce, so it fails in the normalizer on the first frame.
+
+`LEROBOT_TASK_ONEHOT=<stage>/<K>` inserts one step into the policy preprocessor just before the
+normalizer that builds `[arms 0..13, 0, 0, one_hot(stage, K)]` from the robot's 14- or 16-wide
+state. The base slots are always exact zeros -- measured base velocity never reaches the policy.
+The eval dataset keeps the robot's own state.
+
+```shell
+LEROBOT_TASK_ONEHOT=2/11 uv run lerobot-record ... --policy.path=<11-stage ckpt> --dataset.fps=21
+```
+
+- One stage per run; the stage number is the dataset's task number (task02 = `2/11`). For the
+  4-stage locomotion model the order is task01, task03, task06, task10 (`1/4`..`4/4`).
+- A malformed value or a checkpoint whose width is not `16+K` raises from
+  `make_pre_post_processors`, which `lerobot-record` calls **before** `robot.connect()`.
+  A robot state that is neither 14 nor 16 wide (`include_velocity`/`include_effort` on) raises on the
+  first frame -- after the arms' connect motion, before any policy action.
+- Check a run with `grep LEROBOT_TASK_ONEHOT <run log>` (`installed`, then `stage i/K active`).
+  **If `installed` is missing, stop** -- an install failure only warns (raising would unregister the
+  plugin) and the run then dies in the normalizer on the first frame.
+- Only the `lerobot-record` entry point is patched. `stage_runner` and `python -m
+  lerobot.scripts.lerobot_record` bypass it; call `insert_task_onehot(pre, policy_cfg, stage, k)` there.
+- Columns 0..13 are taken as the arms. That holds for checkpoints trained on `mobileai_robot`
+  recordings (arms, then `x.vel`, `theta.vel`); not for base-first (MuJoCo teleop) data.
+- Verified offline against the training-side conversion: identical action chunks (max |diff| 0)
+  for stages 1, 2, 6, 11 with 14- and 16-wide robot state. Not yet run on the robot.
+
 ## Upstream flags (not fork changes)
 
 ### Optional Observation Features
@@ -937,6 +970,7 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_CHUNK_RTC` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: steer the prefetched chunk toward the old chunk's remaining actions → [Chunk Seam Smoothing](#chunk-seam-smoothing) |
 | `LEROBOT_CHUNK_RTC_MAX_GUIDANCE` | unset (10) | RTC guidance clip |
 | `LEROBOT_CHUNK_SEAM_BLEND_TICKS` | unset (off) | Integer `m`: fade the arm jump at each swap over at least `m` ticks |
+| `LEROBOT_TASK_ONEHOT` | unset (off) | `<stage>/<K>` (1-based, e.g. `2/11`): widens the policy state to `[arms, 0, 0, one_hot]` for multi-stage ACT checkpoints whose `observation.state` is `16+K` wide → [Stage One-Hot for Multi-Stage ACT](#stage-one-hot-for-multi-stage-act) |
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
 camera frames CPU-side and only then copies them to the GPU, shipping 4× the bytes over PCIe
