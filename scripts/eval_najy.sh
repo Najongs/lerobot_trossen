@@ -97,7 +97,7 @@ fi
 if [[ -n "$ONEHOT" ]]; then
   P=packages/lerobot_robot_trossen/src/lerobot_robot_trossen
   if ! grep -q "^apply_task_onehot_patch()" "$P/__init__.py" 2>/dev/null; then
-    echo "!! 이 체크아웃에 원핫 패치가 없다 -- git fetch najongs && git merge --ff-only najongs/main && uv sync" >&2; exit 3
+    echo "!! 이 체크아웃에 원핫 패치가 없다 -- git pull --ff-only && uv sync  (Najongs/lerobot_trossen main)" >&2; exit 3
   fi
   uv run python - "$P/task_onehot_patch.py" "$ONEHOT" <<'PY'
 import importlib.util, sys
@@ -131,7 +131,8 @@ CMD=(uv run lerobot-record
   --dataset.episode_time_s=120
   --dataset.reset_time_s=90
   "--dataset.num_episodes=$EPISODES"
-  --dataset.fps=21)
+  --dataset.fps=21
+  --dataset.push_to_hub=false)
 
 # 베이스 명령·실측 CSV 는 순수 기록이라 항상 켠다. 청크 실행 로그는 청크 실행기 자체를 설치해
 # 실행 경로가 바뀌므로 기본은 끈다 -- 필요하면 CHUNK_LOG=1.

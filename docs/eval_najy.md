@@ -7,8 +7,8 @@ DGX_1 에서 학습한 다단계 ACT(11단계 단일 모델 등)를 로봇에서
 ## 시작 전 (한 번)
 
 ```shell
-cd ~/lerobot_trossen
-git fetch najongs && git merge --ff-only najongs/main && uv sync
+cd ~/NAJY/lerobot_trossen          # Trossen PC1 의 실기 체크아웃 (홈의 ~/lerobot_trossen 아님 — 원핫 패치가 없다)
+git pull --ff-only && uv sync
 grep -n "^apply_task_onehot_patch()" packages/lerobot_robot_trossen/src/lerobot_robot_trossen/__init__.py   # 한 줄 나와야 한다
 ```
 
@@ -54,7 +54,7 @@ grep -n "^apply_task_onehot_patch()" packages/lerobot_robot_trossen/src/lerobot_
 ```shell
 scripts/eval_najy.sh M1 4 30 3
 ```
-task04(붓기)는 베이스가 거의 정지하고, 오프라인 폐루프 근사에서 유일하게 완주율이 높았다(0.92).
+task04(붓기)는 베이스가 거의 정지하고, 오프라인 폐루프 근사에서 유일하게 진행도가 높았다(exec 30 에서 0.97, `mobile_base_investigation.md` §84 — 실기 성공률의 예측은 아니다).
 **통과**: `installed`·`stage 4/11 active` 확인 · 팔이 시연과 같은 방향으로 움직임 · 요약의 `mean` Hz 가 0-1 녹화 주기의 ±10% 안.
 **멈춤**: 팔이 엉뚱한 관절로 가면(정규화·원핫 오류 신호) 즉시 비상정지하고 로그를 보낸다.
 
@@ -93,7 +93,7 @@ state 가 16D 이고 베이스 칸의 의미(진행도?)를 확인하지 못했�
 ```shell
 for s in 2 7 8 9 11; do scripts/eval_najy.sh M1 $s <E>; scripts/eval_najy.sh M2 $s <E>; done
 ```
-오프라인에서는 M2 가 조작 3단계 모두 나았고(task08 0.0186 vs 0.0349 rad), 11단계 모델이 단계별 조작 ACT 를 3~10배 이겼다.
+오프라인에서는 M2 가 조작 3단계 모두 나았고(task08 0.0186 vs 0.0349 rad), 11단계 모델이 단계별 조작 ACT 보다 팔 MAE 가 33~63% 낮았다(task02 0.0309 vs 0.0839, §85 — 「3.0~10.2×」 는 개선폭을 시드폭으로 나눈 값이지 오차 비가 아니다).
 기존 전문가가 있는 단계는 B* 도 같은 회차에 — `kiroaiseoul/act_task04_pour_liquid_from_tubes_to_beaker_60000`,
 `kiroaiseoul/act_task05_tube_disposal_60000` (둘 다 state 16D·chunk 100, 베이스 실측 속도를 state 에 넣고 학습된 구세대).
 
