@@ -6,6 +6,7 @@ from .mobileai import MobileAIRobot
 from .config_mobileai import MobileAIRobotConfig
 from .fast_obs_patch import apply_fast_observation_patch
 from .loop_rate_log import apply_loop_rate_logging_patch
+from .chunk_execution_patch import apply_chunk_execution_patch
 
 # On by default; set LEROBOT_FAST_OBS=0 to opt out. lerobot imports this package
 # on startup (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is
@@ -16,3 +17,9 @@ apply_fast_observation_patch()
 # upstream's per-frame fps warning). Same import timing as above, which is early
 # enough to wrap record_loop before record() resolves it.
 apply_loop_rate_logging_patch()
+
+# Off by default; installed only when a base latency switch is set
+# (LEROBOT_CHUNK_PREFETCH_TICKS, LEROBOT_BASE_LEAD_TICKS, LEROBOT_REPLAY_DATASET,
+# LEROBOT_CHUNK_EXECUTION_LOG and their companions). Must run after the loop
+# rate patch: it wraps that wrapper rather than replacing it.
+apply_chunk_execution_patch()
