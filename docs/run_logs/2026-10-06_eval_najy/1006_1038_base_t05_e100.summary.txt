@@ -1,0 +1,7 @@
+== 1006_1038_base_t05_e100 종료 코드 (미기록 -- rerun 뷰어가 파이프를 잡아 요약 단계 전에 중단. 10/06 Claude 가 같은 grep 으로 재구성. lerobot 은 'Exiting' 정상 종료) · 팔 한 틱 상한 none(옵션 도입 전)
+-- 루프 주기 (phase=policy 마지막 3줄 -- mean·min 을 녹화 주기와 비교)
+INFO 2026-10-06 10:39:27 rate_log.py:221 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=19.1 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+INFO 2026-10-06 10:39:28 rate_log.py:221 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=26ms
+INFO 2026-10-06 10:39:30 rate_log.py:221 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.1 Hz, min=19.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+-- 팔 페이싱 발동 횟수: 3
+-- 베이스 시리얼 재등록: WARNING 2026-10-06 10:39:14 al_rearm.py:160 LEROBOT_BASE_SERIAL_REARM: active for this policy loop at 21 fps (fd 51 -> /dev/ttyUSB0).

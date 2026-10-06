@@ -1,77 +1,53 @@
-# 인수인계 — trossen-ai-simulation 세션 → lerobot_trossen (2026-10-06, DGX_1)
+# 인수인계 — DGX_1 에서 이 레포를 열 때 (2026-10-06)
 
-`trossen-ai-simulation`(DGX_1)에서 09-26~10-06 에 한 주행·11단계 정책 조사와 실기 준비를 **이 레포에서 이어 가기 위한** 문서다.
-여기서 시작하는 세션은 이 문서 → [`eval_najy_session_guide.md`](eval_najy_session_guide.md) → [`eval_najy.md`](eval_najy.md) 순서로 읽는다.
-학습·오프라인 판정의 정본은 private 레포 `Najongs/trossen-ai-simulation` 의 `docs/mobile_base_investigation.md`(§1~87, 2호기 S2-1~27)다.
+`trossen-ai-simulation`(DGX_1)에서 09-26~10-06 에 한 주행·11단계 정책 조사·실기 준비를 **DGX_1 의 이 체크아웃**
+(`/home/kiro-ai/NAJY/lerobot_trossen`)에서 이어 가기 위한 문서다. 로봇 PC(Trossen PC1)에서 연 세션에는 해당이 적다.
 
-## 1. 결론 — 지금 무엇을 쓰고 무엇을 안 쓰나
+**현황·결론은 [`najy_overview.md`](najy_overview.md) 가 정본이다** (학습 결론 9개, 10/02·10/06 실기 결과, 다음 순서, 위치). 여기서 반복하지 않는다.
+이 문서는 overview 에 없는 **DGX 쪽 사정**만 적는다: DGX 의 산출물 경로, 오프라인 도구, DGX 가 맡을 일, 주의사항.
+읽는 순서: `CLAUDE.md` → [`najy_overview.md`](najy_overview.md) → 이 문서 → 가장 최근 `eval_najy_results_<MMDD>.md` 의 「다음」.
 
-| 항목 | 결정 | 근거 (trossen-ai-simulation docs) |
-|---|---|---|
-| 정책 | **ACT** (SmolVLA 아님) — 같은 조건에서 3/4 태스크 우세, 추론 18배 빠름 | §64·§74·§77, S2-22·24 |
-| 모델 구성 | **11단계를 한 모델로** (단계 원핫 입력). 이동·조작 모두 단계별 모델보다 같거나 낫다(오프라인) | §82·§83·§85, S2-26 |
-| state 베이스 칸 | **0 (14D 학습)** — 속도를 넣으면 실연자 속도를 베낀다 | §58~61, S2-15·16 |
-| 실행 주기 exec | **30** — 실기 task04 에서 exec 5 는 팔이 멈췄다. 시간 앙상블 금지 | §84·§87 |
-| 학습 길이 | 11단계 120K (60K 에선 task01·06 이 밀림) | §83 |
-| 오프라인 지표 | 녹화 재생(teacher-forced) 팔/베이스 MAE 는 **모델 간 순위 참고용**. 실행 설정·실기 성공 예측에 쓰지 않는다 (실기에서 두 번 틀림) | §84·§87 |
-| 데이터 | 최대 레버는 그 단계 자신의 에피소드. 다른 현장(GIST)·서드파티 섞기는 해롭다 | §72·§80, §65 |
+## 1. DGX_1 에 있는 것
 
-## 2. 만들어 둔 것 — 위치
-
-| 무엇 | 어디 |
+| 무엇 | 경로 |
 |---|---|
-| 배포 모델 3개 (퍼블릭 HF, 원본과 sha256 일치) | `kiroaiseoul/NAJY_act_all11_hot_27D_120k_s1000` (M1) · `…_s2000` (M2) · `kiroaiseoul/NAJY_act_move4_hot_20D_60k_s1000` (M3) |
-| 같은 모델 DGX 사본 + 체크섬 | `/raid/kiro-ai/deploy/<이름>/` |
-| 원본 체크포인트 | `/raid/kiro-ai/outputs/act/exp_all11_hot_s{1000,2000}/checkpoints/120000` · `exp_move4_hot60k_s1000/checkpoints/060000` |
-| 실기 원핫 패치 `LEROBOT_TASK_ONEHOT` | 이 레포 `packages/lerobot_robot_trossen/src/lerobot_robot_trossen/task_onehot_patch.py` (README 「Stage One-Hot」) — 학습측 변환과 비트 동일(오프라인), codex 교차 검토 반영 |
-| 실기 회차 스크립트 · 분석 스크립트 | `scripts/eval_najy.sh` · `scripts/eval_motion_stats.py`(로봇 쪽 작성) · `scripts/eval_latency_stats.py` |
-| 실기 순서표 · 세션 안내 · 결과 | `docs/eval_najy.md` · `docs/eval_najy_session_guide.md` · `docs/eval_najy_results_1002.md` |
-| 오프라인 채점 도구 (trossen-ai-simulation) | `scripts/eval_rollout.py`(녹화 재생) · `scripts/closedloop_act.py`(재생 폐루프 근사, `--lag` `--start-offset` `--perfect`) · `scripts/eval_baseline.py` |
-| 오프라인 결과 JSON | `/raid/kiro-ai/eval/` — `A11_s*_*_{60k,120k}.json`(녹화 재생) · `CL2_*`(폐루프 근사) · `CLso_*`(시작 자세 민감도) |
-| 보고서 | trossen-ai-simulation `docs/report.html` = 웹 「주행 ACT 실험 현황판」 (claude.ai artifact, 비공개) |
-| 볼트 | research_vault `research/ACT_Trossen.md` 갱신 로그 · CLM-20261002-trossen-exec-decide-on-robot-pcn8 · CLM-20261002-trossen-onehot-act-real-robot-rule-5m8p 등 (PR #103·#105) |
+| 배포 모델 원본 체크포인트 | `/raid/kiro-ai/outputs/act/exp_all11_hot_s{1000,2000}/checkpoints/120000` (M1·M2) · `exp_move4_hot60k_s1000/checkpoints/060000` (M3) |
+| 허브 업로드본과 바이트 동일한 사본 + `SHA256SUMS` + 학습 매니페스트 | `/raid/kiro-ai/deploy/act_all11_hot_27D_120k_s{1000,2000}/` · `act_move4_hot_20D_60k_s1000/` |
+| 학습 데이터 (lerobot 0.4.1 v2 형식) | `/raid/kiro-ai/lerobot/kiroaiseoul/task0N_*` (11단계 원본) |
+| 학습·평가 코드 | `/home/kiro-ai/NAJY/trossen-ai-simulation` — `scripts/train_multi.py`(원핫·`base_state`·`balance`), 매니페스트 `configs/datasets/all11_*.json` |
+| 녹화 재생 채점 | `trossen-ai-simulation/scripts/eval_rollout.py` (`--self-base`, `--exec`, PROBE 교란) |
+| 재생 폐루프 근사 | `trossen-ai-simulation/scripts/closedloop_act.py` (`--lag 2` = 실측 팔 지연, `--start-offset`, `--perfect` 검증) |
+| 오프라인 결과 JSON | `/raid/kiro-ai/eval/` — `A11_s*_*_{60k,120k}.json`(녹화 재생) · `CL2_*`(폐루프, 조작 7단계 exec 30/10/5/1) · `CLso_*`(시작 자세 민감도) |
+| 원핫 패치 동치 검사 (로봇 SDK 없이) | 패치 파일만 경로로 로드해 학습측 변환과 action chunk 를 비교 — 방식은 `docs/run_logs/2026-10-06_eval_najy/onehot_sens.py` 와 같다 |
 
-## 3. 실기 현황 (10/02, Trossen PC1)
+## 2. DGX 가 맡을 일 (overview §4 의 2번)
 
-- **0단계 기준선은 10/02 에 이미 쟀다** (`~/eval_logs/1002_step0_baseline.txt`, 로봇 PC): 텔레옵 녹화 20.9 Hz · 베이스 I/O 40.5 ms/프레임(상한 약 25 Hz) ·
-  베이스 t63 회전 325 ms(t90 529) / 전진 163 ms(t90 285) · 정상상태 비 회전 1.064, 전진 0.954. 팔의 실기 지연은 아직 없다
-  (학습 데이터에서는 state 가 action 을 2틱 늦게 따라간다).
-- M1 task04 exec 30 **1/1 성공**, exec 5 0/2(정지) → exec 30 확정. task05 는 M1·M2 정지, 기존 전문가 1/3.
-- DGX 근사: 팔 state 의 시작 자세를 0.35~0.7 rad 옮겨도 출력이 거의 안 변한다 → 시작 자세가 원인이면 **영상 경로**(손목 카메라에 보이는 것).
-  그래서 순서표에 단계별 학습 시작 자세 표와 「허용」 거리를 넣었다.
-
-## 4. 해야 할 일
-
-### 사람 — 로봇에서 (명령은 Claude 가 만들어 넘긴다)
-`docs/eval_najy.md` 순서대로: **A**(10/02 기록으로 지연 계산 — 로봇 무접촉) → **C**(task05 원인 가르기: 자세 맞춰 B* exec 100 · M1 · M2 각 3ep)
-→ **D**(M1 exec 30, 11단계 각 3ep, 조작→이동) → **E**(실패 단계만 M2·M3·B* 비교) → **F**(단계별 승자). B 는 10/02 에 끝났다.
-
-### Claude — DGX_1 에서 (데이터가 오면)
-1. **실기 원자료 분석** — 사람이 `~/eval_logs` 와 `eval_najy_*` 데이터셋을 `/raid/kiro-ai/eval/real/` 로 옮기면:
-   - 실패 회차의 실제 프레임(영상+state)을 같은 체크포인트에 다시 넣어 예측 청크를 본다 — 예측 자체가 「정지」 인가(장면 차이),
-     예측은 움직이는데 실행이 멈추나(실행 쪽). 도구는 아직 없다 — `trossen-ai-simulation/scripts/eval_rollout.py` 의 `rollout()` 과
-     `_eo.load_policy`·`tm.apply_task_onehot` 를 재사용해 「eval 데이터셋 한 에피소드를 teacher-forced 로 재생」 하면 된다
-     (eval 데이터셋 state 는 14D 라 원핫 붙이기 전에 베이스 0 2칸을 끼워 16D 로 만든다).
-   - 장면 차이 정도: 실기 첫 프레임과 학습 첫 프레임들의 영상 거리(예: ACT 백본 특징의 최근접 거리)를 단계별로.
-2. 결과를 trossen-ai-simulation `docs/mobile_base_investigation.md` 새 절과 이 레포 `docs/eval_najy_results_<MMDD>.md` 양쪽에 남긴다.
+1. **원핫이 실제로 단계를 고르게 만들기** — 10/06 실기·오프라인 교란에서 M1 은 원핫보다 카메라·팔 시작 자세로 단계를 정했다(task05 자리에서 task04 를 함).
+   사람 결정: 시작 자세로 단계를 맞추는 우회는 채택하지 않는다. 학습 쪽 대책은 아직 설계 전이다. 후보와 먼저 잴 것:
+   - 진단: 단계 쌍(task04↔05 처럼 앞 단계 끝 = 다음 단계 시작)별로 원핫 교환 vs 영상·state 교환의 청크 변화비를 전 11단계에 대해 잰다
+     (로봇 쪽 `onehot_sens.py` 를 trossen-ai-simulation 데이터로). 어느 단계 쌍이 원핫만으로 갈리지 않는지 목록부터.
+   - 학습 대책 후보 (설계 후 사용자 승인): ① 경계 구간 증강 — 앞 단계 마지막 N프레임을 다음 단계 원핫으로 「아무것도 안 함/다음 동작 시작」 라벨과 섞는다,
+     ② 원핫을 state 끝 1칸 대신 더 강한 조건으로(FiLM 등 — ACT 구조 변경이라 비용 큼), ③ 원핫 드롭아웃의 반대 — 영상 일부를 가리고 원핫으로 맞히게.
+     어느 것도 아직 재지 않았다. 1·2호기 기록에 같은 시도가 없다(원핫은 「성능 레버 아님」 으로만 판정됐다, §74·S2-18).
+2. **fps 단서 확인** — 학습 데이터는 fps 30 으로 표기돼 있지만 실제 녹화 루프는 약 21 Hz 였을 수 있다(타임스탬프가 합성값).
+   그러면 명령 적분 회전량이 −57°(30 기준) 가 아니라 −81°(21 기준)다. 실기 이동 단계(D) 해석에 필요하다. 녹화 런 로그(로봇 PC)나
+   영상 프레임 간 시각 변화로 가를 수 있는지 본다.
+3. **실기 원자료 분석** — 사람이 로봇 PC 의 `~/eval_logs`·`eval_najy_*` 데이터셋을 `/raid/kiro-ai/eval/real/` 로 옮기면, 실패 회차의 실제 프레임을
+   같은 체크포인트에 넣어 「예측 자체가 정지/다른 단계인가」 를 본다(`eval_rollout.py` 의 `rollout()` 재사용, eval state 14D 에 베이스 0 2칸을 끼워 16D 로).
+4. 결과는 trossen-ai-simulation `docs/mobile_base_investigation.md` 새 절(§88~)과 이 레포 `eval_najy_results_<MMDD>.md` 또는 overview 에 남긴다.
 
 ### 제안만 해 둔 것 (사용자 승인 전 — 하지 마라)
-- 영상 증강을 켠 11단계 ACT 재학습(1시드·120K) — 실기 장면 차이에 대한 보험. 오프라인에선 증강 효과가 판정 불가였다(§61).
-- 학습 시작 자세로 팔을 보내는 리셋 스크립트 — 로봇을 움직이는 코드라 작성 후 codex 교차 검토, 실행은 사람.
+- 영상 증강을 켠 11단계 ACT 재학습 — 실기 장면 차이 보험(오프라인에선 판정 불가였다, §61).
 - 원핫 패치를 조직 레포(kiro-ai-division)에 PR — 사용자 지시는 「Najongs fork main 에 직접」.
-- 11단계 연속 실행(`stage_runner`, PR #48 미머지) — 리베이스·fps 21 타이머·원핫 전달 필드가 필요.
-- 데이터 추가 수집 우선순위 task01·10·03(이동), 조작은 task02(에피소드가 가장 적다) — 사람 결정.
+- 데이터 추가 수집 — 최대 레버, 사람 결정 대기 (overview §4.3).
 
-### 사람 — 행정
-- 조직 Google 시트 「모델 체크포인트」 에 NAJY_ 3개 등록 (Claude 접근 불가).
+## 3. DGX 에서 이 레포를 열 때 주의
 
-## 5. DGX_1 에서 이 레포를 열 때 주의
-
-- 원격이 둘이다: `origin` = kiro-ai-division(조직, **push 금지**), `najongs` = Najongs fork(**여기로 push**, main 직접). 로봇 PC 체크아웃은
-  `origin` 이 fork 하나뿐이다 — 문서·스크립트에 remote 이름을 박지 마라 (메모리 push-to-najongs).
-- DGX 의 `.venv` 는 lerobot 0.4.4. **`import lerobot_robot_trossen` 은 로봇 SDK(trossen_slate)까지 불러온다** — DGX 에서 테스트할 때는
-  `task_onehot_patch.py` 처럼 파일 경로로 모듈만 로드한다. `eval_najy.sh` 는 `DRY_RUN=1` 로만.
-- 학습·오프라인 채점은 이 레포가 아니라 `/home/kiro-ai/NAJY/trossen-ai-simulation` 에서 `uv run` 한다 (lerobot 0.4.1, `HF_HUB_OFFLINE=1`,
-  데이터 `/raid/kiro-ai/lerobot/kiroaiseoul/…`). GPU·디스크 규칙은 전역 host.md(DGX_1).
-- 로봇 PC 가 push 하는 결과 문서를 받으려면 `git fetch najongs && git merge --ff-only najongs/main`.
-- 2호기(sandia)는 실험을 마무리했다(S2-27). 체크포인트는 sandia 로컬에만 있고 옮기지 않는다.
+- 원격이 둘이다: `origin` = kiro-ai-division(조직, **push 금지**), `najongs` = Najongs fork(**여기로**, main 직접). 로봇 PC 체크아웃은
+  `origin` 이 fork 하나뿐이다 — 문서·스크립트에 remote 이름을 박지 마라. 받기: `git fetch najongs && git merge --ff-only najongs/main`.
+- 로봇 PC 세션이 같은 문서(`eval_najy*.md`, overview, CLAUDE.md)를 수시로 고친다 — **고치기 전에 받고**, 충돌 나면 더 최근 실측을 남긴다.
+- DGX 의 `.venv` 는 lerobot 0.4.4. **`import lerobot_robot_trossen` 은 로봇 SDK(trossen_slate)까지 불러온다** — 모듈 하나를 파일 경로로만 로드한다.
+  `scripts/eval_najy.sh` 는 `DRY_RUN=1` 로만, `measure_base.py` 는 실행하지 않는다.
+- 학습·오프라인 채점은 이 레포가 아니라 `trossen-ai-simulation` 에서 `uv run` 한다 (lerobot 0.4.1, `HF_HUB_OFFLINE=1`). GPU·디스크 규칙은 전역 host.md(DGX_1).
+- 이 레포는 public — `/raid` 경로까지는 괜찮지만 서버 주소·토큰·IP 는 적지 않는다.
+- 2호기(sandia)는 실험을 마무리했다(S2-27). 체크포인트는 sandia 로컬에만 있다.
