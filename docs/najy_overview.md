@@ -66,6 +66,7 @@ task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 **D(이
    로봇 PC 가 10/06 오후에 넘긴 것(출발이 cam_high 에 걸림 · fps 는 20~21 Hz 쪽 · 대조쌍 1350 ep0 대 ep1·ep2): [`eval_najy_results_1006.md`](eval_najy_results_1006.md) 「1호기로 넘기는 것 — 오후 추가」
 3. **데이터 수집 (사람 결정 대기)** — 최대 레버. 이동 task01·10·03, 조작 task02 가 가장 모자란다
 4. 보류: C-3 (M2 task05) · exec 5 재시험(하지 않는다) · SmolVLA 추가 실험(하지 않는다)
+5. **로봇 PC → DGX 전송 대기 (사람)**: 1006 회차 eval 데이터셋 6개(오후 1347_t01·1350_t03 포함)·로그. 녹화 teleop 루프 Hz(target 30 에서도 21.4 Hz)·task01 관찰·θ 부호는 답했다 — `eval_najy_results_1006.md` 「Trossen PC1 답」
 
 ## 5. 무엇이 어디 있나
 
