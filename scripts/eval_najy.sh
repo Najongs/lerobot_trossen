@@ -62,8 +62,10 @@ case "$MODEL" in
     REPO=kiroaiseoul/NAJY_act_move4_hot_20D_60k_s1000; TAG=m3
     case "$STAGE" in 1) ONEHOT=1/4 ;; 3) ONEHOT=2/4 ;; 6) ONEHOT=3/4 ;; 10) ONEHOT=4/4 ;;
       *) echo "M3 는 이동 단계(1·3·6·10)만 학습했다" >&2; exit 2 ;; esac ;;
-  */*) REPO=$MODEL; TAG=base ;;
-  *) echo "모델은 M1|M2|M3|<허브 repo id>" >&2; exit 2 ;;
+  TPH) REPO=kiroaiseoul/NAJY_act_all11_tph_27D_120k_s1000; ONEHOT="$STAGE/11"; TAG=tph ;;   # 1라운드 재학습(17D 진행도) — 허브 업로드 뒤 유효
+  ENV) REPO=kiroaiseoul/NAJY_act_all11_tph_env_27D_120k_s1000; ONEHOT="$STAGE/11"; TAG=env ;; # 2라운드(env 단계 토큰) — 허브 업로드 뒤 유효
+  */*) REPO=$MODEL; TAG=base; [ -n "${HOT:-}" ] && ONEHOT="$HOT" ;;   # 맨 repo id: HOT=<i>/<K> 를 주면 원핫 패치 켬(ENV 모델도 같은 패치)
+  *) echo "모델은 M1|M2|M3|TPH|ENV|<허브 repo id>" >&2; exit 2 ;;
 esac
 
 NN=$(printf "%02d" "$STAGE")
