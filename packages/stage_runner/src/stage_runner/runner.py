@@ -29,6 +29,7 @@ from stage_runner.results import (
     TERMINATED_BY_ERROR,
     TRIAL_REASON_ABORTED,
     TRIAL_REASON_ABORTED_EMPTY,
+    TRIAL_REASON_CHAIN_FAILED,
     TRIAL_REASON_COMPLETED,
     TRIAL_REASON_EXCEPTION,
     StageResult,
@@ -138,6 +139,10 @@ def run_trial(context: StageContext) -> TrialOutcome:
     # code -- without it, the run that the review measured (final stop_base
     # failed, base at 0.4 m/s through save_episode) exited 0.
     base_is_stopped = True
+    # The chain broke. Not sticky-by-accident like base_is_stopped: the loop
+    # breaks on it immediately, so it can only be set once.
+    chain_failed = False
+    chain_failed_stage_id: str | None = None
 
     trial_started = time.perf_counter()
     try:
@@ -192,6 +197,26 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 policy_path=stage.policy_path,
                 single_task=stage.instruction or stage.name,
                 control_time_s=plan.control_time_s,
+                # ADDITIVE chain fields. All four are null in a version 1 run,
+                # and aggregate.build_trial reads this event with .get for
+                # everything except the base fields, so adding them changes no
+                # existing reader.
+                #
+                # `kind` and `stage_number` exist because `stage_index` is NOT
+                # the stage number once resets are interleaved -- stage 11 sits
+                # at index 21 -- and every consumer (the report, the per-stage
+                # base integral, the success table) has to drop the resets.
+                #
+                # `t_mono` is perf_counter, THE SAME CLOCK as the `t_mono`
+                # column of basevel.csv (base_vel_log.py:69). That shared clock
+                # is the only thing that lets eval_chain_report integrate the
+                # base command over one stage's exact range instead of over the
+                # whole run; wall_clock_iso cannot do it (it is local time with
+                # millisecond resolution and a different origin).
+                kind=stage.kind,
+                stage_number=stage.stage_number,
+                onehot_index=stage.onehot_index,
+                t_mono=time.perf_counter(),
             )
             stage_in_flight = stage.id
             boundary_emitted = False
@@ -228,10 +253,40 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 elapsed_s=result.elapsed_s,
                 frames=result.frames,
                 hertz=result.hertz,
+                # ADDITIVE, see the stage_start emit. `reason_detail` is the
+                # machine-readable half of `reason`: p_last, stall_s, nn_dist
+                # for a completion; reset_T, reset_dmax, reach_err for a ramp;
+                # clamped_ticks either way. A completion whose numbers are not
+                # recorded cannot be told from a mislabelled one months later.
+                kind=stage.kind,
+                stage_number=stage.stage_number,
+                t_mono=time.perf_counter(),
+                reason_detail=result.detail or None,
+                required_terminator=list(stage.required_terminator) or None,
             )
             stage_in_flight = None
 
             aborting = result.terminated_by in ABORTING_TERMINATORS
+            # THE CHAIN BREAK. A stage that ended any way its StageConfig does
+            # not allow -- a policy stage that timed out instead of completing,
+            # a reset that never arrived -- ends the run. There is NO RETRY and
+            # no code path that could add one: retrying a reset would repeat the
+            # motion that already failed, and retrying a policy stage would roll
+            # it out again from wherever the failed attempt left the arms, which
+            # is not a start pose any demonstration has.
+            if (
+                not aborting
+                and stage.required_terminator
+                and result.terminated_by not in stage.required_terminator
+            ):
+                chain_failed = True
+                chain_failed_stage_id = stage.id
+                logger.error(
+                    f"CHAIN BROKEN at stage {stage.id!r}: ended "
+                    f"{result.terminated_by!r}, which is not one of "
+                    f"{list(stage.required_terminator)}. {result.reason} "
+                    "The remaining stages are NOT run."
+                )
             _emit_boundary(
                 context,
                 stage_index=stage_index,
@@ -242,7 +297,9 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 # aggregator fixture's aborted trial t03 already models.
                 to_stage_id=(
                     stages[stage_index + 1].id
-                    if not aborting and stage_index < len(stages) - 1
+                    if not aborting
+                    and not chain_failed
+                    and stage_index < len(stages) - 1
                     else None
                 ),
                 outcome=outcome,
@@ -254,6 +311,13 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 logger.warning(
                     f"trial aborted at stage {stage.id!r}: {result.terminated_by}"
                 )
+                break
+            if chain_failed:
+                # AFTER the boundary emit, like the abort above: stop_base has
+                # already run and its outcome is the one line that says whether
+                # the base is still driving. Breaking before it would hide a
+                # failed stop at exactly the boundary where something already
+                # went wrong.
                 break
 
         # Read once, BEFORE saving: save_episode pops "size" out of the buffer
@@ -302,7 +366,14 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 logger.exception("save_episode failed after every stage completed")
                 raise
 
-        if not aborted:
+        if chain_failed:
+            # Checked FIRST: a chain failure is the model's, an abort is the
+            # operator's, and merging them would count a model failure as a
+            # human decision in the chain report. The episode IS saved either
+            # way -- a partial chain is data, and the aggregator excludes it via
+            # `completed`.
+            reason = TRIAL_REASON_CHAIN_FAILED
+        elif not aborted:
             reason = TRIAL_REASON_COMPLETED
         elif frame_count > 0:
             reason = TRIAL_REASON_ABORTED
@@ -313,11 +384,18 @@ def run_trial(context: StageContext) -> TrialOutcome:
             EVENT_TRIAL_END,
             frame_idx=frame_count,
             reason=reason,
-            completed=not aborted,
+            completed=not (aborted or chain_failed),
             stage_count=len(results),
             elapsed_s=time.perf_counter() - trial_started,
             episode_saved=episode_saved,
             buffered_frames=frame_count,
+            # ADDITIVE: which stage broke the chain, and how many of the
+            # configured stages ever ran. `stage_count` alone cannot say it --
+            # a chain that failed at stage 3 and one that was configured for
+            # three stages both report 5.
+            chain_failed=chain_failed,
+            chain_failed_stage_id=chain_failed_stage_id,
+            stages_configured=len(stages),
         )
         trial_end_emitted = True
         logger.info(
@@ -331,7 +409,12 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 "failed at least once this trial. CHECK THE ROBOT. The failing "
                 "boundary is the transition line with stop_base_path='failed'"
             )
-        return TrialOutcome(results=results, base_is_stopped=base_is_stopped)
+        return TrialOutcome(
+            results=results,
+            base_is_stopped=base_is_stopped,
+            chain_failed=chain_failed,
+            chain_failed_stage_id=chain_failed_stage_id,
+        )
 
     except BaseException as error:
         # BaseException, not Exception: Ctrl+C is the operator's reflex stop and

@@ -6,7 +6,8 @@ else in the package imports ``lerobot.scripts.lerobot_record``.
 """
 
 import logging
-from collections.abc import Mapping
+import sys
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any
@@ -26,11 +27,14 @@ from lerobot.processor import (
 )
 from lerobot.robots import Robot, RobotConfig, make_robot_from_config
 from lerobot.scripts.lerobot_record import record_loop
+from lerobot.utils.constants import ACTION
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.import_utils import register_third_party_plugins
 
 from stage_runner.config import (
+    TERMINATOR_COMPLETION,
     TERMINATOR_MANUAL,
+    TERMINATOR_REACHED,
     DefaultsConfig,
     StageConfig,
     StageRunnerConfig,
@@ -79,6 +83,20 @@ class StagePlan:
     planned_terminator: str
 
 
+# Set to "1" to skip the third-party plugin scan. The ONE reason it exists: on a
+# machine with no robot, importing `lerobot_robot_trossen` pulls in `mobileai`
+# and through it the `trossen_slate` SDK (packages/.../__init__.py:5), and the
+# repo rule is that code importing a robot SDK is not executed off the robot PC
+# (CLAUDE.md 실기 안전). The mock robot does NOT come from this scan --
+# config.parse_config imports stage_runner.mock_robot itself -- so the whole
+# hardware-free path works with the scan off.
+#
+# It is never set on the robot PC, and setting it there would make
+# `type: mobileai_robot` unresolvable in draccus, i.e. a loud failure at parse
+# time rather than a quiet one later.
+NO_PLUGINS_ENV: str = "STAGE_RUNNER_NO_PLUGINS"
+
+
 def register_plugins() -> None:
     """Import every installed lerobot_{robot,camera,teleoperator,policy}_* distribution.
 
@@ -86,8 +104,70 @@ def register_plugins() -> None:
     into RobotConfig's draccus choice registry; without it draccus dies in type
     resolution on the YAML's ``robot: type:`` key. Upstream's own main() does
     exactly this before calling record() (lerobot_record.py:606-608).
+
+    Skipped when :data:`NO_PLUGINS_ENV` is set -- see the comment above it.
     """
+    import os
+
+    if os.environ.get(NO_PLUGINS_ENV, "").strip() not in ("", "0", "false", "no"):
+        logger.warning(
+            f"{NO_PLUGINS_ENV} is set: the third-party plugin scan is SKIPPED, so "
+            "`type: mobileai_robot` and the one-hot/loop-rate/rearm patches are "
+            "NOT available. This is the hardware-free path; the real robot needs "
+            "the variable unset."
+        )
+        return
     register_third_party_plugins()
+
+
+def clamped_arm_ticks() -> int | None:
+    """Arm-ticks clamped by ``max_relative_target`` so far, or None if unmeasured.
+
+    Read out of ``sys.modules`` rather than imported: the counter lives in
+    ``lerobot_robot_trossen.loop_rate_log``, importing that package pulls in the
+    Trossen SDK, and on the robot PC ``register_plugins()`` has already imported
+    it so the lookup succeeds. Off the robot it returns None, which is the
+    truth -- nothing counted.
+
+    ``_clamped["total"]`` is the RUN total and is never reset (the per-phase
+    counter IS reset, by ``_reset_phase``'s finally, before a caller could read
+    it after ``record_loop`` returns), so a per-stage count is the difference of
+    two reads around the stage. A nonzero count during a RESET means the ramp
+    asked for more than 0.1 rad in a tick, i.e. the ramp was wrong -- the clamp
+    is a safety net here, never the mechanism.
+    """
+    module = sys.modules.get("lerobot_robot_trossen.loop_rate_log")
+    if module is None:
+        return None
+    getter = getattr(module, "clamped_total", None)
+    if not callable(getter):
+        return None
+    try:
+        return int(getter())
+    except Exception:
+        return None
+
+
+def install_action_monitor(processors: RecordProcessors, step: Any) -> None:
+    """Append a ProcessorStep to the ROBOT ACTION pipeline, in place.
+
+    ``robot_action_processor`` is the pipeline that receives ``(action,
+    observation)`` as one transition every tick, which is the only place the
+    commanded arm, the commanded base, the progress output and the measured arm
+    are in hand together.
+
+    APPENDED, not inserted: upstream builds it with a single
+    ``IdentityProcessorStep`` (processor/factory.py:38-45), and running after
+    that identity means the monitor sees exactly what ``send_action`` will get.
+
+    It must NOT go in ``teleop_action`` -- that is the pipeline
+    ``build_dataset_features`` derives the dataset's ACTION features from
+    (lerobot_record.py:449-456), so a step there would have to answer
+    ``transform_features`` correctly or silently change the recorded schema.
+    """
+    steps = list(processors.robot_action.steps)
+    steps.append(step)
+    processors.robot_action.steps = steps
 
 
 def make_robot(robot_config: RobotConfig) -> Robot:
@@ -110,15 +190,42 @@ def make_processors() -> RecordProcessors:
 
 
 def build_dataset_features(
-    robot: Robot, processors: RecordProcessors, use_videos: bool
+    robot: Robot,
+    processors: RecordProcessors,
+    use_videos: bool,
+    extra_action_names: Sequence[str] = (),
 ) -> dict[str, dict]:
     """Reproduce record()'s feature derivation exactly (lerobot_record.py:449-462).
 
     ``record_loop`` calls ``build_dataset_frame(dataset.features, ...)`` every
     iteration, so a feature dict derived any other way KeyErrors inside the
     control loop rather than at construction.
+
+    ``extra_action_names`` IS THE WHOLE 17-D MECHANISM, and it is a declaration
+    rather than a patch. ``make_policy`` overwrites ``cfg.output_features``
+    from the recording dataset UNCONDITIONALLY (factory.py:470) -- the input
+    side is guarded with ``if not cfg.input_features``, the output side is not
+    -- so a `tph` checkpoint whose action head is 17 wide gets a 16-wide
+    output_features, builds a 16-wide head, and dies in
+    ``load_state_dict`` with a safetensors size mismatch several hundred MB into
+    ``from_pretrained``. Declaring the 17th action feature HERE makes that
+    overwrite land on 17 and the weights load.
+
+    Three consequences, all of them wanted:
+
+    * ``make_robot_action`` zips the 17 names against the tensor and produces a
+      ``progress`` key (policies/utils.py:197-200). ``MobileAIRobot.send_action``
+      filters arm keys by membership in ``arms.action_features``
+      (mobileai.py:472-474) and reads the base with ``.get`` (:478-480), so the
+      extra key reaches nothing and commands nothing.
+    * ``build_dataset_frame`` writes it, so p is RECORDED per frame -- the
+      post-hoc evidence for whether the progress output meant anything.
+    * the completion monitor reads it off the same dict.
+
+    ``extra_action_names=()`` reproduces the pre-chain behaviour byte for byte,
+    which is the guarantee M1 (16-D) depends on.
     """
-    return combine_feature_dicts(
+    features = combine_feature_dicts(
         aggregate_pipeline_dataset_features(
             pipeline=processors.teleop_action,
             initial_features=create_initial_features(action=robot.action_features),
@@ -132,10 +239,37 @@ def build_dataset_features(
             use_videos=use_videos,
         ),
     )
+    if not extra_action_names:
+        return features
+    action = features[ACTION]
+    names = list(action["names"])
+    collisions = sorted(set(names) & set(extra_action_names))
+    if collisions:
+        raise ValueError(
+            f"extra action feature(s) {collisions} are already produced by the "
+            f"robot ({robot.name}); adding them again would make "
+            "make_robot_action write the same key twice and the dataset action "
+            "width disagree with its names"
+        )
+    names.extend(extra_action_names)
+    # shape, not just names: dataset_to_policy_features reads the SHAPE into the
+    # PolicyFeature make_policy assigns to output_features, so a name list that
+    # grew without the shape would leave the head at 16 and change nothing.
+    action["names"] = names
+    action["shape"] = (len(names),)
+    logger.info(
+        f"dataset action widened to {len(names)}-D by declaring "
+        f"{list(extra_action_names)}; the robot ignores the extra key(s) and the "
+        "frames record them"
+    )
+    return features
 
 
 def create_dataset(
-    config: StageRunnerConfig, robot: Robot, processors: RecordProcessors
+    config: StageRunnerConfig,
+    robot: Robot,
+    processors: RecordProcessors,
+    extra_action_names: Sequence[str] = (),
 ) -> LeRobotDataset:
     """Create the one dataset this trial records into.
 
@@ -155,7 +289,9 @@ def create_dataset(
         config.dataset.fps,
         root=config.dataset.root,
         robot_type=robot.name,
-        features=build_dataset_features(robot, processors, config.dataset.video),
+        features=build_dataset_features(
+            robot, processors, config.dataset.video, extra_action_names
+        ),
         use_videos=config.dataset.video,
         image_writer_processes=config.dataset.num_image_writer_processes,
         image_writer_threads=(
@@ -196,15 +332,37 @@ def plan_stage(stage: StageConfig, defaults: DefaultsConfig) -> StagePlan:
     TypeError. ``defaults.manual_ceiling_s`` doubles as the runaway guard for a
     missed keypress.
 
-    PLUG POINT: this is the single named place a P2 ``keyframe`` or P3
-    ``classifier`` terminator attaches -- one added branch here, no signature
-    change anywhere. Firing one live needs no core patch either: a watcher
-    thread can read ``dataset.episode_buffer["observation.state"]`` (add_frame
-    appends it every frame) and set ``events["exit_early"]``, which record_loop
-    already breaks on.
+    PLUG POINT, and the chain is the thing that plugged in. ``completion`` and
+    ``reached`` are the two terminator types the chain adds, and both resolve to
+    a number here the same way ``manual`` does. What fires them is NOT a watcher
+    thread reading ``dataset.episode_buffer["observation.state"]`` -- the
+    mechanism this docstring used to propose, which sees the measurement but not
+    the command and races the buffer ``save_episode`` pops. It is
+    ``completion.CompletionMonitorStep``, a ProcessorStep in the robot action
+    pipeline, and ``reset_policy.ResetPolicy``, which both set
+    ``events["exit_early"]`` from inside the tick that decided.
+
+    ``completion``: ``timeout_s`` is the stage's p90 x ``timeout_factor``, set by
+    ``config.expand_chain``. Reaching it is a chain failure.
+
+    ``reached``: ``timeout_s`` is the WORST-CASE ceiling
+    (``ResetConfig.worst_case_ceiling_s``), because the real one depends on the
+    measured anchor and the arm has not been read when this runs. The reset
+    executor computes the actual ceiling from its ``ResetPlan`` and uses THAT;
+    this number is the bound the stage_start event can honestly state in
+    advance, and the actual duration is in the stage_end ``reason_detail``
+    (``reset_T``).
     """
     terminator = stage.terminator
     if terminator.type == TERMINATOR_MANUAL and terminator.timeout_s is None:
+        control_time_s = defaults.manual_ceiling_s
+    elif (
+        terminator.type in (TERMINATOR_COMPLETION, TERMINATOR_REACHED)
+        and terminator.timeout_s is None
+    ):
+        # expand_chain always fills it; a hand-written chain stage might not,
+        # and record_loop's `while timestamp < control_time_s` raises TypeError
+        # against None on the first iteration -- with the robot connected.
         control_time_s = defaults.manual_ceiling_s
     else:
         control_time_s = terminator.timeout_s

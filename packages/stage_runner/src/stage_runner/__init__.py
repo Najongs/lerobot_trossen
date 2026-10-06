@@ -38,6 +38,22 @@ __version__: str = "0.1.0"
 # access and nothing at all if the caller never touches it.
 _LAZY_ATTRIBUTES: dict[str, str] = {
     "LATEST_CONFIG_VERSION": "config",
+    "ChainConfig": "config",
+    "CompletionConfig": "config",
+    "ResetConfig": "config",
+    "expand_chain": "config",
+    # chain_params is stdlib-only, like aggregate and results: the file it
+    # reads is generated on a machine with no robot stack, and validating
+    # it there is the point.
+    "ChainParams": "chain_params",
+    "ChainParamsError": "chain_params",
+    "StageParams": "chain_params",
+    "load_chain_params": "chain_params",
+    "ChainRuntime": "context",
+    "CompletionMonitorStep": "completion",
+    "CompletionSettings": "completion",
+    "ResetPolicy": "reset_policy",
+    "ResetSettings": "reset_policy",
     "DatasetConfig": "config",
     "DefaultsConfig": "config",
     "OutputConfig": "config",

@@ -24,7 +24,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-from stage_runner.results import TERMINATED_BY_VALUES
+from stage_runner.results import EMITTED_TERMINATOR_VALUES
 
 logger = logging.getLogger(__name__)
 
@@ -163,14 +163,15 @@ class EventLog:
             raise ValueError(
                 f"unknown event {event!r}; expected one of {list(EVENT_NAMES)}"
             )
-        # TERMINATOR_TYPES ("timeout", "manual") is a subset of
-        # TERMINATED_BY_VALUES, so this one check covers the planned terminator
-        # on stage_start as well -- and it keeps config.py, which imports
-        # draccus and lerobot's RobotConfig, out of this stdlib-only module.
-        if terminator is not None and terminator not in TERMINATED_BY_VALUES:
+        # EMITTED_TERMINATOR_VALUES is the outcome vocabulary PLUS the
+        # planned-only terminator types ("completion"), so this one check covers
+        # the planned terminator on stage_start as well as the actual one on
+        # stage_end -- and it keeps config.py, which imports draccus and
+        # lerobot's RobotConfig, out of this stdlib-only module.
+        if terminator is not None and terminator not in EMITTED_TERMINATOR_VALUES:
             raise ValueError(
                 f"unknown terminator {terminator!r}; "
-                f"expected one of {list(TERMINATED_BY_VALUES)} or None"
+                f"expected one of {list(EMITTED_TERMINATOR_VALUES)} or None"
             )
         collisions = sorted(set(extra) & _RESERVED_FIELD_NAMES)
         if collisions:

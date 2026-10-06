@@ -184,6 +184,87 @@ def load_bundles(
     return bundles
 
 
+def load_chain_bundles(
+    stages: Sequence[StageConfig],
+    policy_config: PreTrainedConfig,
+    dataset_meta: LeRobotDatasetMetadata,
+    *,
+    onehot_k: int | None,
+    initial_stage: int,
+    n_action_steps: int | None = None,
+) -> tuple[dict[str, PolicyBundle], Any | None]:
+    """ONE checkpoint for every policy stage of a chain, plus its one-hot step.
+
+    Returns ``(bundles keyed by stage id, the TaskOneHotStep or None)``.
+
+    ONE, not eleven. The design is a single multi-stage ACT conditioned on a
+    stage one-hot, so eleven copies would be eleven times the weights and eleven
+    CUDA contexts' worth of memory for the same network -- and ``load_bundles``'s
+    rule that two stages sharing a ``policy_path`` still get two objects exists
+    for the OPPOSITE case (``make_policy`` mutates the config in place, so two
+    DIFFERENT checkpoints must not share one). Here there is one config, mutated
+    once, and every stage points at the same triple.
+
+    The one-hot step is installed into that one preprocessor at
+    ``initial_stage`` and re-pointed per stage by the executor
+    (``TaskOneHotStep.set_stage``). That re-pointing IS the per-stage
+    conditioning; there is nothing else to switch.
+
+    ``n_action_steps`` is applied to the checkpoint's config before
+    ``make_policy``, which is what ``lerobot-record --policy.n_action_steps=``
+    does. 30 is the exec confirmed on 2026-10-02.
+
+    The one-hot import is LAZY AND CONDITIONAL on ``onehot_k``:
+    ``lerobot_robot_trossen.task_onehot_patch`` cannot be imported without
+    importing that package's ``__init__``, which imports ``mobileai`` and
+    through it the ``trossen_slate`` SDK. A mock chain (``onehot_k: null``) must
+    never reach that import -- it is the rule that keeps this package testable
+    off the robot (CLAUDE.md 실기 안전).
+    """
+    if n_action_steps is not None:
+        previous = getattr(policy_config, "n_action_steps", None)
+        policy_config.n_action_steps = int(n_action_steps)
+        logger.info(
+            f"chain: n_action_steps {previous} -> {n_action_steps} "
+            "(checkpoint config override, as --policy.n_action_steps does)"
+        )
+
+    policy_paths = {stage.policy_path for stage in stages if stage.policy_path}
+    if len(policy_paths) > 1:
+        raise ValueError(
+            f"a chain runs ONE checkpoint, but the stages name {sorted(policy_paths)}. "
+            "Set chain.model.policy_path and let config.expand_chain fill the stages."
+        )
+    policy_path = next(iter(policy_paths), "")
+
+    bundle = load_bundle(
+        stage_id="chain", policy_path=policy_path, policy_config=policy_config,
+        dataset_meta=dataset_meta,
+    )
+    bundle = replace(bundle, warmed_up=warm_up_bundle(bundle))
+
+    onehot = None
+    if onehot_k:
+        from lerobot_robot_trossen.task_onehot_patch import insert_task_onehot
+
+        onehot = insert_task_onehot(
+            bundle.preprocessor, policy_config, initial_stage, int(onehot_k)
+        )
+        logger.info(
+            f"chain: stage one-hot installed before the normalizer, K={onehot_k}, "
+            f"initial stage {initial_stage}. Every stage re-points it; the "
+            "'stage i/K active' line is re-emitted each time and its ABSENCE "
+            "means the one-hot did not switch -- stop the run."
+        )
+
+    bundles = {
+        stage.id: replace(bundle, stage_id=stage.id)
+        for stage in stages
+        if stage.policy_path
+    }
+    return bundles, onehot
+
+
 def warm_up_bundle(bundle: PolicyBundle) -> bool:
     """One throwaway forward so the first RECORDED frame does not pay for it.
 

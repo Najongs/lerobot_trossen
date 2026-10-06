@@ -22,8 +22,15 @@ from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STATE
 from lerobot.utils.control_utils import is_headless, sanity_check_dataset_name
 
 from stage_runner.config import (
+    CHAIN_CONFIG_VERSION,
+    EXECUTOR_CHAIN_RESET,
     LATEST_CONFIG_VERSION,
+    STAGE_KIND_POLICY,
+    STAGE_KIND_RESET,
+    SUPPORTED_CONFIG_VERSIONS,
+    TERMINATOR_COMPLETION,
     TERMINATOR_MANUAL,
+    TERMINATOR_REACHED,
     TERMINATOR_TIMEOUT,
     TERMINATOR_TYPES,
     StageConfig,
@@ -33,6 +40,16 @@ from stage_runner.config import (
 logger = logging.getLogger(__name__)
 
 EVAL_DATASET_PREFIX: str = "eval_"
+
+# Executors that deliberately run WITHOUT a checkpoint. Named by their config
+# constant so a rename cannot leave this set pointing at a string nothing uses.
+EXECUTORS_WITHOUT_CHECKPOINT: frozenset[str] = frozenset({EXECUTOR_CHAIN_RESET})
+
+# The 17th action feature a `tph` checkpoint produces. The NAME is the mechanism
+# (record_adapter.build_dataset_features declares it so make_policy's
+# unconditional output_features overwrite lands on 17), so it lives next to the
+# check that decides whether to declare it.
+PROGRESS_ACTION_NAME: str = "progress"
 
 
 class PreflightError(RuntimeError):
@@ -121,18 +138,45 @@ def check_lerobot_version() -> str:
 
 
 def check_config_version(config: StageRunnerConfig) -> None:
-    """Refuse a YAML written against a different schema generation.
+    """Refuse a YAML written against a schema generation this build cannot read.
 
     The YAML outlives the code: once trials are running it is tied to experiment
     logs and repro scripts, so an unrecognised generation must stop the run
     rather than be read with this generation's field meanings.
+
+    TWO generations are accepted. Version 1 is a hand-written stage list and is
+    read EXACTLY as before -- the hardware-free smoke config is one, and it is
+    the regression test for everything the chain did not touch. Version 2 adds
+    the `chain:` block.
+
+    The two cross-checks below are the ones that matter: a `chain:` block in a
+    version 1 file would be parsed and then IGNORED (a chain run that silently
+    executed zero stages), and `version: 2` with no chain block and no stages is
+    an operator who wrote half a config.
     """
-    if config.version != LATEST_CONFIG_VERSION:
+    if config.version not in SUPPORTED_CONFIG_VERSIONS:
+        supported = ", ".join(str(v) for v in SUPPORTED_CONFIG_VERSIONS)
         raise PreflightError(
             f"config `version: {config.version}` is not supported; this "
-            f"stage_runner reads version {LATEST_CONFIG_VERSION}. Set "
-            f"`version: {LATEST_CONFIG_VERSION}` as the first key of the YAML, or "
-            "run the stage_runner that matches the config."
+            f"stage_runner reads version(s) {supported} (latest "
+            f"{LATEST_CONFIG_VERSION}). Set `version: {LATEST_CONFIG_VERSION}` as "
+            "the first key of the YAML, or run the stage_runner that matches the "
+            "config."
+        )
+    if config.chain.enabled and config.version < CHAIN_CONFIG_VERSION:
+        raise PreflightError(
+            f"`chain.enabled: true` needs `version: {CHAIN_CONFIG_VERSION}`, but "
+            f"the file says `version: {config.version}`. A version "
+            f"{config.version} config has no chain semantics, so the block would "
+            "be parsed, snapshotted and then ignored -- a run with zero stages."
+        )
+    if config.version >= CHAIN_CONFIG_VERSION and not (
+        config.chain.enabled or config.stages
+    ):
+        raise PreflightError(
+            f"`version: {config.version}` with neither `chain.enabled: true` nor "
+            "a `stages:` list: there is nothing to run. Set `chain.enabled: true` "
+            "and `chain.params_path`, or write the stages out."
         )
 
 
@@ -194,6 +238,18 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                 f"{where} ({stage.id!r}): unknown `executor: {stage.executor}`. "
                 f"Known executors: {known}."
             )
+        elif stage.executor in EXECUTORS_WITHOUT_CHECKPOINT:
+            # A reset stage runs arithmetic, not a checkpoint. Demanding a
+            # policy_path here would force every chain YAML to invent a fake one,
+            # and the branch below exists to stop a BLANK path reaching
+            # PreTrainedConfig.from_pretrained("").
+            if stage.policy_path:
+                problems.append(
+                    f"{where} ({stage.id!r}): a `{stage.executor}` stage loads no "
+                    f"checkpoint, but `policy_path: {stage.policy_path}` is set. "
+                    "Leave it empty -- a path here would be snapshotted into "
+                    "config.resolved.yaml as if it had run."
+                )
         elif not stage.policy_path:
             # Without this the blank path reaches
             # PreTrainedConfig.from_pretrained(""), which raises
@@ -303,6 +359,9 @@ def check_stage_dimensions(
     robot: Robot,
     stages: Sequence[StageConfig],
     policy_configs: Mapping[str, PreTrainedConfig],
+    *,
+    onehot_k: int | None = None,
+    allow_extra_action: bool = False,
 ) -> None:
     """Compare every checkpoint's state and action width against this robot.
 
@@ -311,20 +370,45 @@ def check_stage_dimensions(
     mismatch means the checkpoint was trained on a different robot entirely,
     because ``action_features`` always carries the base keys regardless of that
     flag.
+
+    TWO WIDENINGS ARE LEGITIMATE and both are declared by the caller, never
+    guessed here:
+
+    * ``onehot_k`` -- a multi-stage ACT reads ``16 + K`` state values, because
+      ``task_onehot_patch`` builds ``[arms14, 0, 0, one_hot(K)]`` in the
+      preprocessor. The robot still emits 14 (or 16), so the raw comparison
+      would reject every one-hot checkpoint there is.
+    * ``allow_extra_action`` -- a 17-D `tph` checkpoint, whose extra slot the
+      dataset declares (see :func:`extra_action_names`).
+
+    Passing neither reproduces the pre-chain behaviour exactly.
     """
     state_dim = robot_state_dimension(robot)
     action_dim = robot_action_dimension(robot)
+    # 14 arm values + 2 zeroed base slots + K, which is what the one-hot step
+    # builds and asserts against the checkpoint itself
+    # (task_onehot_patch.insert_task_onehot). Stated here so the REFUSAL happens
+    # before any weight downloads rather than inside make_pre_post_processors.
+    expected_state = 16 + int(onehot_k) if onehot_k else state_dim
     problems: list[str] = []
 
     for stage in stages:
         policy_config = policy_configs.get(stage.id)
         if policy_config is None:
-            # A mock:// stage: policies.load_policy_configs skips it, so there
-            # is no checkpoint config.json to compare against.
+            # A mock:// stage, or a reset stage: neither has a checkpoint
+            # config.json to compare against.
             continue
 
         checkpoint_state = checkpoint_state_dimension(policy_config)
-        if checkpoint_state is not None and checkpoint_state != state_dim:
+        if onehot_k and checkpoint_state is not None and checkpoint_state != expected_state:
+            problems.append(
+                f"stage {stage.id!r} ({stage.policy_path}): checkpoint expects a "
+                f"{checkpoint_state}-dim observation.state, but a K={onehot_k} "
+                f"stage one-hot builds 16+{onehot_k}={expected_state} "
+                "([arms14, 0, 0, one_hot]). Either `chain.model.onehot_k` is "
+                "wrong or this is not a one-hot checkpoint."
+            )
+        elif not onehot_k and checkpoint_state is not None and checkpoint_state != state_dim:
             problems.append(
                 f"stage {stage.id!r} ({stage.policy_path}): checkpoint expects a "
                 f"{checkpoint_state}-dim observation.state, robot "
@@ -335,7 +419,11 @@ def check_stage_dimensions(
             )
 
         checkpoint_action = checkpoint_action_dimension(policy_config)
-        if checkpoint_action is not None and checkpoint_action != action_dim:
+        if allow_extra_action and checkpoint_action is not None:
+            # extra_action_names raises PreflightError itself on any width other
+            # than equal or one wider, which is the whole check for this branch.
+            extra_action_names(checkpoint_action, action_dim)
+        elif checkpoint_action is not None and checkpoint_action != action_dim:
             problems.append(
                 f"stage {stage.id!r} ({stage.policy_path}): checkpoint outputs a "
                 f"{checkpoint_action}-dim action, robot {robot.name!r} takes "
@@ -348,6 +436,168 @@ def check_stage_dimensions(
         raise PreflightError(
             "policy/robot dimension mismatch:\n  - " + "\n  - ".join(problems)
         )
+
+
+def extra_action_names(
+    checkpoint_action_dim: int | None, robot_action_dim: int
+) -> tuple[str, ...]:
+    """Which action features the dataset must DECLARE on top of the robot's own.
+
+    ``()`` when the checkpoint's action is exactly the robot's width (16 for
+    this rig: ``[left7, right7, x.vel, theta.vel]``), ``("progress",)`` when it
+    is one wider -- the 17th slot the `tph` recipe trains.
+
+    Anything else raises, and raising is the point: ``make_policy`` overwrites
+    ``cfg.output_features`` from the recording dataset UNCONDITIONALLY
+    (factory.py:470), so a checkpoint whose head is some other width would build
+    a head matching the DATASET and then die in ``load_state_dict`` with a
+    safetensors size mismatch several hundred MB into ``from_pretrained``, on a
+    machine that has already powered the arms. The width is readable from
+    config.json alone, before a single weight byte moves.
+
+    Called with the checkpoint's OWN dimension, which means strictly before
+    ``make_policy`` -- after it, ``output_features`` is the dataset's and the
+    checkpoint's width is unrecoverable from the object.
+    """
+    if checkpoint_action_dim is None:
+        # The checkpoint's config.json declares no action feature. Nothing to
+        # widen and nothing to compare; make_policy will fill it from the
+        # dataset, which is upstream's own behaviour for a fresh policy.
+        return ()
+    extra = checkpoint_action_dim - robot_action_dim
+    if extra == 0:
+        return ()
+    if extra == 1:
+        return (PROGRESS_ACTION_NAME,)
+    raise PreflightError(
+        f"the checkpoint outputs a {checkpoint_action_dim}-dim action and the "
+        f"robot takes {robot_action_dim}. The chain knows two widths: equal "
+        f"(a 16-D model such as M1) and one wider (a 17-D `tph` model, whose "
+        f"extra slot is the progress scalar `{PROGRESS_ACTION_NAME}`). "
+        f"{checkpoint_action_dim} is neither, so either the checkpoint was "
+        "trained on a different robot or `include_base_in_state` is not the "
+        "flag that explains the difference -- action_features always carries "
+        "the base keys, so that flag does not change this number."
+    )
+
+
+def check_chain_definitions(config: StageRunnerConfig, params) -> None:
+    """Gate the expanded chain: ids, kinds, one-hot indices, required terminators.
+
+    Everything here is produced by ``config.expand_chain``, so a failure is a
+    defect in this package rather than an operator error. It still runs: the
+    expansion is the one place that pairs a stage number with a one-hot index,
+    and a wrong pairing is SILENT -- the model runs, it just runs the wrong
+    stage's conditioning, and offline §89 already showed the one-hot is weak
+    enough that nothing downstream would look obviously wrong.
+    """
+    chain = config.chain
+    problems: list[str] = []
+
+    if not chain.params_path:
+        problems.append(
+            "`chain.params_path` is empty. It points at "
+            "configs/chain/stage_params.json, which carries the designated start "
+            "poses, the p10/p90 lengths and the end poses -- none of which the "
+            "runner can derive."
+        )
+    if not chain.model.policy_path:
+        problems.append(
+            "`chain.model.policy_path` is empty. One checkpoint runs all 11 "
+            "stages; there is no per-stage path."
+        )
+    if not 1 <= chain.from_stage <= chain.to_stage:
+        problems.append(
+            f"`chain.from_stage: {chain.from_stage}` / `chain.to_stage: "
+            f"{chain.to_stage}`: need 1 <= from_stage <= to_stage."
+        )
+    if chain.completion.timeout_factor <= 1.0:
+        problems.append(
+            f"`chain.completion.timeout_factor: {chain.completion.timeout_factor}` "
+            "must be > 1.0 -- it multiplies the stage's p90 length, so a factor "
+            "at or below 1 times out the slowest tenth of the demonstrations by "
+            "construction."
+        )
+    if not 0.0 < chain.completion.p_done <= 1.0:
+        problems.append(
+            f"`chain.completion.p_done: {chain.completion.p_done}` must be in "
+            "(0, 1]: the progress output is a fraction of the stage."
+        )
+    if chain.reset.max_jump_rad <= 0 or chain.reset.v_des_rad_s <= 0:
+        problems.append(
+            "`chain.reset.max_jump_rad` and `chain.reset.v_des_rad_s` must both "
+            "be positive -- the ramp's duration is max_jump/v_des and its "
+            "refusal threshold is max_jump."
+        )
+    if chain.reset.tol_rad <= 0 or chain.reset.settle_s <= 0:
+        problems.append(
+            "`chain.reset.tol_rad` and `chain.reset.settle_s` must both be "
+            "positive, or arrival is either never or always true."
+        )
+
+    numbers = list(range(chain.from_stage, chain.to_stage + 1))
+    absent = [n for n in numbers if n not in params.stages]
+    if absent:
+        problems.append(
+            f"{params.path} has no parameters for stage(s) {absent}, which "
+            f"chain.from_stage/to_stage asks to run."
+        )
+
+    policy_stages = [s for s in config.stages if s.kind == STAGE_KIND_POLICY]
+    reset_stages = [s for s in config.stages if s.kind == STAGE_KIND_RESET]
+    if [s.stage_number for s in policy_stages] != numbers:
+        problems.append(
+            f"the expanded chain runs policy stages "
+            f"{[s.stage_number for s in policy_stages]}, expected {numbers}."
+        )
+    for stage in policy_stages:
+        if stage.terminator.type != TERMINATOR_COMPLETION:
+            problems.append(
+                f"policy stage {stage.id!r} has `terminator.type: "
+                f"{stage.terminator.type}`, expected {TERMINATOR_COMPLETION!r}."
+            )
+        if chain.model.onehot_k and stage.onehot_index != stage.stage_number:
+            problems.append(
+                f"policy stage {stage.id!r} (stage {stage.stage_number}) carries "
+                f"one-hot index {stage.onehot_index}. The one-hot is 1-BASED and "
+                "must equal the stage number -- a mismatch runs the wrong stage's "
+                "conditioning without any error."
+            )
+        if chain.model.onehot_k and not 1 <= (stage.onehot_index or 0) <= int(
+            chain.model.onehot_k
+        ):
+            problems.append(
+                f"policy stage {stage.id!r}: one-hot index {stage.onehot_index} is "
+                f"outside 1..{chain.model.onehot_k}."
+            )
+    for stage in reset_stages:
+        if stage.terminator.type != TERMINATOR_REACHED:
+            problems.append(
+                f"reset stage {stage.id!r} has `terminator.type: "
+                f"{stage.terminator.type}`, expected {TERMINATOR_REACHED!r}."
+            )
+        if stage.stage_number not in params.stages:
+            problems.append(
+                f"reset stage {stage.id!r} targets stage {stage.stage_number}, "
+                f"which {params.path} has no start pose for."
+            )
+    if not config.stages:
+        problems.append(
+            "the chain expanded to zero stages. Check chain.from_stage / "
+            "chain.to_stage."
+        )
+
+    if problems:
+        raise PreflightError("invalid chain definition:\n  - " + "\n  - ".join(problems))
+
+    logger.info(
+        f"chain: {len(policy_stages)} policy stage(s) "
+        f"{numbers[0]}..{numbers[-1]}, {len(reset_stages)} reset(s) of which "
+        f"{sum(1 for s in reset_stages if s.initial_reset)} initial and "
+        f"{sum(1 for s in reset_stages if not s.initial_reset)} at a boundary; "
+        f"params {params.path} (fps {params.fps}, generated from "
+        f"{params.source.get('sim_commit', 'unknown')})"
+    )
 
 
 def check_manual_terminator_is_reachable(config: StageRunnerConfig) -> None:
@@ -377,14 +627,50 @@ def check_manual_terminator_is_reachable(config: StageRunnerConfig) -> None:
         for stage in config.stages
         if stage.terminator.type == TERMINATOR_MANUAL
     ]
-    if not manual_ids:
-        return
-
-    named = ", ".join(repr(stage_id) for stage_id in manual_ids)
     remedy = (
         "Run from a session where the arrow keys reach the listener, or give the "
         "stage `terminator: {type: timeout, timeout_s: <seconds>}`."
     )
+    if config.chain.enabled:
+        # UNCONDITIONAL for a chain, whatever the terminators say. Esc is the
+        # ONLY human input a chain has: there is no inter-episode teleop reset
+        # to stop in, the whole 1->11 run is one episode, and 22 stages of
+        # policy rollout and automatic pose ramps run back to back. A session
+        # where the listener never receives a key is a session where the
+        # 'operator with the e-stop' safety net has no software half at all.
+        # `allow_manual_complete` makes the right arrow load-bearing on top of
+        # that: without it a stage whose automatic signal never comes runs to
+        # its timeout and fails the chain.
+        named = (
+            ", ".join(repr(i) for i in manual_ids)
+            if manual_ids
+            else "the whole chain"
+        )
+        remedy = (
+            "Run from a session where the arrow keys reach the listener (see the "
+            "README's `## eval 함정`). A chain cannot be run without them: Esc is "
+            "the only stop and the right arrow is the only way past a stage whose "
+            "automatic completion does not come."
+        )
+        if is_headless():
+            raise PreflightError(
+                "this session is headless (pynput did not import), so neither "
+                "Esc nor the right arrow can ever fire. A chain drives 22 stages "
+                f"back to back with no other human input. {remedy}"
+            )
+        session_type = os.environ.get("XDG_SESSION_TYPE", "")
+        if session_type.lower() == "wayland":
+            raise PreflightError(
+                "XDG_SESSION_TYPE is 'wayland': pynput imports and the listener "
+                "starts, yet no key event is ever delivered to it, so Esc and the "
+                "arrows all do nothing silently. A chain drives 22 stages back to "
+                f"back with no other human input. {remedy}"
+            )
+        return
+    if not manual_ids:
+        return
+
+    named = ", ".join(repr(stage_id) for stage_id in manual_ids)
     if is_headless():
         raise PreflightError(
             f"stage(s) {named} use `terminator.type: manual`, but this session is "
@@ -530,7 +816,16 @@ def run_preflight(
     """
     check_config_version(config)
     check_stage_definitions(config)
-    check_stage_dimensions(robot, config.stages, policy_configs)
+    check_stage_dimensions(
+        robot,
+        config.stages,
+        policy_configs,
+        # Both widenings are DECLARED by the config, never guessed from the
+        # checkpoint: a run that silently accepted a 27-D state because the
+        # checkpoint happened to want one would also silently accept the wrong K.
+        onehot_k=config.chain.model.onehot_k if config.chain.enabled else None,
+        allow_extra_action=config.chain.enabled,
+    )
     check_manual_terminator_is_reachable(config)
     check_dataset_name(config, policy_configs)
     check_dataset_root_is_free(config)

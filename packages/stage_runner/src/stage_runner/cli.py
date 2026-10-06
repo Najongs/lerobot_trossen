@@ -9,6 +9,7 @@ sequence; nothing before step 12 (``robot.connect()``) can move the robot.
 import logging
 from collections.abc import Sequence
 
+from lerobot.utils.constants import ACTION, OBS_STATE
 from lerobot.utils.control_utils import is_headless
 from lerobot.utils.utils import init_logging
 from lerobot.utils.visualization_utils import init_rerun
@@ -21,7 +22,8 @@ from stage_runner import (
     record_adapter,
     runner,
 )
-from stage_runner.context import StageContext
+from stage_runner.chain_params import ChainParamsError, load_chain_params
+from stage_runner.context import ChainRuntime, StageContext
 from stage_runner.events import EventLog
 from stage_runner.preflight import PreflightError
 from stage_runner.results import ABORTING_TERMINATORS, TrialOutcome
@@ -57,6 +59,14 @@ EXIT_PREFLIGHT: int = 2
 # It is a different instruction from 1 and 2: those say "this trial is not a
 # measurement", this says "stop the batch and go look at the robot".
 EXIT_BASE_STOP_FAILED: int = 3
+# The chain broke: a stage ended with a terminator its required_terminator does
+# not allow -- a policy stage that timed out instead of completing, or a boundary
+# reset that never arrived. Its own code, separate from 1: code 1 means a HUMAN
+# stopped the run and the trial is not a measurement, this means the MODEL did
+# not finish the chain, which IS the measurement the run exists to produce. A
+# batch script retries neither, but a chain report counts them in different
+# columns.
+EXIT_CHAIN_FAILED: int = 4
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -100,9 +110,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     # PreflightError is an operator error, so it gets one actionable line and
     # exit code 2 -- a traceback here would only bury the sentence that says
     # what to fix.
+    chain_params = None
+    chain_policy_config = None
+    extra_action_names: tuple[str, ...] = ()
     try:
         lerobot_version = preflight.check_lerobot_version()
         preflight.check_config_version(cfg)
+
+        # Step 5b (chain only). The stage list is EXPANDED from the `chain:`
+        # block before anything validates it, because `stages:` is what every
+        # later step reads -- preflight, the dataset features, the bundles, the
+        # runner. Writing the 22 stages by hand would be 22 chances to put the
+        # wrong one-hot index on the wrong stage, which is SILENT: the model
+        # runs, it just runs the wrong stage's conditioning, and offline §89
+        # showed the one-hot is weak enough that nothing downstream would look
+        # obviously wrong.
+        #
+        # The expansion lands in config.resolved.yaml (step 9), so the run
+        # directory records every stage that actually ran, not just the block it
+        # came from.
+        if cfg.chain.enabled:
+            if cfg.stages:
+                raise PreflightError(
+                    "`chain.enabled: true` expands the stage list itself, but the "
+                    f"YAML also lists {len(cfg.stages)} stage(s). Remove "
+                    "`stages:` -- keeping both means the file shows one chain and "
+                    "the run executes another."
+                )
+            try:
+                chain_params = load_chain_params(
+                    cfg.chain.params_path, expected_fps=cfg.dataset.fps
+                )
+            except ChainParamsError as error:
+                # One actionable line and exit 2, like every other operator
+                # error. The loader already collected every problem in the file.
+                raise PreflightError(str(error)) from error
+            cfg.stages = config.expand_chain(cfg, chain_params)
+
         preflight.check_stage_definitions(cfg)
 
         # Step 6. Constructed, NOT connected: observation_features and
@@ -113,10 +157,53 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Step 7. Fetches config.json only. It has to happen before
         # make_policy, which overwrites output_features from ds_meta and
         # destroys the checkpoint's own recorded dimensions.
-        policy_configs = policies.load_policy_configs(cfg.stages)
+        if cfg.chain.enabled:
+            # ONE config object for the one checkpoint, shared by every policy
+            # stage. load_policy_configs deliberately gives two stages sharing a
+            # path two OBJECTS, because make_policy mutates in place -- but that
+            # guards against two DIFFERENT checkpoints. Here there is one, and
+            # make_policy is called on it exactly once (in load_chain_bundles,
+            # after this gate), so sharing is correct and saves eleven identical
+            # config.json fetches.
+            chain_policy_config = policies.load_policy_config(
+                cfg.chain.model.policy_path
+            )
+            policy_configs = {
+                stage.id: chain_policy_config
+                for stage in cfg.stages
+                if stage.policy_path
+            }
+            preflight.check_chain_definitions(cfg, chain_params)
+        else:
+            policy_configs = policies.load_policy_configs(cfg.stages)
 
         # Step 8. Dimensions, manual-terminator reachability, dataset name.
         preflight.run_preflight(cfg, robot, policy_configs)
+
+        if cfg.chain.enabled:
+            # STRICTLY BEFORE make_policy: it overwrites output_features from
+            # the dataset, after which the checkpoint's own action width is
+            # unrecoverable. The answer decides whether the recording dataset
+            # declares a 17th action feature, which is what makes that very
+            # overwrite land on 17 and the `tph` weights load at all.
+            extra_action_names = preflight.extra_action_names(
+                preflight.checkpoint_action_dimension(chain_policy_config),
+                preflight.robot_action_dimension(robot),
+            )
+            declared = cfg.chain.model.has_progress
+            if declared is not None and declared != bool(extra_action_names):
+                raise PreflightError(
+                    f"`chain.model.has_progress: {declared}` but the checkpoint's "
+                    f"action width says {bool(extra_action_names)}. The width is "
+                    "the fact; set the key to null to take it from the checkpoint, "
+                    "or point at the other checkpoint."
+                )
+            logger.info(
+                f"chain: checkpoint action is "
+                f"{'17-D (progress)' if extra_action_names else '16-D (no progress)'}"
+                f"; completion is gated by "
+                f"{'the progress output' if extra_action_names else 'stall + end-pose NN'}"
+            )
     except PreflightError as error:
         logger.error(f"preflight failed: {error}")
         return EXIT_PREFLIGHT
@@ -163,15 +250,57 @@ def main(argv: Sequence[str] | None = None) -> int:
         # b. Features are derived from those pipelines; LeRobotDataset.create
         #    mkdirs with exist_ok=False, which is why repo_id is the one CLI
         #    override and every trial needs a fresh one.
-        dataset = record_adapter.create_dataset(cfg, robot, processors)
+        dataset = record_adapter.create_dataset(
+            cfg, robot, processors, extra_action_names
+        )
         # c. After the dataset because make_policy needs ds_meta, and before
         #    connect so that a cold HF cache stalls with the arms unpowered
         #    rather than inside a control loop.
-        bundles = policies.load_bundles(cfg.stages, policy_configs, dataset.meta)
+        onehot_step = None
+        if cfg.chain.enabled:
+            bundles, onehot_step = policies.load_chain_bundles(
+                cfg.stages,
+                chain_policy_config,
+                dataset.meta,
+                onehot_k=cfg.chain.model.onehot_k,
+                initial_stage=cfg.chain.from_stage,
+                n_action_steps=cfg.chain.model.n_action_steps,
+            )
+        else:
+            bundles = policies.load_bundles(cfg.stages, policy_configs, dataset.meta)
         # d. Core already owns the right arrow, the left arrow and Esc; we add
         #    no listener of our own, so the terminator classifier reads the
         #    flags core leaves behind.
         listener, keyboard_events = record_adapter.make_keyboard_events()
+
+        # e (chain only). The monitor needs the keyboard events dict, which is
+        #   created HERE and not with the processors in (a) -- that ordering is
+        #   upstream record()'s and is kept, so the monitor is built and
+        #   installed after both exist. Installing it into robot_action (not
+        #   teleop_action) matters: teleop_action is the pipeline the dataset's
+        #   ACTION features were derived from in (b).
+        chain_runtime = None
+        if cfg.chain.enabled:
+            from stage_runner.completion import CompletionMonitorStep
+
+            monitor = CompletionMonitorStep(
+                keyboard_events,
+                settings=cfg.chain.completion.to_settings(),
+                arm_joint_names=chain_params.arm_joint_order,
+            )
+            record_adapter.install_action_monitor(processors, monitor)
+            chain_runtime = ChainRuntime(
+                params=chain_params,
+                monitor=monitor,
+                completion=cfg.chain.completion.to_settings(),
+                reset=cfg.chain.reset.to_settings(),
+                has_progress=bool(extra_action_names),
+                action_names=tuple(dataset.meta.features[ACTION]["names"]),
+                state_names=tuple(dataset.meta.features[OBS_STATE]["names"]),
+                onehot=onehot_step,
+                onehot_k=cfg.chain.model.onehot_k,
+                allow_manual_complete=cfg.chain.completion.allow_manual_complete,
+            )
 
         # Upstream record() calls this before its record_loop; we do not go
         # through record(), so without it `display_data: true` reaches
@@ -203,6 +332,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 bundles=bundles,
                 log=log,
                 run_directory=run_directory,
+                chain=chain_runtime,
             )
 
             # Steps 14-18. VideoEncodingManager.__exit__ flushes the encoders,
@@ -274,4 +404,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_BASE_STOP_FAILED
     if any(result.terminated_by in ABORTING_TERMINATORS for result in outcome.results):
         return EXIT_ABORTED
+    if outcome.chain_failed:
+        # After the abort check and not before it: the two are mutually
+        # exclusive in practice (the runner breaks on an abort without setting
+        # chain_failed), and if they ever both held, "a human stopped this" is
+        # the more urgent instruction.
+        logger.error(
+            f"the chain broke at stage {outcome.chain_failed_stage_id!r}; "
+            f"{len(outcome.results)} stage(s) ran. The episode IS saved -- a "
+            "partial chain is data -- with trial_end.completed=false."
+        )
+        return EXIT_CHAIN_FAILED
     return EXIT_OK
