@@ -41,6 +41,16 @@ STAGE_KIND_RESET = "reset"
 POLICY_OUTCOMES = ("complete", "manual", "timeout")
 RESET_OUTCOMES = ("reached", "not_reached")
 
+# `reason_detail.reset_end_reason` (executors.RESET_REASON_*). `not_reached` 는
+# 세 가지 다른 사건의 **결과**라서, 구분 없이 표에 찍으면 사람이 눌러서 끊긴
+# 램프와 정말 못 도달한 램프가 같은 칸에 들어간다.
+RESET_END_REASON_LABEL = {
+    "reached": "도달",
+    "refused": "거부(움직이기 전)",
+    "ceiling": "상한 초과",
+    "manual_interrupt": "**사람이 끊음(→)**",
+}
+
 
 def read_events(path: Path) -> list[dict[str, Any]]:
     records = []
@@ -238,11 +248,12 @@ def build_report(
         lines.append("없음 — 리셋 전용 회차다 (bring-up ②·③).")
         lines.append("")
     lines.append(
-        "| 단계 | 종료 | 경과 s (p10/p90) | Hz | p 끝값·유지 s | 정지 s | "
+        "| 단계 | 종료 | 출발 s | 경과 s (p10/p90) | Hz | p 끝값·유지 s | 정지 s | "
         "NN rad | ∫θ 명령/실측 ° | ∫x 명령/실측 m | clamped |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     counts = {"policy": {}, "reset": {}}
+    never_departed: list[str] = []
     for record in stages:
         start, end = record["start"], record["end"]
         if start.get("kind") != STAGE_KIND_POLICY:
@@ -251,11 +262,22 @@ def build_report(
         terminator = end.get("terminator", "?")
         counts["policy"][terminator] = counts["policy"].get(terminator, 0) + 1
         base = integrate(rows, start.get("t_mono"), end.get("t_mono"))
+        if detail.get("departed") is False:
+            never_departed.append(str(start.get("stage_id")))
         lines.append(
-            "| {stage} | {term} | {elapsed} ({p10}/{p90}) | {hz} | {p} | "
+            "| {stage} | {term} | {departed} | {elapsed} ({p10}/{p90}) | {hz} | {p} | "
             "{stall} | {nn} | {theta} | {x} | {clamped} |".format(
                 stage=f"`{start.get('stage_id')}`",
                 term=f"**{terminator}**",
+                # 「언제 시작 장면을 떠났나」. `✗` 는 **한 번도 떠나지 않았다** --
+                # 그 단계는 어려워서 실패한 것이 아니라 시작하지 않았고, 그러면
+                # 단계 자체에 대해 측정된 것이 없다. 옛 회차의 events.jsonl 에는
+                # 이 키가 없어서 `-` 가 된다(없음 ≠ 안 떠났음).
+                departed=(
+                    "✗"
+                    if detail.get("departed") is False
+                    else fmt(detail.get("departed_s"), ".1f")
+                ),
                 elapsed=fmt(end.get("elapsed_s"), ".1f"),
                 p10=fmt(detail.get("p10_s"), ".1f"),
                 p90=fmt(detail.get("p90_s"), ".1f"),
@@ -288,10 +310,11 @@ def build_report(
     lines.append("## 경계 리셋")
     lines.append("")
     lines.append(
-        "| 리셋 | 종료 | T s | Δmax rad | 보폭 상한 rad | 도달 오차 rad "
+        "| 리셋 | 종료 | 사유 | T s | Δmax rad (상한) | 보폭 상한 rad | 도달 오차 rad "
         "(tol) | 경과 s (상한) | 프레임 | clamped |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    interrupted: list[str] = []
     for record in stages:
         start, end = record["start"], record["end"]
         if start.get("kind") != STAGE_KIND_RESET:
@@ -300,12 +323,20 @@ def build_report(
         terminator = end.get("terminator", "?")
         counts["reset"][terminator] = counts["reset"].get(terminator, 0) + 1
         initial = start.get("stage_id", "").startswith("reset_pre_")
+        end_reason = detail.get("reset_end_reason")
+        if end_reason == "manual_interrupt":
+            interrupted.append(str(start.get("stage_id")))
         lines.append(
-            "| {label} | {term} | {T} | {dmax} | {step} | {err} ({tol}) | "
-            "{elapsed} ({ceiling}) | {frames} | {clamped} |".format(
+            "| {label} | {term} | {why} | {T} | {dmax} ({limit}) | {step} | "
+            "{err} ({tol}) | {elapsed} ({ceiling}) | {frames} | {clamped} |".format(
                 label=f"`{start.get('stage_id')}`" + (" (최초)" if initial else ""),
                 term=f"**{terminator}**",
+                # `not_reached` 는 세 사건의 결과다 — 거부(움직이기 전) ·
+                # 상한 초과 · 사람이 `→` 로 끊음. 셋을 섞으면 잘 돌던 램프를
+                # 실패한 램프로 읽는다.
+                why=RESET_END_REASON_LABEL.get(end_reason, end_reason or "-"),
                 T=fmt(detail.get("reset_T"), ".2f"),
+                limit=fmt(detail.get("reset_jump_limit_rad"), ".2f"),
                 dmax=fmt(detail.get("reset_dmax"), ".3f"),
                 step=fmt(detail.get("reset_max_step_rad"), ".4f"),
                 err=fmt(detail.get("reach_err"), ".4f"),
@@ -362,6 +393,20 @@ def build_report(
             manual=counts["policy"].get("manual", 0),
         )
     )
+    if never_departed:
+        lines.append(
+            f"- **출발하지 않은 단계 {len(never_departed)}개: {never_departed}** — "
+            "실측 팔이 지정 시작 자세를 떠나지도, 베이스가 돌지도 않았다. 그 "
+            "단계의 난이도에 대해 측정된 것은 **없다**. 볼 곳은 정책이 아니라 "
+            "시작 장면이다: 바로 앞 리셋의 도달 오차 · 원핫 인덱스 · 카메라"
+        )
+    if interrupted:
+        lines.append(
+            f"- **리셋 중 `→` 로 끊긴 램프 {len(interrupted)}개: {interrupted}** — "
+            "`→` 는 정책 단계 전용이다(리셋은 스스로 도달을 판정한다). 끊긴 "
+            "램프는 `not_reached` 이고 그것은 체인 실패다 — 팔이 다음 단계 시작 "
+            "자세에 **없다**"
+        )
     failed_stops = [t for t in transitions if t.get("stop_base_path") == "failed"]
     lines.append(
         f"- 경계 {len(transitions)}곳의 베이스 정지: "
@@ -404,6 +449,8 @@ def build_report(
         "reason": reason,
         "policy": counts["policy"],
         "reset": counts["reset"],
+        "never_departed": never_departed,
+        "reset_manual_interrupt": interrupted,
         "failed_base_stops": len(failed_stops),
         "basevel_rows": len(rows),
     }

@@ -118,8 +118,13 @@ ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv"
 [[ "${CHUNK_LOG:-0}" == 1 ]] && ENVS+=(LEROBOT_CHUNK_EXECUTION_LOG="$LOGDIR/$RUN.chunks.csv")
 # LEROBOT_TASK_ONEHOT 은 **주지 않는다.** 그 변수는 `lerobot-record` 진입점을
 # 패치해 한 프로세스 = 한 단계를 가정한다. 체인은 stage_runner 가 번들을 한 번
-# 만들고 `TaskOneHotStep.set_stage` 로 단계를 바꾼다 -- 둘을 같이 쓰면 패치가
-# 두 번 끼워진다.
+# 만들고 `TaskOneHotStep.set_stage` 로 단계를 바꾼다.
+# 주면 **아무 일도 일어나지 않는다**(패치가 두 번 끼워지는 것이 아니다):
+# `apply_task_onehot_patch` 는 `lerobot_record.make_pre_post_processors` 를
+# 리바인드하는데(task_onehot_patch.py:240,267), `stage_runner.policies` 는 그
+# 이름을 `lerobot.policies.factory` 에서 **직접** import 한다(policies.py:18) --
+# 리바인드가 닿지 않는다. 그래서 「원핫이 설치됐다」 는 로그만 남고 체인의
+# 전처리기에는 안 들어간다. 결론은 같다: 주지 마라.
 # LEROBOT_POSE_GUIDE 도 주지 않는다: 러너가 단계마다 `pose_guide.set_stage` 로
 # 지정 리셋 자세를 직접 넘긴다(중앙값 표가 아니라).
 

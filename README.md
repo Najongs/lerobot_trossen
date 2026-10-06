@@ -973,17 +973,35 @@ Why each piece exists -- all three failures are measured, not assumed:
 - **The reset.** Stage k's end pose and stage k+1's start pose are 0.25-1.28 rad apart at all ten
   boundaries, because every stage was recorded from its own hand-built start pose. The transition
   is not in the training data, so no policy can produce it.
-- **The completion rule.** `p >= 0.95` held for 1 s **and** the output stalled for 3 s **and** the
-  elapsed time past the stage's p10. None of the three works alone: demonstration lengths spread
-  1.3-2.7x, 23-35% of the demonstrations of task02/06/08 pause for over two seconds mid-task, and
-  the progress scalar wobbles in exactly those pauses. A 16-D model has no progress output, so its
-  rule is "stalled **and** the measured arm is within `end_pose_tol_rad` of a demonstrated end
-  pose" -- a weaker signal, which is why the manual key matters more for it.
+- **The completion rule.** The stage **departed** (below) **and** `p >= 0.95` held for 1 s
+  **and** the output stalled for 3 s **and** the elapsed time past the stage's p10. None of the
+  four works alone: demonstration lengths spread 1.3-2.7x, 23-35% of the demonstrations of
+  task02/06/08 pause for over two seconds mid-task, and the progress scalar wobbles in exactly
+  those pauses. A 16-D model has no progress output, so its second clause becomes "the measured
+  arm is within `end_pose_tol_rad` of a demonstrated end pose" -- a weaker signal, which is why
+  the manual key matters more for it. "Stalled" reads two separate knobs: `stall_track_rad`
+  (0.08, how far the arm may lag its command -- a loaded arm holding still lags it) and
+  `stall_arm_rad` (0.05, how far the MEASURED arm may travel across the window).
+- **The departure latch.** Completion is refused for the whole stage until the measured arm
+  leaves 0.10 rad of its designated start pose, or the commanded base integrates past 0.17 rad of
+  net rotation or 0.10 m of travel. Without it the 16-D rule fires on a stage that never started:
+  in `configs/chain/stage_params.json` the designated START pose of task03, task04 and task10 is
+  within 0.001 rad of one of that same stage's END poses (a stage that only drives the base
+  leaves the arm where it found it), and 20-40% of M1's holdout starts predict a stop on the
+  first chunk -- so eleven stages could report a full 1->11 run having moved nothing. A stage that
+  times out without departing says `never_departed` in its reason and gets a `✗` in the report's
+  departure column; the thing to look at then is the start scene, not the policy.
 - **The right arrow.** `allow_manual_complete: true` for BOTH models: it means "this stage is
   done, go on". Recorded as `terminated_by="manual"` and counted separately from the automatic
   `"complete"`, so the chain report says how much of the run the model finished by itself.
   It applies to POLICY stages only -- pressing it during a reset cuts the ramp short, which is
-  `not_reached` and therefore a chain failure.
+  `not_reached` and therefore a chain failure. That case is labelled `manual_interrupt` in the
+  reset's `reason_detail`, so a ramp a human cut is not read as a ramp that failed.
+- **Two gap limits for the ramp.** A boundary reset is refused above `max_jump_rad` (1.5 rad,
+  outside the measured 0.25-1.28 rad spread). The INITIAL reset -- from wherever a human left the
+  arms to `from_stage`'s pose -- is refused above `initial_max_jump_rad` (0.6 rad), because there
+  is no measured distribution for it at all; the refusal says to put the arms within 0.3 rad of
+  the stage's start pose by hand, which is the fix. Both refuse BEFORE anything is commanded.
 
 What the runner does NOT do:
 
@@ -1008,7 +1026,11 @@ Reading a run:
 | `outputs/stage_runner/<run>/events.jsonl` | one line per stage boundary, with `kind`, `stage_number`, `onehot_index`, `t_mono` and a `reason_detail` carrying the numbers behind the terminator |
 | `outputs/stage_runner/<run>/config.{source,resolved}.yaml` | the file as edited, and the fully expanded 22-stage list that actually ran |
 | `~/eval_logs/<run>.log` / `.basevel.csv` | the run log, and the per-tick base command/measurement (`phase=reset` rows are the ramps) |
-| `scripts/eval_chain_report.py <run dir>` | the per-stage table: terminator, elapsed vs p10/p90, p and stall, reset T / dmax / arrival error, base integral per stage, clamped ticks |
+| `scripts/eval_chain_report.py <run dir>` | the per-stage table: terminator, departure time (`✗` = never departed), elapsed vs p10/p90, p and stall, reset T / dmax / arrival error and WHY it ended, base integral per stage, clamped ticks |
+
+`display_data` is `false` in both chain configs. Turn it on only after bring-up steps ①-④ have
+established a loop-rate baseline: the 10/02 figures (20.9-21.1 Hz) were measured on a SINGLE
+stage with rerun running, so a chain rate measured with the viewer on is not comparable to them.
 
 `eval_najy_post.sh` and `eval_najy_report.py` are NOT used and NOT modified: they assume one run
 = one stage.
