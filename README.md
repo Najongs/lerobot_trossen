@@ -963,8 +963,10 @@ silently meant "not a dry run" and drove the robot. To turn one off, unset it or
 both into `SystemExit`, so a dropped SSH session unwinds through the teardown (base zeroed, robot
 disconnected) instead of killing the process where it stands -- which is what used to happen, with
 the base holding its last velocity command. A SECOND SIGTERM is IGNORED: unwinding out of the
-teardown would leave the arms torqued. Closing the window is still not how to end a run; Esc is.
-SIGKILL and power loss remain uncovered (no in-process handler can reach them).
+teardown would leave the arms torqued, and so is one that arrives after the teardown has begun.
+An inherited `SIG_IGN` is left alone, which is what keeps `nohup` doing its job. Closing the window
+is still not how to end a run; Esc is. SIGKILL and power loss remain uncovered (no in-process
+handler can reach them).
 
 **DO NOT READ THE STOP LOG AS CONFIRMATION.** `stop_base commanded: ...` is intent.
 `MobileAIRobot.send_action` does not raise when the base write fails -- a failed Modbus
@@ -1058,6 +1060,11 @@ rather than wrong:
   target and velocity pacing fail the same way (`widowxai_follower.py:272`). The dict the DATASET
   records is left untouched, so the frame keeps the model's NaN while the robot gets the hold. Two
   known causes, and they need telling apart: corrupted normalizer stats, or an fp16 overflow.
+  KNOWN GAP: the gate stops the run through the same flags Esc sets, so `events.jsonl` records the
+  stage as `stop_recording` and `trial_end.reason="aborted"`. Only the EXIT CODE tells a model NaN
+  (4) from an operator abort (1), which means `eval_chain_report.py` and `aggregate` count a NaN in
+  the operator-abort column. `eval_chain.sh` greps the run log for `NON-FINITE ACTION` on exit 4 and
+  says so.
 - **A NaN is NO EVIDENCE for the completion monitor, in either direction.** `max(a, nan)` returns
   `a` and both `nan >= x` and `nan < x` are False, so a lost signal used to read as "a perfectly
   stopped arm, 0.00 rad from a demonstrated end pose" -- the completion condition itself. Any window

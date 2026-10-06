@@ -2658,6 +2658,64 @@ class SignalLatchTest(NoRobotSdkMixin, unittest.TestCase):
                 "SystemExit for a signal the NEXT run has not seen",
             )
 
+    def test_an_inherited_sig_ign_is_left_alone(self) -> None:
+        """WHAT MAKES `nohup` WORK, and the docs promise it.
+
+        ``nohup`` starts the child with SIGHUP set to SIG_IGN; an ignored
+        disposition survives ``exec``, and the point is that the run SURVIVES the
+        terminal going away. Taking it over with a handler would make a dropped SSH
+        session under nohup tear the run down -- the opposite of what nohup was
+        asked for.
+        """
+        import signal
+
+        previous = signal.getsignal(signal.SIGHUP)
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        try:
+            self.assertTrue(self.latch.install())
+            self.assertIs(
+                signal.getsignal(signal.SIGHUP),
+                signal.SIG_IGN,
+                "an inherited SIG_IGN must not be replaced",
+            )
+            self.assertNotEqual(
+                signal.getsignal(signal.SIGTERM),
+                signal.SIG_IGN,
+                "and SIGTERM, which nohup does NOT ignore, is still trapped",
+            )
+            self.latch.restore()
+            self.assertIs(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        finally:
+            signal.signal(signal.SIGHUP, previous)
+
+    def test_a_signal_inside_the_teardown_never_raises(self) -> None:
+        """The failure the latch could cause through the latch.
+
+        cli's ``finally`` wraps ``robot.disconnect()`` in ``except Exception``, and
+        a SystemExit is not an Exception -- so a first delivery landing between the
+        ``try`` and disconnect()'s own ``base.set_cmd_vel(0.0, 0.0)`` would escape
+        and skip the call that stops the base.
+        """
+        import signal
+
+        events: dict[str, bool] = {}
+        self.latch.bind_events(events)
+        self.latch.enter_teardown()
+        self.assertIsNone(
+            self.latch.handle(signal.SIGTERM, None),
+            "no raise once the teardown has begun, even for the FIRST signal",
+        )
+        self.assertTrue(events["stop_recording"], "the flags are still set")
+        self.assertEqual(self.latch.signum, int(signal.SIGTERM))
+
+    def test_the_teardown_guard_is_wired_into_cli(self) -> None:
+        """A guard the teardown does not call is a comment."""
+        self.assertIn(
+            "enter_teardown",
+            self.cli.run_trial_process.__code__.co_names,
+            "run_trial_process's finally must arm it before it touches hardware",
+        )
+
     def test_the_first_delivery_sets_both_flags_and_becomes_system_exit(self) -> None:
         import signal
 

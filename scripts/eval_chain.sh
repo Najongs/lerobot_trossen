@@ -204,10 +204,25 @@ case "$rc" in
   0) echo "== 체인 완주 (모든 단계가 요구 종료값으로 끝났다)" ;;
   1) echo "== 사람이 중단했다 (ESC 또는 ←)" ;;
   2) echo "== preflight 가 거부했다 — 위 ERROR 한 줄이 고칠 키를 말한다" >&2 ;;
-  3) echo "!! 베이스를 멈추지 못한 경계가 있다 — 로봇을 확인하라" >&2 ;;
-  4) echo "== 체인이 끊겼다 (타임아웃 또는 리셋 미도달). 에피소드는 저장됐다." ;;
+  3) echo "!! 베이스를 멈추지 못한 경계가 있다 — 로봇을 확인하라" >&2
+     echo "   events.jsonl 의 stop_base_path 를 봐라: primary 가 아니면 확인이 안 된 것이다" >&2
+     echo "   (primary+direct_failed = 홀드는 갔고 확인용 set_cmd_vel 이 거부됐다)" >&2 ;;
+  4) echo "== 체인이 끊겼다. 에피소드는 저장됐다 — 사유는 아래." ;;
   *) echo "== 종료 코드 $rc" >&2 ;;
 esac
+# exit 4 의 사유 셋 중 하나를 가려 준다. NaN 게이트는 ESC 와 **같은** 플래그로 런을
+# 세우므로 events.jsonl 쪽은 '사람 중단'으로 보인다 — 종료 코드만 둘을 구분한다.
+if [[ "$rc" == 4 ]]; then
+  if grep -q "NON-FINITE ACTION" "$LOGDIR/$RUN.log" 2>/dev/null; then
+    echo "   !! **NON-FINITE ACTION** — 정책이 NaN/inf 를 냈다. 그 틱은 hold 로 바뀌어" >&2
+    echo "      로봇에 NaN 은 안 갔다(게이트). 다음 회차 전에 체크포인트의 normalizer" >&2
+    echo "      stats 와 fp16 여부를 확인하라 (README:359)." >&2
+    echo "      ⚠️ events.jsonl 에는 이 단계가 'stop_recording'(사람 중단)으로 적힌다 —" >&2
+    echo "         게이트가 ESC 와 같은 플래그를 쓴다. 보고서의 중단 집계를 그대로 믿지 마라." >&2
+  else
+    echo "   타임아웃 또는 리셋 미도달. 보고서의 「사유」 열이 어느 쪽인지 말한다." >&2
+  fi
+fi
 
 # 회차 뒤 정리 — 단계별 표 (로봇 무접촉)
 RUN_DIR="outputs/stage_runner/$RUN"

@@ -131,6 +131,9 @@ class SignalLatch:
         self.signum: int | None = None
         self.events: dict[str, bool] | None = None
         self.installed: bool = False
+        # Set at the top of the teardown. After it the handler never raises --
+        # see :meth:`enter_teardown`.
+        self.tearing_down: bool = False
         self._previous: dict[int, Any] = {}
 
     @property
@@ -162,18 +165,36 @@ class SignalLatch:
         self.events["stop_recording"] = True
         self.events["exit_early"] = True
 
+    def enter_teardown(self) -> None:
+        """From here the handler only sets flags; it never raises.
+
+        Called at the TOP of the teardown. Without it the first delivery raises
+        wherever it lands, and that can be inside the teardown itself: cli's
+        ``finally`` wraps ``robot.disconnect()`` in ``except Exception``, which a
+        SystemExit is NOT, so a SIGTERM arriving between the ``try`` and the
+        base-zeroing inside ``disconnect()`` would escape and skip the rest of the
+        block -- the keyboard listener and the log close, and, worse, any later
+        hardware call. That is the failure this class exists to prevent, arriving
+        through this class.
+
+        Idempotent, and it does NOT stop the flags being set: a record_loop cannot
+        be running at this point, but the flags are what a wrapper around
+        ``run_trial`` would read.
+        """
+        self.tearing_down = True
+
     def handle(self, signum: int, frame: Any) -> None:
-        first = self.signum is None
-        if first:
+        first = self.signum is None and not self.tearing_down
+        if self.signum is None:
             self.signum = int(signum)
         self._set_flags()
         name = signal.Signals(signum).name if hasattr(signal, "Signals") else signum
         if not first:
             logger.error(
-                f"{name} again -- IGNORED as an exit request. The teardown "
-                "(base stop, disconnect) is already running and unwinding out of "
-                "it would leave the arms torqued. SIGKILL if you must, and then "
-                "check the base by hand."
+                f"{name} -- IGNORED as an exit request. The teardown "
+                "(base stop, disconnect) is already running or has already been "
+                "asked for, and unwinding out of it would leave the arms torqued. "
+                "SIGKILL if you must, and then check the base by hand."
             )
             return
         logger.error(
@@ -184,17 +205,42 @@ class SignalLatch:
         raise SystemExit(128 + int(signum))
 
     def install(self) -> bool:
+        """Trap the signals, EXCEPT any the parent process already set to SIG_IGN.
+
+        The exception is what makes ``nohup`` work. ``nohup`` starts the child with
+        SIGHUP set to ``SIG_IGN``, an ignored disposition survives ``exec``, and
+        the whole point is that the run SURVIVES the terminal going away. Taking
+        that over with a handler would make a dropped SSH session under nohup tear
+        the run down -- the opposite of what nohup was asked for, and of what this
+        repo's docs promise. Leaving an inherited SIG_IGN alone is the standard
+        convention for exactly this reason.
+
+        Under tmux there is no SIG_IGN to inherit and the handler installs
+        normally; tmux keeps the session alive by other means.
+        """
         if threading.current_thread() is not threading.main_thread():
             return False
         for number in _TRAPPED_SIGNALS:
             try:
-                self._previous[number] = signal.getsignal(number)
+                previous = signal.getsignal(number)
+                if previous is signal.SIG_IGN:
+                    logger.info(
+                        f"{signal.Signals(number).name} is already ignored by the "
+                        "parent process (this is what `nohup` does), so it is left "
+                        "that way -- the run is meant to survive it."
+                    )
+                    continue
+                self._previous[number] = previous
                 signal.signal(number, self.handle)
             except (OSError, ValueError, RuntimeError):
                 self._previous.pop(number, None)
                 continue
         self.installed = bool(self._previous)
-        return self.installed
+        # True for "this ran on the main thread", NOT for "something was
+        # trapped": an inherited SIG_IGN is a deliberate skip, and reporting it as
+        # a failure would make main() print the off-main-thread warning at every
+        # nohup start.
+        return True
 
     def restore(self) -> None:
         """Put the previous dispositions back. Called from ``main``'s finally.
@@ -233,9 +279,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     latch = SignalLatch()
     if not latch.install():
         logger.warning(
-            "SIGTERM/SIGHUP handlers were NOT installed (not the main thread). A "
-            "dropped SSH session or a `kill` will skip the teardown and may leave "
-            "the base driving on its last command."
+            "SIGTERM/SIGHUP handlers were NOT installed: signal.signal() only "
+            "works on the main thread, and this is not it. A `kill` will skip the "
+            "teardown and may leave the base driving on its last command."
         )
     try:
         return run_trial_process(argv, latch)
@@ -632,6 +678,14 @@ def run_trial_process(
             # afterwards (a camera teardown on a camera that never opened) is
             # swallowed here, because it arrives strictly after the base is
             # zeroed.
+            # FIRST STATEMENT of the teardown, before anything touches hardware:
+            # from here a SIGTERM/SIGHUP only sets flags. Raising SystemExit into
+            # this block would escape the `except Exception` below (SystemExit is
+            # not an Exception) and skip the rest of it -- including, if the signal
+            # landed between the `try` and disconnect()'s own
+            # base.set_cmd_vel(0.0, 0.0), the call that stops the base.
+            if latch is not None:
+                latch.enter_teardown()
             try:
                 robot.disconnect()
             except Exception:
