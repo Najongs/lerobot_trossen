@@ -986,9 +986,9 @@ Why each piece exists -- all three failures are measured, not assumed:
   leaves 0.10 rad of its designated start pose, or the commanded base integrates past 0.17 rad of
   net rotation or 0.10 m of travel. Without it the 16-D rule fires on a stage that never started:
   in `configs/chain/stage_params.json` the designated START pose of task03, task04 and task10 is
-  within 0.001 rad of one of that same stage's END poses (a stage that only drives the base
-  leaves the arm where it found it), and 20-40% of M1's holdout starts predict a stop on the
-  first chunk -- so eleven stages could report a full 1->11 run having moved nothing. A stage that
+  within 0.0008 rad of one of that same stage's END poses (measured off the file; WHY is
+  [추정] -- read off the task names, and task04 is `pour_liquid_from_...`), and 20-40% of M1's
+  holdout starts predict a stop on the first chunk -- so eleven stages could report a full 1->11 run having moved nothing. A stage that
   times out without departing says `never_departed` in its reason and gets a `✗` in the report's
   departure column; the thing to look at then is the start scene, not the policy.
 - **The right arrow.** `allow_manual_complete: true` for BOTH models: it means "this stage is

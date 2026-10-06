@@ -68,6 +68,13 @@ def main(argv: list[str]) -> int:
 
     # temporal ensemble: n_action_steps>1 과 같이 못 쓴다 (aa30006 — 루프 20%
     # 느려지고 과회전 1.29배).
+    #
+    # 여기는 **무조건** 거부한다 — 러너 안의 같은 게이트
+    # (`preflight.temporal_ensemble_problem`) 보다 엄격하다. 그쪽은 실행
+    # `n_action_steps > 1` 일 때만 막는다(ACT 가 막는 조합이 그것이고, 러너는
+    # `from_pretrained` 뒤에 대입해서 그 검사를 우회하므로 대입 전에 본다).
+    # 이 스크립트는 체인 회차를 띄우는 통로이고 체인은 exec 30 으로 돌리므로
+    # 더 좁게 두는 쪽이 맞다. 의도된 비대칭이다 — 맞추려 하지 마라.
     if checkpoint.get("temporal_ensemble_coeff") is not None:
         problems.append(
             "체크포인트에 temporal_ensemble_coeff 가 박혀 있다 -- "

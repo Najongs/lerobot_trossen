@@ -262,7 +262,9 @@ def build_report(
         terminator = end.get("terminator", "?")
         counts["policy"][terminator] = counts["policy"].get(terminator, 0) + 1
         base = integrate(rows, start.get("t_mono"), end.get("t_mono"))
-        if detail.get("departed") is False:
+        # `departure_unknown` 은 **안 떠났음이 아니라 모름**이다 — 감시자가 팔을
+        # 못 읽은 단계에서 0.000 rad 를 측정값처럼 세면 볼 곳을 틀리게 가리킨다.
+        if detail.get("departed") is False and not detail.get("departure_unknown"):
             never_departed.append(str(start.get("stage_id")))
         lines.append(
             "| {stage} | {term} | {departed} | {elapsed} ({p10}/{p90}) | {hz} | {p} | "
@@ -271,10 +273,14 @@ def build_report(
                 term=f"**{terminator}**",
                 # 「언제 시작 장면을 떠났나」. `✗` 는 **한 번도 떠나지 않았다** --
                 # 그 단계는 어려워서 실패한 것이 아니라 시작하지 않았고, 그러면
-                # 단계 자체에 대해 측정된 것이 없다. 옛 회차의 events.jsonl 에는
-                # 이 키가 없어서 `-` 가 된다(없음 ≠ 안 떠났음).
+                # 단계 자체에 대해 측정된 것이 없다. `?` 는 **모름** (감시자가
+                # 눈이 멀어 팔을 못 읽었다 — 0.000 rad 는 측정값이 아니다).
+                # 옛 회차의 events.jsonl 에는 이 키가 없어서 `-` 가 된다
+                # (없음 ≠ 안 떠났음).
                 departed=(
-                    "✗"
+                    "?"
+                    if detail.get("departure_unknown")
+                    else "✗"
                     if detail.get("departed") is False
                     else fmt(detail.get("departed_s"), ".1f")
                 ),

@@ -26,10 +26,13 @@ poses".
 
 WHY THE DEPARTURE LATCH IS A PREMISE OF BOTH. Without it the 16-D rule fires on
 a stage that never started. In ``configs/chain/stage_params.json`` the
-designated START pose of t03, t04 and t10 is within 0.001 rad of one of that
-same stage's twenty END poses (a stage that only drives the base leaves the arm
-where it found it), and t01/t05/t07's are inside their own
-``end_pose_tol_rad`` as well. P2 measured that 20-40% of M1's holdout starts
+designated START pose of t03, t04 and t10 is within 0.0008 rad of one of that
+same stage's twenty END poses, and t01/t05/t07's are inside their own
+``end_pose_tol_rad`` as well. (Those three distances are MEASURED off the file.
+WHY they are that small -- a stage that mostly drives the base leaves the arm
+where it found it -- is [추정]: it is read off the task NAMES, and t04 is
+``task04_pour_liquid_from_...``, which is not a moving stage.) P2 measured that
+20-40% of M1's holdout starts
 predict a stop on the first chunk -- so an arm standing still at its start pose
 satisfied "stalled AND near an end pose" and the stage fell to ``complete``
 after p10_s having done nothing. Eleven of those in a row is a chain that
@@ -44,8 +47,10 @@ scene is the same failure with a different sensor. It is set by either
   (``tol_rad`` 0.05), so a reset that merely landed at the edge of ``tol_rad``
   can never latch it; or
 * the COMMANDED base integrating past ``departure_base_rot_rad`` (0.17 rad, 10
-  degrees) or ``departure_base_fwd_m`` (0.10 m) -- the moving stages (t01, t03,
-  t10) turn and drive without moving an arm joint at all.
+  degrees) or ``departure_base_fwd_m`` (0.10 m). Some stages are expected to
+  turn or drive with very little arm motion -- t01, t03 and t10 by their names
+  (``move_to_tube_rack``, ``turn_to_face_beaker``, ``move_to_beaker_shelf``),
+  which is [추정]; the arm clause alone would then never latch for them.
 
 WHY A ProcessorStep AND NOT A WATCHER THREAD. ``robot_action_processor`` receives
 ``(action, observation)`` as ONE transition every tick
@@ -219,6 +224,15 @@ class Departure:
     arm_rad: float
     base_rot_rad: float
     base_fwd_m: float
+    # Why the monitor went blind, or "". A blind stage that did not latch is
+    # "unknown", NOT "did not depart": the arm may never have been readable at
+    # all, and reporting `arm_rad: 0.000` as if it had been measured sends the
+    # operator to the start scene when the fault is in the monitor's input.
+    blind: str = ""
+
+    @property
+    def unknown(self) -> bool:
+        return bool(self.blind) and not self.departed
 
     def as_detail(self) -> dict[str, Any]:
         # `_meas_` in the names, because `departure_arm_rad` and friends are
@@ -228,6 +242,7 @@ class Departure:
         return {
             "departed": self.departed,
             "departed_s": None if self.at_s is None else round(self.at_s, 3),
+            "departure_unknown": self.unknown,
             "departure_meas_arm_rad": round(self.arm_rad, 4),
             "departure_meas_base_rot_rad": round(self.base_rot_rad, 4),
             "departure_meas_base_fwd_m": round(self.base_fwd_m, 4),
@@ -384,8 +399,16 @@ class CompletionMonitorStep(ProcessorStep):
             arm_rad=stage.worst_arm_rad,
             base_rot_rad=stage.base_rot_rad,
             base_fwd_m=stage.base_fwd_m,
+            blind=stage.blind,
         )
-        if not stage.departed:
+        if not stage.departed and stage.blind:
+            logger.warning(
+                f"stage {stage.params.number} ({stage.params.name}) departure is "
+                "UNKNOWN, not false: the monitor was blind "
+                f"({stage.blind}), so the arm may never have been readable. "
+                "Do not read the departure numbers as a measurement."
+            )
+        elif not stage.departed:
             logger.warning(
                 f"stage {stage.params.number} ({stage.params.name}) NEVER "
                 f"DEPARTED: the measured arm stayed within "
@@ -473,6 +496,22 @@ class CompletionMonitorStep(ProcessorStep):
             commanded.append(float(action[key]))
             measured.append(float(observation[key]))
 
+        now = self.clock()
+        stage.ticks += 1
+        x_velocity = float(action.get(BASE_X_VELOCITY_KEY, 0.0))
+        theta_velocity = float(action.get(BASE_THETA_VELOCITY_KEY, 0.0))
+
+        # BEFORE the progress-key check, before _decide, and before _prune could
+        # drop the evidence. The ORDER against the progress check is the point:
+        # a 17-D model whose action is missing `progress` blinds the monitor, and
+        # if the departure were updated after that check a blind stage would
+        # report "never departed, worst arm 0.000 rad" -- a fabricated
+        # measurement pointing the operator at the start scene when the real
+        # cause is that the monitor could not read its signal. The arm and the
+        # base ARE readable here; only the progress slot is not.
+        self._update_departure(stage, now, measured, x_velocity, theta_velocity)
+        stage.last_t = now
+
         progress: float | None = None
         if stage.has_progress:
             if PROGRESS_KEY not in action:
@@ -484,10 +523,6 @@ class CompletionMonitorStep(ProcessorStep):
                 return
             progress = float(action[PROGRESS_KEY])
 
-        now = self.clock()
-        stage.ticks += 1
-        x_velocity = float(action.get(BASE_X_VELOCITY_KEY, 0.0))
-        theta_velocity = float(action.get(BASE_THETA_VELOCITY_KEY, 0.0))
         stage.samples.append(
             _Sample(
                 t=now,
@@ -499,9 +534,6 @@ class CompletionMonitorStep(ProcessorStep):
                 measured=tuple(measured),
             )
         )
-        # BEFORE _decide and before _prune could drop the evidence.
-        self._update_departure(stage, now, measured, x_velocity, theta_velocity)
-        stage.last_t = now
         self._prune(stage, now)
         if stage.blind:
             return
@@ -527,9 +559,12 @@ class CompletionMonitorStep(ProcessorStep):
     ) -> None:
         """Integrate the base, measure the arm, and latch ``departed`` once.
 
-        Runs on EVERY tick including the ones where the monitor is blind: a
-        blind monitor cannot declare completion anyway, and the departure is a
-        fact about the run that the report prints either way.
+        Called as soon as the arm and the base have been read, which is BEFORE
+        the progress-key check -- so a 17-D model with a missing ``progress``
+        slot still gets a real departure measurement. It is NOT called when the
+        arm itself was unreadable; then the departure is unknown and
+        ``Departure.blind`` says so, because a fabricated 0.000 rad would point
+        the operator at the start scene instead of at the monitor's input.
         """
         if stage.start_pose is None:
             # No designated pose: take the first tick's measurement as the

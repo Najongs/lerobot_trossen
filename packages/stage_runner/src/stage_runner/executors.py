@@ -379,6 +379,19 @@ def _classify_chain_policy(
             f"the only explanation left; {measured}",
             {},
         )
+    if departure is not None and departure.unknown:
+        # Blind AND not latched. "Never departed" would be a FABRICATED
+        # measurement here -- the monitor could not read the arm at all, so
+        # 0.000 rad is not an observation -- and it would send the operator to
+        # the start scene when the fault is in the monitor's input.
+        return (
+            TERMINATED_BY_TIMEOUT,
+            "ran to control_time_s with no completion, and the monitor was "
+            f"BLIND for this stage ({departure.blind}), so whether the stage "
+            "ever left its start scene is UNKNOWN -- do not read the departure "
+            f"numbers as a measurement; {measured}",
+            {},
+        )
     if departure is not None and not departure.departed:
         # A DIFFERENT FINDING from an ordinary timeout, and the one the chain
         # report has to separate: the stage did not run out of time doing its

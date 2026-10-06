@@ -857,6 +857,25 @@ def _realistic_names():
 # --------------------------------------------------------------------------- #
 
 
+class _FakePlan:
+    """The two fields ``_classify_chain_policy`` reads off a stage plan."""
+
+    def __init__(self, *, control_time_s: float) -> None:
+        self.control_time_s = control_time_s
+
+
+class _FakeContext:
+    """Just enough StageContext for the classifier: no flags, fps 21."""
+
+    def __init__(self) -> None:
+        import types
+
+        self.events: dict[str, bool] = {}
+        self.config = types.SimpleNamespace(
+            dataset=types.SimpleNamespace(fps=21)
+        )
+
+
 class _MonitorHarness(NoRobotSdkMixin):
     """Synthetic tick sequences against an injected clock.
 
@@ -1155,12 +1174,25 @@ class CompletionMonitorTest(_MonitorHarness, unittest.TestCase):
         self.assertEqual(result.reason, comp.REASON_PROGRESS)
 
     def test_a_tracking_error_over_the_track_knob_still_blocks(self) -> None:
-        """The split loosened one quantity, it did not remove the check."""
+        """The split loosened one quantity, it did not remove the check.
+
+        ``offset = DEPARTED + track`` so the MEASURED arm is still DEPARTED rad
+        from the start pose: otherwise 0.2 - 0.12 = 0.08 never latches the
+        departure and this would be a test of the latch wearing a stall test's
+        name.
+        """
         monitor = self._monitor(has_progress=True)
         for _ in range(60):
             self._tick(
-                monitor, progress=1.0, offset=self.DEPARTED, track=0.12
+                monitor,
+                progress=1.0,
+                offset=self.DEPARTED + 0.12,
+                track=0.12,
             )
+        self.assertTrue(
+            monitor._stage.departed,
+            "the departure must NOT be what is refusing here",
+        )
         self.assertFalse(
             self.events["exit_early"],
             "an arm 0.12 rad behind its command is not following it",
@@ -1241,7 +1273,10 @@ class DepartureLatchTest(_MonitorHarness, unittest.TestCase):
         self.assertFalse(monitor.last_departure.departed)
 
     def test_the_base_alone_can_latch_it(self) -> None:
-        """t01, t03 and t10 turn and drive without moving an arm joint.
+        """A stage that turns or drives with no arm motion has still departed.
+
+        t01, t03 and t10 are expected to be like that by their names [추정];
+        the rule under test does not depend on which stages they are.
 
         theta.vel 0.5 rad/s for 10 ticks at 21 Hz integrates to about 0.21 rad,
         past departure_base_rot_rad (0.17). The arm never moves.
@@ -1319,6 +1354,94 @@ class DepartureLatchTest(_MonitorHarness, unittest.TestCase):
             "the previous stage's departure must not carry into this one -- the "
             "robot action pipeline is the one record_loop never resets",
         )
+
+    def test_a_missing_progress_key_does_not_hide_a_real_departure(self) -> None:
+        """Blind on the PROGRESS slot; the arm and the base are still readable.
+
+        The departure update runs before the progress-key check for exactly
+        this: if it ran after, a blind stage would report "never departed,
+        worst arm 0.000 rad" -- a number nothing measured -- and the report
+        would send the operator to the start scene while the real fault is that
+        the monitor could not read its signal.
+        """
+        monitor = self._monitor(has_progress=True)
+        for _ in range(40):
+            self._tick(monitor, progress=None, offset=0.3)
+        self.assertFalse(
+            self.events["exit_early"], "a blind monitor never declares complete"
+        )
+        self.assertIsNone(monitor.end_stage())
+        departure = monitor.last_departure
+        self.assertTrue(
+            departure.departed,
+            "the arm WAS readable and it moved 0.3 rad; only `progress` was "
+            "missing",
+        )
+        self.assertFalse(departure.unknown)
+        self.assertAlmostEqual(departure.arm_rad, 0.3, places=6)
+
+    def test_an_unreadable_arm_makes_the_departure_unknown_not_false(self) -> None:
+        """A transition the monitor cannot parse at all.
+
+        `departed` is False because nothing latched it, but `unknown` is True,
+        and the executor and the report both read THAT: the stage's timeout
+        reason must not say `never_departed` and the table must print `?`.
+        """
+        monitor = self._monitor(has_progress=True)
+        for _ in range(5):
+            self.now += 1 / 21.0
+            monitor({})
+        self.assertFalse(self.events["exit_early"])
+        self.assertIsNone(monitor.end_stage())
+        departure = monitor.last_departure
+        self.assertFalse(departure.departed)
+        self.assertTrue(departure.unknown)
+        self.assertTrue(departure.blind)
+        self.assertTrue(departure.as_detail()["departure_unknown"])
+
+    def test_an_unknown_departure_is_not_reported_as_never_departed(self) -> None:
+        from stage_runner import executors
+        from stage_runner.completion import Departure
+
+        unknown = Departure(
+            departed=False,
+            at_s=None,
+            arm_rad=0.0,
+            base_rot_rad=0.0,
+            base_fwd_m=0.0,
+            blind="the transition carried no action/observation dict",
+        )
+        _, reason, _ = executors._classify_chain_policy(
+            context=_FakeContext(),
+            stage=None,
+            plan=_FakePlan(control_time_s=10.0),
+            elapsed_s=10.0,
+            completion=None,
+            departure=unknown,
+            allow_manual=True,
+        )
+        self.assertNotIn(comp.REASON_NEVER_DEPARTED, reason)
+        self.assertIn("BLIND", reason)
+        self.assertIn("UNKNOWN", reason)
+
+    def test_a_measured_non_departure_still_says_never_departed(self) -> None:
+        from stage_runner import executors
+        from stage_runner.completion import Departure
+
+        measured = Departure(
+            departed=False, at_s=None, arm_rad=0.02, base_rot_rad=0.0,
+            base_fwd_m=0.0,
+        )
+        _, reason, _ = executors._classify_chain_policy(
+            context=_FakeContext(),
+            stage=None,
+            plan=_FakePlan(control_time_s=10.0),
+            elapsed_s=10.0,
+            completion=None,
+            departure=measured,
+            allow_manual=True,
+        )
+        self.assertIn(comp.REASON_NEVER_DEPARTED, reason)
 
     def test_the_departure_survives_window_pruning(self) -> None:
         """_prune drops samples older than the longest window; the latch is not one.
