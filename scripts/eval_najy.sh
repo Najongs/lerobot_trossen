@@ -10,6 +10,11 @@
 #
 #   예)  DRY_RUN=1 scripts/eval_najy.sh M1 4 30 3     # 명령만 출력, 로봇 안 건드림
 #        scripts/eval_najy.sh M1 4 30 3               # 실행
+#        MAX_REL=none scripts/eval_najy.sh M1 4 30 3  # 팔 한 틱 이동 제한을 끈다 (10/06 이전 회차와 같은 조건)
+#
+#   MAX_REL  팔 관절 한 틱 이동 상한(rad, 기본 0.1). 정책 action 이 현재 자세에서 이만큼 넘게 떨어지면
+#            그 틱엔 0.1 만 간다 -- 청크 경계·시작 순간의 큰 점프로 팔이 다치는 것을 막는다(10/06 부터).
+#            21 Hz 에서 관절당 최대 약 2.1 rad/s. 그리퍼(m)에도 같은 값이 걸리지만 행정이 작아 영향 없다.
 #
 # 순서와 판정 기준: docs/eval_najy.md. 로그·CSV 는 ~/eval_logs/<회차>.* 에 남는다.
 set -euo pipefail
@@ -20,6 +25,9 @@ STAGE=${2:?단계 1-11}
 EXEC=${3:?exec (30 또는 5)}
 EPISODES=${4:-5}
 DRY_RUN=${DRY_RUN:-0}
+MAX_REL=${MAX_REL:-0.1}
+[[ "$MAX_REL" == none ]] || awk -v v="$MAX_REL" 'BEGIN{exit !(v ~ /^[0-9]*\.?[0-9]+$/ && v+0 > 0)}' \
+  || { echo "MAX_REL 은 양수(rad) 또는 none" >&2; exit 2; }
 
 TASKS=(
   ""
@@ -55,7 +63,7 @@ NN=$(printf "%02d" "$STAGE")
 RUN="$(date +%m%d_%H%M)_${TAG}_t${NN}_e${EXEC}"
 LOGDIR=~/eval_logs; mkdir -p "$LOGDIR"
 
-echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음}"
+echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL"
 
 # 1) 체크포인트 받기 (루트형/pretrained_model 중첩형 모두)
 POLICY=$(uv run python -c "
@@ -133,6 +141,7 @@ CMD=(uv run lerobot-record
   "--dataset.num_episodes=$EPISODES"
   --dataset.fps=21
   --dataset.push_to_hub=false)
+[[ "$MAX_REL" != none ]] && CMD+=("--robot.left_arm_max_relative_target=$MAX_REL" "--robot.right_arm_max_relative_target=$MAX_REL")
 
 # 베이스 명령·실측 CSV 는 순수 기록이라 항상 켠다. 청크 실행 로그는 청크 실행기 자체를 설치해
 # 실행 경로가 바뀌므로 기본은 끈다 -- 필요하면 CHUNK_LOG=1.
@@ -153,11 +162,12 @@ set -e
 
 # 4) 회차 요약 -- 판정에 쓰는 줄만
 {
-  echo "== $RUN 종료 코드 $rc"
+  echo "== $RUN 종료 코드 $rc · 팔 한 틱 상한 $MAX_REL"
   grep -h "LEROBOT_TASK_ONEHOT" "$LOGDIR/$RUN.log" | head -3 || true
   echo "-- 루프 주기 (phase=policy 마지막 3줄 -- mean·min 을 녹화 주기와 비교)"
   grep -h "Control loop rate" "$LOGDIR/$RUN.log" | grep "phase=policy" | tail -3 || true
   echo "-- 팔 페이싱 발동 횟수: $(grep -c "FIRED" "$LOGDIR/$RUN.log" || true)"
+  echo "-- 팔 한 틱 상한에 잘린 틱: $(grep -c "had to be clamped" "$LOGDIR/$RUN.log" || true)"
   echo "-- 베이스 시리얼 재등록: $(grep -h "LEROBOT_BASE_SERIAL_REARM" "$LOGDIR/$RUN.log" | tail -1)"
 } | tee "$LOGDIR/$RUN.summary.txt"
 echo "에피소드별 성공/실패는 $LOGDIR/eval_najy_results.csv 에 손으로 한 줄씩: run,episode,success(0/1),비고"
