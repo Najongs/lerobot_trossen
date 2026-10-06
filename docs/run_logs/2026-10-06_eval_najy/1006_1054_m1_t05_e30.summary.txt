@@ -1,0 +1,11 @@
+== 1006_1054_m1_t05_e30 종료 코드 0 · 팔 한 틱 상한 0.1
+[lerobot_robot_trossen] LEROBOT_TASK_ONEHOT=5/11 installed
+INFO 2026-10-06 10:54:13 ot_patch.py:224 LEROBOT_TASK_ONEHOT=5/11: one-hot step inserted before the normalizer
+INFO 2026-10-06 10:54:25 ot_patch.py:126 LEROBOT_TASK_ONEHOT: stage 5/11 active -- policy state 14 -> 27 (base slots zeroed)
+-- 루프 주기 (phase=policy 마지막 3줄 -- mean·min 을 녹화 주기와 비교)
+INFO 2026-10-06 10:56:45 rate_log.py:221 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=15.7 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=1ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=24ms
+INFO 2026-10-06 10:56:46 rate_log.py:221 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=16.0 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+INFO 2026-10-06 10:56:48 rate_log.py:221 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=16.6 Hz (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+-- 팔 페이싱 발동 횟수: 0
+-- 팔 한 틱 상한에 잘린 틱: 56
+-- 베이스 시리얼 재등록: WARNING 2026-10-06 10:55:23 al_rearm.py:160 LEROBOT_BASE_SERIAL_REARM: active for this policy loop at 21 fps (fd 51 -> /dev/ttyUSB0).
