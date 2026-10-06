@@ -5,6 +5,10 @@
 > `/home/trossen-ai/NAJY/.claude-najy` 가 아니면 공용 `~/.claude` 로 뜬 것이다 —
 > 전역 규칙·MCP(vaultgraph·arxiv 등)·레포 메모리가 안 보인다. 세션을 닫고 다시 열어라.
 
+> **DGX_1(`/home/kiro-ai/NAJY/lerobot_trossen`)에서 열었다면** 위 머리말은 로봇 PC 기준이다 — 먼저
+> `docs/HANDOFF_najy_1006.md` 를 읽어라 (trossen-ai-simulation 에서 넘어온 결론·산출물 위치·할 일·DGX 주의사항).
+> DGX 에서는 이 레포 패키지를 import 하지 마라(로봇 SDK 를 끌어온다), push 는 `najongs` 원격(fork)으로.
+
 Trossen Mobile AI(WidowX AI 팔 4대 + SLATE 베이스 + RealSense 3대)용 lerobot 플러그인 fork.
 11단계 실험실 작업(튜브→비커→냉장고→선반)을 ACT 로 녹화·학습·실기 eval 한다.
 명령·인자의 정본은 `README.md`. 학습 쪽 배경은 `docs/` 의 NAJY 문서들(아래 「실험」).

@@ -14,6 +14,8 @@ ls -t ~/eval_logs/ | head -20                              # 마지막으로 돈
 ls docs/eval_najy_results_*.md                             # 결과 기록 — 날짜가 가장 늦은 것이 현재 위치
 ```
 
+DGX_1 에서 열었으면 먼저 [`HANDOFF_najy_1006.md`](HANDOFF_najy_1006.md) (로봇 PC 와 다른 점·DGX 에서 할 분석).
+
 읽는 순서: `CLAUDE.md` → 이 문서 → `eval_najy.md` 「지금까지」 표 → 가장 최근 `eval_najy_results_<MMDD>.md` 의 「다음」 절.
 
 **현재 위치 정하기** — 가장 최근 결과 문서의 「다음」 절이 가리키는 단계부터 한다. 결과 문서에 없는 회차가 `~/eval_logs` 에
