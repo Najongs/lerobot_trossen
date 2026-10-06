@@ -26,7 +26,7 @@ from lerobot.processor import (
     make_default_processors,
 )
 from lerobot.robots import Robot, RobotConfig, make_robot_from_config
-from lerobot.scripts.lerobot_record import record_loop
+from lerobot.scripts import lerobot_record
 from lerobot.utils.constants import ACTION
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.import_utils import register_third_party_plugins
@@ -412,7 +412,26 @@ def call_record_loop(
     flushed for free -- re-entering per stage IS the transition semantics we
     want, not an accident.
     """
-    record_loop(
+    # RESOLVED ON THE MODULE, AT CALL TIME. `from ... import record_loop` would
+    # bind the function at IMPORT time, and three fork plugins REBIND
+    # `lerobot_record.record_loop` from `register_plugins()`:
+    # loop_rate_log (the phase tag every downstream consumer needs),
+    # chunk_execution_patch and, transitively, anything they wrap. Those patches
+    # install when `cli.main` calls `register_plugins()`, which is AFTER this
+    # module was imported.
+    #
+    # loop_rate_log does sweep sys.modules and rebind the name in any module
+    # holding the original, so an import-time binding happens to survive today
+    # -- but only because this module is already imported by then, and only
+    # while that sweep exists. If it ever did not, `_phase` would stay None for
+    # every stage, which is not a visible failure: base_serial_rearm would
+    # refuse with "no record_loop phase tag" (so the chain runs with the 20 ms
+    # serial wait and the ("policy", "reset") allowance would never fire),
+    # basevel.csv's `phase` column would be empty (so eval_base_stats' policy
+    # filter and the report's per-stage integral would find nothing), and
+    # pose_guide would print no POSE line. One attribute lookup per stage buys
+    # all of that back unconditionally.
+    lerobot_record.record_loop(
         robot=robot,
         events=events,
         fps=fps,

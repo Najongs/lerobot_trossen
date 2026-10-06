@@ -63,7 +63,8 @@ from typing import Any
 
 import torch
 
-from lerobot.utils.constants import OBS_STATE
+from lerobot.configs.types import FeatureType, PolicyFeature
+from lerobot.utils.constants import ACTION, OBS_STATE
 
 from stage_runner.chain_params import ARM_JOINT_NAMES
 from stage_runner.completion import (
@@ -358,7 +359,26 @@ class ResetPolicy:
         self.plan = plan
         self.events = events
         self.settings = settings or ResetSettings()
-        self.config = ResetPolicyConfig(pretrained_path=f"reset://{plan.stage_number}")
+        # input/output_features are DECLARED, not left empty. Two readers:
+        # `policies.bundle_descriptor` puts them in the trial_start event (an
+        # empty dict reports state_dim/action_dim null for every reset, so the
+        # log could not say what the ramp was driving), and anything upstream
+        # that shapes a batch from `policy.config.input_features` -- which is
+        # how `policies.warm_up_bundle` works and how a future fast-path could.
+        # MockPolicyConfig declares them for the same reason.
+        self.config = ResetPolicyConfig(
+            pretrained_path=f"reset://{plan.stage_number}",
+            input_features={
+                OBS_STATE: PolicyFeature(
+                    type=FeatureType.STATE, shape=(len(state_names),)
+                )
+            },
+            output_features={
+                ACTION: PolicyFeature(
+                    type=FeatureType.ACTION, shape=(len(action_names),)
+                )
+            },
+        )
         self.arm_joint_names = tuple(arm_joint_names)
         self.action_names = tuple(action_names)
         self.state_names = tuple(state_names)

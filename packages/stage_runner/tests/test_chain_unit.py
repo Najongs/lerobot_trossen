@@ -917,6 +917,143 @@ class ChainExpansionTest(NoRobotSdkMixin, unittest.TestCase):
                 self.assertEqual(stage.instruction, f"reset:{stage.stage_number:02d}")
 
 
+class ResetOnlyExpansionTest(NoRobotSdkMixin, unittest.TestCase):
+    """``chain.reset.only`` drops every policy stage. Bring-up steps (2) and (3)."""
+
+    def _stages(self, **overrides):
+        from stage_runner import config as cfg_module
+        from stage_runner.mock_robot import MockRobotConfig
+
+        chain = cfg_module.ChainConfig(
+            enabled=True,
+            params_path=str(MOCK_PARAMS),
+            from_stage=overrides.pop("from_stage", 1),
+            to_stage=overrides.pop("to_stage", 11),
+            model=cfg_module.ChainModelConfig(policy_path="local/ckpt", onehot_k=11),
+            reset=cfg_module.ResetConfig(
+                only=True, initial=overrides.pop("initial", False)
+            ),
+        )
+        assert not overrides, overrides
+        config = cfg_module.StageRunnerConfig(
+            robot=MockRobotConfig(), version=2, chain=chain
+        )
+        return cfg_module.expand_chain(config, load_params()), cfg_module
+
+    def test_reset_only_is_eleven_ramps_and_no_policy_stage(self) -> None:
+        stages, cfg_module = self._stages()
+        self.assertEqual(len(stages), 11)
+        self.assertTrue(
+            all(s.kind == cfg_module.STAGE_KIND_RESET for s in stages),
+            "a policy stage here would drive the arms in the one mode whose "
+            "whole purpose is that nothing does",
+        )
+        self.assertEqual([s.stage_number for s in stages], list(range(1, 12)))
+
+    def test_reset_only_forces_the_first_ramp_in(self) -> None:
+        """Even with `initial: false` -- otherwise the first gap is not a boundary."""
+        stages, _ = self._stages(initial=False)
+        self.assertEqual(stages[0].id, "reset_pre_01")
+        self.assertTrue(stages[0].initial_reset)
+
+    def test_reset_only_keeps_the_same_ids_as_the_full_chain(self) -> None:
+        """Same executor, same plan, same ids: the ramps are not a second path."""
+        reset_only, cfg_module = self._stages()
+        from stage_runner.mock_robot import MockRobotConfig
+
+        full = cfg_module.expand_chain(
+            cfg_module.StageRunnerConfig(
+                robot=MockRobotConfig(),
+                version=2,
+                chain=cfg_module.ChainConfig(
+                    enabled=True,
+                    params_path=str(MOCK_PARAMS),
+                    model=cfg_module.ChainModelConfig(
+                        policy_path="local/ckpt", onehot_k=11
+                    ),
+                ),
+            ),
+            load_params(),
+        )
+        self.assertEqual(
+            [s.id for s in reset_only],
+            [s.id for s in full if s.kind == cfg_module.STAGE_KIND_RESET],
+        )
+
+    def test_reset_only_over_a_sub_range(self) -> None:
+        stages, _ = self._stages(from_stage=7, to_stage=9)
+        self.assertEqual(
+            [s.id for s in stages],
+            ["reset_pre_07", "reset_to_08", "reset_to_09"],
+        )
+
+
+class LateBoundRecordLoopTest(NoRobotSdkMixin, unittest.TestCase):
+    """``call_record_loop`` must resolve ``record_loop`` ON THE MODULE, per call.
+
+    Three fork plugins rebind ``lerobot_record.record_loop`` from
+    ``register_plugins()``, which runs AFTER ``record_adapter`` is imported. An
+    import-time ``from ... import record_loop`` would keep calling the original,
+    and the failure is invisible: no phase tag, so base_serial_rearm refuses for
+    the whole run, basevel.csv's `phase` column is empty and pose_guide prints
+    nothing -- while the chain appears to work.
+    """
+
+    def test_a_rebound_record_loop_is_the_one_that_gets_called(self) -> None:
+        from lerobot.scripts import lerobot_record
+
+        from stage_runner import record_adapter
+        from stage_runner.policies import PolicyBundle
+
+        calls: list[dict] = []
+
+        def sentinel(**kwargs):
+            calls.append(kwargs)
+
+        original = lerobot_record.record_loop
+        lerobot_record.record_loop = sentinel
+        try:
+            record_adapter.call_record_loop(
+                robot=object(),
+                events={},
+                fps=21,
+                processors=record_adapter.make_processors(),
+                dataset=object(),
+                bundle=PolicyBundle(
+                    stage_id="t01",
+                    policy_path="mock://hold",
+                    config=object(),
+                    policy=object(),
+                    preprocessor=object(),
+                    postprocessor=object(),
+                ),
+                control_time_s=1.0,
+                single_task="t",
+            )
+        finally:
+            lerobot_record.record_loop = original
+
+        self.assertEqual(
+            len(calls),
+            1,
+            "the function rebound AFTER record_adapter was imported must be the "
+            "one that runs -- that is what the fork's loop_rate_log, "
+            "chunk_execution_patch and base_serial_rearm all depend on",
+        )
+        # And `dataset` by KEYWORD: @safe_stop_image_writer reads
+        # kwargs.get("dataset") (image_writer.py:26-38).
+        self.assertIn("dataset", calls[0])
+
+    def test_record_adapter_does_not_hold_its_own_binding(self) -> None:
+        from stage_runner import record_adapter
+
+        self.assertFalse(
+            hasattr(record_adapter, "record_loop"),
+            "a module-level `record_loop` name here means `from ... import` came "
+            "back; the plugins rebind the attribute on lerobot_record, not here",
+        )
+
+
 class ExtraActionFeatureTest(NoRobotSdkMixin, unittest.TestCase):
     def _robot(self):
         from stage_runner.mock_robot import MockRobot, MockRobotConfig

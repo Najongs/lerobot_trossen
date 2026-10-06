@@ -230,6 +230,16 @@ def load_chain_bundles(
         )
 
     policy_paths = {stage.policy_path for stage in stages if stage.policy_path}
+    if not policy_paths:
+        # Reset-only (chain.reset.only): the ramps load no checkpoint, so there
+        # is nothing to build and nothing to condition. Returning empty is not a
+        # degraded path -- the reset executor builds its own bundle per stage
+        # from the measured anchor, which it could not do here anyway.
+        logger.info(
+            "chain: no policy stage declares a checkpoint (reset-only), so no "
+            "weights are loaded and no one-hot step is installed"
+        )
+        return {}, None
     if len(policy_paths) > 1:
         raise ValueError(
             f"a chain runs ONE checkpoint, but the stages name {sorted(policy_paths)}. "

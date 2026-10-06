@@ -16,11 +16,10 @@
 #   DRY_RUN=1     조립한 명령만 찍고 끝낸다. 체크포인트 다운로드·폭 검사는 **한다**
 #                 (eval_najy.sh DRY_RUN 과 같은 범위: 로봇 무접촉, HF 다운로드는 함)
 #   FROM_STAGE/TO_STAGE   기본 1 / 11
-#   RESET_ONLY=1  정책 단계를 전부 빼고 리셋만 연달아 돌린다. 내부적으로
-#                 `--chain.completion.timeout_factor` 를 건드리지 않고 러너의
-#                 단계 전개에서 정책을 뺄 방법이 없으므로, 경계마다 사람이
-#                 `→` 로 넘기는 대신 **단계 범위를 하나씩** 돌리는 것을 쓴다 —
-#                 아래에서 안내만 하고 자동으로 돌리지는 않는다
+#   RESET_ONLY=1  정책 단계를 **전개에서 빼고** 리셋만 연달아 돌린다
+#                 (`--chain.reset.only=true`). bring-up ②·③ 용. 「리셋이
+#                 reached 로 끝난 직후 ESC」 로 대신하지 않는 이유: 사람이
+#                 반응하기 전에 정책이 이미 몇 틱을 보낸다
 #   MANUAL=0      `→` 수동 완료를 끈다 (기본 켬: 사용자 결정 10/06, 두 모델 공통)
 #   LOOP_HZ_WINDOW  루프 주기 요약 간격(프레임). 기본 30 — 바꾸면 10/02 기준선과 비교 불가
 #
@@ -75,63 +74,29 @@ print(d if (d/'config.json').exists() else d/'pretrained_model')
 " | tail -1)
 echo "   POLICY=$POLICY"
 
-# 2) 체크포인트 폭 ↔ 원핫·exec·앙상블 검사 (로봇에 연결하기 전에 막는다).
+# 2) 체크포인트 폭 ↔ YAML 검사 + 단계 파라미터 검증 (로봇에 연결하기 전에 막는다).
 #    eval_najy.sh:86-104 의 블록을 체인용으로: action 폭 16(진행도 없음)과
 #    17(progress)을 모두 허용하고, 어느 쪽인지 찍는다.
-uv run python - "$POLICY" "$YAML" <<'PY'
-import json, sys, re
-cfg = json.load(open(f"{sys.argv[1]}/config.json"))
-state = cfg["input_features"]["observation.state"]["shape"][0]
-action = cfg["output_features"]["action"]["shape"][0]
-chunk = cfg["chunk_size"]
-yaml_text = open(sys.argv[2], encoding="utf-8").read()
-
-def key(name, default=None):
-    m = re.search(rf"^\s*{name}:\s*(\S+)\s*$", yaml_text, re.M)
-    return m.group(1) if m else default
-
-if cfg.get("temporal_ensemble_coeff") is not None:
-    sys.exit("체크포인트에 temporal_ensemble_coeff 가 박혀 있다 -- n_action_steps>1 과 같이 못 쓴다")
-exec_steps = int(key("n_action_steps", "30"))
-if exec_steps > chunk:
-    sys.exit(f"n_action_steps {exec_steps} > chunk {chunk}")
-k = key("onehot_k", "null")
-if k != "null":
-    if state != 16 + int(k):
-        sys.exit(f"체크포인트 state={state}D 인데 원핫 K={k} 는 16+{k}D 를 요구한다")
-elif state not in (14, 16):
-    sys.exit(f"체크포인트 state={state}D -- 원핫 모델이면 YAML 의 chain.model.onehot_k 를 채워라")
-has_progress = key("has_progress", "null")
-expected = {16: "false", 17: "true"}.get(action)
-if expected is None:
-    sys.exit(f"체크포인트 action={action}D -- 체인은 16(진행도 없음)과 17(progress)만 안다")
-if has_progress not in ("null", expected):
-    sys.exit(f"YAML 의 has_progress={has_progress} 인데 체크포인트 action={action}D 는 {expected} 다")
-print(f"   체크포인트 state {state}D · action {action}D "
-      f"({'progress 있음' if action == 17 else '진행도 없음'}) · chunk {chunk} · exec {exec_steps} 확인",
-      file=sys.stderr)
-PY
+#
+#    YAML 은 **파싱**한다 -- grep 하지 않는다. `grep -E '^\s*fps:' | head -1` 은
+#    카메라 블록의 `fps: 30` 을 먼저 집어 `dataset.fps: 21` 에 닿지 못한다
+#    (이 스크립트의 첫 판이 실제로 그랬고, 그러면 단계 파라미터 로더가 fps
+#    불일치로 런을 거부한다 -- `bash -n` 으로는 안 잡힌다). 들여쓰기로 중첩을
+#    표현하는 파일에서 키 이름만 보는 것은 같은 이름이 두 블록에 있는 순간 틀린다.
+uv run python scripts/_chain_preflight.py "$POLICY" "$YAML" "$PARAMS" > "$LOGDIR/.$RUN.preflight"
+cat "$LOGDIR/.$RUN.preflight"
 
 # 3) 원핫 패치가 이 체크아웃에 있는지 (로봇 SDK 를 import 하지 않는다 -- 패치 파일만 읽는다).
 #    체인은 한 프로세스에서 단계를 바꾸므로 `set_stage` 가 **있어야** 한다.
+#    `_chain_preflight.py` 가 YAML 의 onehot_k 를 파싱해 마지막 줄에 찍어 준다.
 P=packages/lerobot_robot_trossen/src/lerobot_robot_trossen
-if grep -q '^\s*onehot_k: [0-9]' "$YAML"; then
+if grep -q "ONEHOT_K=" "$LOGDIR/.$RUN.preflight"; then
   grep -q "def set_stage" "$P/task_onehot_patch.py" || {
     echo "!! 이 체크아웃의 원핫 패치에 set_stage 가 없다 -- 체인은 한 프로세스에서 단계를 바꾼다." >&2
     echo "   git pull --ff-only && uv sync  (Najongs/lerobot_trossen main)" >&2; exit 3; }
   echo "   원핫 패치·set_stage 확인 (실행 로그의 'stage i/K active' 가 단계마다 다시 찍히는지 볼 것)"
 fi
-grep -q "def set_stage" "$P/pose_guide.py" || echo "!! pose_guide 에 set_stage 가 없다 — 리셋 중 POSE 줄이 옛 중앙값 표를 쓴다" >&2
-
-# 4) 단계 파라미터 검증 (로봇 SDK 를 import 하지 않는다 -- chain_params 는 stdlib only)
-FPS=$(grep -E '^\s*fps:' "$YAML" | head -1 | awk '{print $2}')
-uv run python -c "
-import sys
-sys.path.insert(0, 'packages/stage_runner/src')
-from stage_runner.chain_params import load_chain_params
-p = load_chain_params('$PARAMS', expected_fps=$FPS)
-print(f'   단계 파라미터 OK: {len(p.stages)}단계 · fps {p.fps} · sim {p.source.get(\"sim_commit\", \"?\")[:12]}')
-"
+grep -q "def set_stage" "$P/pose_guide.py" || echo "!! pose_guide 에 set_stage 가 없다 -- 리셋 중 POSE 줄이 옛 중앙값 표를 쓴다" >&2
 
 ARGS=(uv run python -m stage_runner
   --config_path "$YAML"
@@ -159,20 +124,12 @@ ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv"
 # 지정 리셋 자세를 직접 넘긴다(중앙값 표가 아니라).
 
 if [[ "$RESET_ONLY" == 1 ]]; then
-  cat >&2 <<'MSG'
--- RESET_ONLY: 러너에는 「리셋만」 모드가 없다. 정책 단계를 빼면 체인이 아니라
-   자세 이동 시험이고, 그건 단계 범위를 하나씩 돌려서 한다:
-
-     for k in 2 3 4 5 6 7 8 9 10 11; do
-       FROM_STAGE=$k TO_STAGE=$k scripts/eval_chain.sh <모델> reset_$k
-     done
-
-   각 회차는 「k 의 시작 자세로 리셋 → k 정책 1단계」 다. 리셋만 보려면 리셋이
-   `reached` 로 끝난 직후 ESC 를 눌러라 — 정책 단계는 0 프레임으로 끝나고
-   체인은 실패로 기록된다(의도된 결과다: 사람이 중단했다).
-   큰 전이 5곳을 먼저: t02→03 · t03→04 · t04→05 · t07→08 · t10→11.
-MSG
-  exit 0
+  # 정책 단계를 **전개에서 뺀다**. 「리셋이 reached 로 끝난 직후 ESC」 로 대신하지
+  # 않는 이유: 사람이 반응하기 전에 정책이 이미 몇 틱을 보낸다. 러너를 처음 돌리는
+  # 회차(bring-up ②)에서 그건 「리셋만」이 아니다.
+  ARGS+=("--chain.reset.only=true")
+  echo "   RESET_ONLY: 정책 단계 없음 -- 리셋만 ${FROM_STAGE}~${TO_STAGE} 연달아"
+  echo "   큰 전이 5곳을 먼저: t02→03 · t03→04 · t04→05 · t07→08 · t10→11"
 fi
 
 if [[ "$DRY_RUN" == 1 ]]; then

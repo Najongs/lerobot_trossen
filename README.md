@@ -947,10 +947,20 @@ pose, one-hot k+1, repeat. Supports both a 16-D checkpoint (M1) and a 17-D one w
 slot is a progress scalar.
 
 ```shell
-DRY_RUN=1 scripts/eval_chain.sh M1                 # assemble and print the command only
-scripts/eval_chain.sh TPH bringup5                 # run
+DRY_RUN=1 scripts/eval_chain.sh M1                   # assemble and print the command only
+RESET_ONLY=1 scripts/eval_chain.sh M1 resets         # the ramps alone, no checkpoint loaded
 FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 r4  # one boundary: reset to task04, then task04
+scripts/eval_chain.sh TPH bringup5                   # the whole chain
 ```
+
+`RESET_ONLY=1` (`chain.reset.only`) drops every policy stage from the expansion, so bring-up
+steps ② and ③ move the arms with no checkpoint in the process at all. It is a MODE and not an
+operator procedure for a reason: "press ESC right after the reset reports `reached`" lets the
+policy send several ticks at 21 Hz before a human can react, and on the first run of a new
+runner -- possibly with glassware in the grippers -- those ticks are the whole risk the step
+exists to retire. The ramps are the same ones the full chain runs, with the same ids, because
+nothing between two ramps moves the arm: the ramp to stage k+1 anchors exactly where the ramp to
+stage k left it, which is the boundary gap the step measures.
 
 `configs/chain/{chain_m1_all11,chain_tph_all11}.yaml` are the two configs (reference and
 main); `configs/chain/stage_params.json` carries the per-stage start poses, the p10/p50/p90
@@ -972,6 +982,8 @@ Why each piece exists -- all three failures are measured, not assumed:
 - **The right arrow.** `allow_manual_complete: true` for BOTH models: it means "this stage is
   done, go on". Recorded as `terminated_by="manual"` and counted separately from the automatic
   `"complete"`, so the chain report says how much of the run the model finished by itself.
+  It applies to POLICY stages only -- pressing it during a reset cuts the ramp short, which is
+  `not_reached` and therefore a chain failure.
 
 What the runner does NOT do:
 

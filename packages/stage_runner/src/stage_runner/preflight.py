@@ -577,7 +577,24 @@ def check_chain_definitions(config: StageRunnerConfig, params) -> None:
 
     policy_stages = [s for s in config.stages if s.kind == STAGE_KIND_POLICY]
     reset_stages = [s for s in config.stages if s.kind == STAGE_KIND_RESET]
-    if [s.stage_number for s in policy_stages] != numbers:
+    if chain.reset.only:
+        # The ramps alone (bring-up (2) and (3)). A policy stage reaching this
+        # expansion would move the arms under a checkpoint in the one mode whose
+        # entire purpose is that nothing does.
+        if policy_stages:
+            problems.append(
+                f"`chain.reset.only: true` but the expansion carries "
+                f"{len(policy_stages)} policy stage(s) "
+                f"{[s.id for s in policy_stages]}. Reset-only means the ramps "
+                "alone; a policy stage here would drive the arms in the one mode "
+                "that exists so that nothing does."
+            )
+        if [s.stage_number for s in reset_stages] != numbers:
+            problems.append(
+                f"reset-only expanded to ramps for "
+                f"{[s.stage_number for s in reset_stages]}, expected {numbers}."
+            )
+    elif [s.stage_number for s in policy_stages] != numbers:
         problems.append(
             f"the expanded chain runs policy stages "
             f"{[s.stage_number for s in policy_stages]}, expected {numbers}."
@@ -761,6 +778,24 @@ def check_dataset_name(
             "into two parts and anything else raises there."
         )
 
+    if config.chain.enabled:
+        # A chain run is policy output whatever its stages look like, including
+        # reset-only: it is an eval of the runner on the robot and it lands in
+        # the same `~/eval_logs` series. Without this branch a reset-only chain
+        # (whose stages carry NO policy_path, because a ramp loads no
+        # checkpoint) would fall through to sanity_check_dataset_name(repo_id,
+        # None) below, which INVERTS the rule and demands a name WITHOUT the
+        # prefix -- the exact re-inversion the comment at the end of this
+        # function warns about.
+        if not dataset_name_part(repo_id).startswith(EVAL_DATASET_PREFIX):
+            raise PreflightError(
+                f"`dataset.repo_id: {repo_id}` is a chain run, so its name part "
+                f"must start with `{EVAL_DATASET_PREFIX}` (lerobot's convention "
+                f"for policy output). Rename to "
+                f"`<owner>/{EVAL_DATASET_PREFIX}{dataset_name_part(repo_id)}`."
+            )
+        return
+
     policy_config = next(iter(policy_configs.values()), None)
     if policy_config is not None:
         try:
@@ -803,6 +838,11 @@ def check_dataset_name(
             f"policy output and the name must NOT start with "
             f"`{EVAL_DATASET_PREFIX}`."
         ) from error
+
+
+def dataset_name_part(repo_id: str) -> str:
+    """The part after the single slash. Callers check the slash count first."""
+    return repo_id.split("/")[-1]
 
 
 def dataset_root_path(config: StageRunnerConfig) -> Path:

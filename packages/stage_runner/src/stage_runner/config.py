@@ -241,6 +241,21 @@ class ResetConfig:
     # observation is slightly off, and the whole point of the reset is to put
     # the arms back inside the demonstration distribution.
     initial: bool = True
+    # RESET-ONLY: drop every policy stage from the expansion and run the ramps
+    # back to back. This is bring-up step ② and ③ (empty-handed, then holding an
+    # object), and it is a MODE rather than an operator procedure on purpose.
+    #
+    # The procedure it replaces was "press ESC right after the reset reports
+    # reached", and that is not reset-only: by the time a human reacts, the
+    # policy has already sent several ticks at 21 Hz. On the first run of a new
+    # runner, with the arms possibly holding glassware, those ticks are the whole
+    # risk the step exists to retire.
+    #
+    # The ramps are the SAME ones the full chain runs -- same executor, same
+    # plan, same ids -- because nothing between them moves the arm: the reset to
+    # stage k+1 anchors exactly where the reset to stage k left it, which is the
+    # boundary gap this step measures.
+    only: bool = False
 
     def to_settings(self):
         from stage_runner.reset_policy import ResetSettings
@@ -367,6 +382,9 @@ def reset_stage_id(stage_number: int, *, initial: bool) -> str:
 def expand_chain(config: StageRunnerConfig, params) -> list[StageConfig]:
     """Turn ``chain:`` into the stage list the runner walks. The ONE place that order lives.
 
+    With ``chain.reset.only`` it is the RAMPS ALONE -- 11 reset stages, no
+    policy stage at all. See :class:`ResetConfig`.
+
     For ``from_stage=1, to_stage=11`` the result is 22 stages::
 
         reset_pre_01, t01, reset_to_02, t02, ..., reset_to_11, t11
@@ -398,7 +416,10 @@ def expand_chain(config: StageRunnerConfig, params) -> list[StageConfig]:
     stages: list[StageConfig] = []
     for number in range(chain.from_stage, chain.to_stage + 1):
         initial = number == chain.from_stage
-        if not initial or chain.reset.initial:
+        # reset.only forces the first ramp in: without it the range would start
+        # at the SECOND stage's pose with the arm wherever the operator left it,
+        # so the first measured gap would not be a stage boundary at all.
+        if not initial or chain.reset.initial or chain.reset.only:
             stages.append(
                 StageConfig(
                     id=reset_stage_id(number, initial=initial),
@@ -421,6 +442,8 @@ def expand_chain(config: StageRunnerConfig, params) -> list[StageConfig]:
                     initial_reset=initial,
                 )
             )
+        if chain.reset.only:
+            continue
         stage_params = params.stage(number)
         stages.append(
             StageConfig(

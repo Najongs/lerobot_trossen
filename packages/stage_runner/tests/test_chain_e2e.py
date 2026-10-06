@@ -385,6 +385,50 @@ class ChainEndToEndTest(unittest.TestCase):
         self.assertFalse(run.trial_end["chain_failed"])
         self.assertEqual(run.exit_code, cli.EXIT_OK)
 
+    def test_reset_only_runs_eleven_ramps_and_no_policy(self) -> None:
+        """bring-up (2)/(3): the ramps alone, with no checkpoint loaded at all.
+
+        A procedure ("press ESC right after `reached`") cannot give this: by the
+        time a human reacts the policy has already sent several ticks at 21 Hz,
+        and on the first run of a new runner -- possibly with glassware in the
+        grippers -- those ticks are the entire risk the step exists to retire.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory), extra_argv=("--chain.reset.only=true",)
+            )
+
+        self.assertEqual(run.exit_code, cli.EXIT_OK)
+        ends = run.of("stage_end")
+        self.assertEqual(len(ends), 11)
+        self.assertEqual(
+            [event["kind"] for event in ends],
+            ["reset"] * 11,
+            "reset-only must expand to ramps ONLY",
+        )
+        self.assertEqual(
+            [event["terminator"] for event in ends], [TERMINATED_BY_REACHED] * 11
+        )
+        self.assertEqual(
+            [event["stage_id"] for event in ends],
+            ["reset_pre_01"] + [f"reset_to_{k:02d}" for k in range(2, 12)],
+        )
+        # Each ramp's dmax IS the boundary gap: nothing between two ramps moves
+        # the arm, so ramp k+1 anchors exactly where ramp k left it. That is the
+        # measurement bring-up (2) is for.
+        for event in ends[1:]:
+            detail = event["reason_detail"]
+            self.assertGreater(detail["reset_dmax"], 0.0)
+            self.assertLess(detail["reach_err"], detail["reset_tol_rad"])
+        # No checkpoint was loaded.
+        trial_start = run.of("trial_start")[0]
+        self.assertEqual(
+            trial_start["policies"],
+            [],
+            "a ramp loads no weights, so trial_start must report no policy",
+        )
+        self.assertEqual(run.trial_end["reason"], TRIAL_REASON_COMPLETED)
+
     # ---------------------------------------------------------------- preflight
 
     def test_a_chain_config_that_also_lists_stages_is_refused(self) -> None:
