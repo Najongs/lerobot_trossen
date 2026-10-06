@@ -372,6 +372,24 @@ DGX 가 하려던 것 중 로봇 PC 에서 먼저 본 것: (b) 시작 장면 —
   실기도 같은 규약이다 — 1350 ep0 은 명령 −95°·실측 −85° 로 시연과 같은 쪽으로 돌아 성공했고, 1347 ep0 은 명령·실측 모두 +. 측정 코드 문제가 아니다
   (위에서 본 방향은 카메라 프레임으로 판단 — 사람 확인 전).
 
+## DGX_1 → Trossen PC1 (10/06 밤) — 체인 러너 도착·재학습 투입·요청 갱신
+
+DGX 세션이 10/06 저녁에 한 것(배경·근거는 sim 레포 `docs/mobile_base_investigation.md` §89~§94, 계획은 §94 머리):
+- **재학습 2런 투입**(10:11 UTC, ~12 h): `exp_all11_tph_s{1000,2000}` — M1 설정 그대로에 데이터 쪽 변경 셋 `trim_idle`(시연 앞 정지 구간 제거)·`pad_hold`(끝을 넘는 청크를 「머물기」 로 감독 — M1 이 끝 장면에서 안 멈추는 원인 §93.2)·`progress`(action 17번째 칸 = 진행도 0→1, 전환 신호). **task06 은 새 데이터셋** `kiroaiseoul/task06_task06-2_…_14D_new_2`(237ep, 두 행동 — §94.1). 오프라인 채점 5종을 M1 과 비교해 통과하면 허브에 `kiroaiseoul/NAJY_act_all11_tph_27D_120k_s1000` 으로 올린다 — **아직 없음**.
+- **체인 러너**(`packages/stage_runner/`, 팀원 #47 브랜치 트리를 이식해 확장): 11단계를 사람 개입 없이 1→11 — 단계마다 정책 → 완료 판정(진행도 ∧ 출력 정지 3초 ∧ 경과≥p10; `→` 키 = 수동 완료, ESC = 중단) → 팔 12관절을 다음 단계 **지정 시작 자세**로 최소저크 리셋(그리퍼 유지·베이스 0) → 원핫 전환. 설정 `configs/chain/{chain_m1_all11,chain_tph_all11}.yaml`, 단계 파라미터 `configs/chain/stage_params.json`(sim 레포 `export_chain_params.py` 산출), 회차 조립 `scripts/eval_chain.sh`, 보고서 `scripts/eval_chain_report.py`. 절차는 **`eval_najy.md` G절**(bring-up ①~⑤). 리뷰(Claude·codex) 뒤 fork main 에 올린다 — 이 절이 main 에 있으면 올라간 것.
+
+### 로봇 PC 가 할 것 (순서)
+1. **받기**: `git fetch najongs && git merge --ff-only najongs/main` → `uv lock && uv sync` (`stage_runner` 가 workspace 멤버로 추가돼 lock 갱신이 필요하다; sync 가 수동 설치분을 지우면 복구) → `uv run python -c "import stage_runner"` 로 확인.
+2. **bring-up ①~③ 은 M1 로, 새 모델 없이 지금 할 수 있다** — `DRY_RUN=1 scripts/eval_chain.sh M1` → `RESET_ONLY=1 … resets`(빈손 10경계; 큰 전이 5곳 t02→03·03→04·04→05·07→08·10→11 은 특히 눈으로) → 물체 든 채. 통과 기준은 G절 표. **처음은 에피소드 1개, ESC 와 베이스 e-stop 을 함께 둔다**(e-stop 은 팔을 멈추지 않는다 [추정]). ③ 의 「그리퍼가 쥐는 힘을 유지하나」 가 미확인 관문이다.
+3. ④ M1 + 러너로 단계 1개 → eval_najy 회차와 루프 Hz·rearm·clamped·FIRED 가 같은지.
+4. ⑤ 체인은 TPH 체크포인트가 허브에 올라간 뒤(DGX 가 이 문서에 적는다). 그 전에 M1 로 `TO_STAGE=3` 체인을 돌려 보는 것은 의미 있다(M1 은 끝 장면에서 안 멈춰 `→` 를 눌러 넘기게 될 것 — 수동/자동 구분해 기록).
+5. **여전히 대기**: 1006 회차 eval 데이터셋 6개·`~/eval_logs/1006_*` 전송(§「DGX_1 → Trossen PC1 요청」 ①) — 오프라인 채점을 실기 라벨로 검증하는 데 필요.
+
+### 바뀐 것·주의
+- `pose_guide` 의 `POSE task0N` 목표: `TARGETS_DEG`(쌍봉 분포의 중앙값, t02·03·04·05·10 은 시연에 없는 자세)는 **체인 러너에서는 쓰지 않고** `stage_params.json` 의 지정 자세를 쓴다. `eval_najy.sh`(lerobot-record) 회차에서도 같은 목표를 쓰게 하는 변경은 다음 커밋(DGX).
+- task06 단계 파라미터(p10/p50/p90 31.5/36.7/47.2 s, 시작 자세)는 **새 데이터셋의 전체 과제 에피소드(task_index 0)** 기준. 체인에서 단계 6 은 「잡기→이동」 전체다.
+- 녹화 주기 21 Hz 확정(§90) → `stage_params.json` 의 길이는 21 Hz 환산. 이동 단계 기준 회전·전진량도 1.43 배(이 문서 위 「다음」 과 같음).
+
 ## 다음
 
 사람 결정(10/06): 원핫(임베딩)으로 단계를 고르는 것이 목표였으므로, 시작 자세로 단계를 맞추는 방식은 채택하지 않는다 —
@@ -382,4 +400,5 @@ task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 C-3 은
 2. **task01 재시험 — 비커 선반 앞(task11 이 끝난 자리)에서 시작**: `scripts/eval_najy.sh M1 1 30 3`. 기준은 약 +82°·1.64 m (21 Hz 환산).
 3. task06(전진)·task10(전진) — 돌리기 전에 `scene_rows.py` 로 시연 첫 프레임을 뽑아 **로봇 위치부터** 맞춘다 (task01 두 회차를 이것 때문에 버렸다).
 4. 보류: C-3 (M2 task05). 학습 쪽 대책은 DGX 에서 — 위 「1호기로 넘기는 것」.
-5. **DGX 요청 처리 현황** (위 「DGX_1 → Trossen PC1 요청」): ① 원자료 전송은 **사람 대기** — 오후 회차 2개를 더해 데이터셋 6개(1038·1054·1126·1156·1347_t01·1350_t03)와 `~/eval_logs/1006_*`. ②녹화 주기·③task01 관찰은 「Trossen PC1 답」 에 적었다.
+5. **체인 러너 bring-up ①~③(M1, 새 모델 불필요)** — 위 「DGX_1 → Trossen PC1 (10/06 밤)」 과 `eval_najy.md` G절. 받기 전 `uv lock && uv sync`.
+6. **DGX 요청 처리 현황** (위 「DGX_1 → Trossen PC1 요청」): ① 원자료 전송은 **사람 대기** — 오후 회차 2개를 더해 데이터셋 6개(1038·1054·1126·1156·1347_t01·1350_t03)와 `~/eval_logs/1006_*`. ②녹화 주기·③task01 관찰은 「Trossen PC1 답」 에 적었다.

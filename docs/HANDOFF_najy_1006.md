@@ -51,3 +51,11 @@
 - 학습·오프라인 채점은 이 레포가 아니라 `trossen-ai-simulation` 에서 `uv run` 한다 (lerobot 0.4.1, `HF_HUB_OFFLINE=1`). GPU·디스크 규칙은 전역 host.md(DGX_1).
 - 이 레포는 public — `/raid` 경로까지는 괜찮지만 서버 주소·토큰·IP 는 적지 않는다.
 - 2호기(sandia)는 실험을 마무리했다(S2-27). 체크포인트는 sandia 로컬에만 있다.
+
+## 4. 10/06 밤 현황 (DGX 세션) — 어디까지 왔나
+
+- **진단 끝**: §89(원핫은 경계 10곳 중 9곳에서 단계를 안 고름) · §91(데이터의 단계 경계가 이어지지 않음, 0.25~1.28 rad) · §92(시연 분포 안 시작에서도 정지 예측 20~74%, M1 > M2) · §93(M1 은 끝 장면에서 안 멈춤 — 패딩 마스크) · §90(녹화 21 Hz). 전부 sim 레포 `docs/mobile_base_investigation.md`.
+- **계획 승인·실행 중**(§94): 재학습 `exp_all11_tph_s{1000,2000}`(`/raid/kiro-ai/outputs/act/`, 로그 `/raid/kiro-ai/logs/act/`, 10/06 10:11 UTC 시작 ~12 h) · 2호기 변형 2런 + 대조군(`docs/multi_server_setup.md` 「작업 지시 (10-07)」) · 체인 러너(이 레포 `packages/stage_runner/`, `configs/chain/`, `scripts/eval_chain*.{sh,py}`).
+- **채점 도구**(sim 레포 `scripts/`): `stage_start_check.py`(출발 지도) · `end_stationary_check.py`(끝 정지율) · `progress_check.py`(진행도) · `stage_cond_diag.py`(원핫 비) · `eval_rollout.py` + `judge_all11.py`(추종 MAE 판정표). 통과 기준은 계획 §2 / §94. 15K 체크포인트에서 조기 go/no-go, 120K 에서 5종 → 통과한 시드를 허브 `kiroaiseoul/NAJY_act_all11_tph_27D_120k_s<seed>` 로.
+- **DGX 가 이어서 할 일**: 15K·120K 채점 → 실기 후보 결정·허브 업로드 → `eval_najy_results_1006.md` 에 적기 · 1006 프레임이 오면 채점을 실기 라벨로 검증 · `pose_guide` 가 `eval_najy.sh` 회차에서도 `stage_params.json` 목표를 쓰게 하는 변경 · codex 교차 검토 재실행(한도 초과로 10/06 미완) · 2호기 결과 수령.
+- **새 task06 데이터셋**은 `/raid/kiro-ai/lerobot/kiroaiseoul/task06_task06-2_pickup_beaker_and_move_to_refrigerator_14D_new_2`(2.9G). state 14D — `train_multi.apply_base_state` 가 패딩한다. 옛 task06 디렉터리는 그대로 두었다(§91~93 의 t06 행이 그 기준).
