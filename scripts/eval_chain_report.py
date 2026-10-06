@@ -184,13 +184,22 @@ def build_report(
     lines.append("")
     policies = trial_start.get("policies") or []
     checkpoint = policies[0] if policies else {}
-    lines.append(
-        f"- 체크포인트: `{checkpoint.get('policy_path', '?')}` "
-        f"(state {checkpoint.get('state_dim', '?')}D → action "
-        f"{checkpoint.get('action_dim', '?')}D, n_action_steps "
-        f"{checkpoint.get('n_action_steps', '?')}, warm-up "
-        f"{checkpoint.get('warmed_up', '?')})"
-    )
+    if not policies:
+        # Reset-only (`chain.reset.only`): the ramps load no weights, so
+        # trial_start carries no policy. Saying "없음" is the fact; four `?`
+        # would read like a parse failure.
+        lines.append(
+            "- 체크포인트: **없음** (리셋 전용 — 가중치를 로드하지 않았다. "
+            "`chain.reset.only` / `RESET_ONLY=1`)"
+        )
+    else:
+        lines.append(
+            f"- 체크포인트: `{checkpoint.get('policy_path', '?')}` "
+            f"(state {checkpoint.get('state_dim', '?')}D → action "
+            f"{checkpoint.get('action_dim', '?')}D, n_action_steps "
+            f"{checkpoint.get('n_action_steps', '?')}, warm-up "
+            f"{checkpoint.get('warmed_up', '?')})"
+        )
     lines.append(
         f"- 데이터셋: `{trial_start.get('dataset_repo_id', '?')}` @ "
         f"{trial_start.get('fps', '?')} fps · 로봇 "
@@ -223,6 +232,11 @@ def build_report(
     # ---- 정책 단계 표 ----
     lines.append("## 정책 단계")
     lines.append("")
+    if not any(
+        record["start"].get("kind") == STAGE_KIND_POLICY for record in stages
+    ):
+        lines.append("없음 — 리셋 전용 회차다 (bring-up ②·③).")
+        lines.append("")
     lines.append(
         "| 단계 | 종료 | 경과 s (p10/p90) | Hz | p 끝값·유지 s | 정지 s | "
         "NN rad | ∫θ 명령/실측 ° | ∫x 명령/실측 m | clamped |"
