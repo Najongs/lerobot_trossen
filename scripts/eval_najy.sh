@@ -62,8 +62,10 @@ case "$MODEL" in
     REPO=kiroaiseoul/NAJY_act_move4_hot_20D_60k_s1000; TAG=m3
     case "$STAGE" in 1) ONEHOT=1/4 ;; 3) ONEHOT=2/4 ;; 6) ONEHOT=3/4 ;; 10) ONEHOT=4/4 ;;
       *) echo "M3 는 이동 단계(1·3·6·10)만 학습했다" >&2; exit 2 ;; esac ;;
-  */*) REPO=$MODEL; TAG=base ;;
-  *) echo "모델은 M1|M2|M3|<허브 repo id>" >&2; exit 2 ;;
+  TPH) REPO=kiroaiseoul/NAJY_act_all11_tph_27D_120k_s1000; ONEHOT="$STAGE/11"; TAG=tph ;;   # 1라운드 재학습(17D 진행도) — 허브 업로드 뒤 유효
+  ENV) REPO=kiroaiseoul/NAJY_act_all11_tph_env_27D_120k_s1000; ONEHOT="$STAGE/11"; TAG=env ;; # 2라운드(env 단계 토큰) — 허브 업로드 뒤 유효
+  */*) REPO=$MODEL; TAG=base; [ -n "${HOT:-}" ] && ONEHOT="$HOT" ;;   # 맨 repo id: HOT=<i>/<K> 를 주면 원핫 패치 켬(ENV 모델도 같은 패치)
+  *) echo "모델은 M1|M2|M3|TPH|ENV|<허브 repo id>" >&2; exit 2 ;;
 esac
 
 NN=$(printf "%02d" "$STAGE")
@@ -92,13 +94,41 @@ if cfg.get("temporal_ensemble_coeff") is not None:
     sys.exit("체크포인트에 temporal_ensemble_coeff 가 박혀 있다 -- n_action_steps>1 과 같이 못 쓴다")
 if ex > chunk:
     sys.exit(f"exec {ex} > chunk {chunk}")
+# 2라운드 체크포인트는 같은 원핫을 ACT 인코더의 별도 토큰으로도 받는다:
+# observation.environment_state (type ENV, shape [K]) 가 추가로 선언되고 state 는 그대로 16+K 다.
+# 거부하지 않는다 -- 폭만 본다. 패치가 그 키를 전처리 단계에서 채운다.
+env_ft = (cfg.get("input_features") or {}).get("observation.environment_state")
+env_k = None
+if env_ft is not None:
+    if env_ft.get("type") != "ENV":
+        sys.exit(f"observation.environment_state 가 type={env_ft.get('type')!r} -- ENV 여야 한다")
+    env_k = int(env_ft["shape"][0])
 if onehot:
     k = int(onehot.split("/")[1])
     if dim != 16 + k:
         sys.exit(f"체크포인트 state={dim}D 인데 원핫 {onehot} 은 16+{k}D 를 요구한다")
+    if env_k is not None and env_k != k:
+        sys.exit(f"env 토큰 {env_k}D 인데 원핫 {onehot} 은 K={k} 다 -- env 토큰은 state 꼬리와 같은 원핫이다")
+elif env_k is not None:
+    # state=16 이어도 여기서 걸린다: 원핫이 없으면 그 키를 채우는 것이 없고
+    # ACT 는 첫 프레임에 읽는다 -- robot.connect() 뒤다.
+    sys.exit(
+        f"체크포인트가 env 토큰({env_k}D, 2라운드)을 선언했는데 원핫이 없다. "
+        "이 스크립트는 M1/M2/M3 분기에서만 ONEHOT 을 세우고 그 셋은 1라운드 repo 에 "
+        "고정돼 있다 -- 이 모델용 case 를 추가하라 (REPO=…; ONEHOT=\"$STAGE/11\"). "
+        "체인은 scripts/eval_chain.sh <repo id> 로 바로 된다"
+    )
 elif dim not in (14, 16):
     sys.exit(f"체크포인트 state={dim}D -- 원핫 모델이면 M1/M2/M3 로 불러라")
-print(f"   체크포인트 state {dim}D · chunk {chunk} 확인", file=sys.stderr)
+# 위 K 검사와 별개로, 체크포인트가 스스로 선언한 두 값끼리도 대조한다.
+if env_k is not None and env_k != dim - 16:
+    sys.exit(f"env 토큰 {env_k}D 인데 state={dim}D 의 원핫 꼬리는 {dim - 16}D 다 -- 같은 벡터여야 한다")
+print(
+    f"   체크포인트 state {dim}D · chunk {chunk}"
+    + (f" · env 토큰 {env_k}D (2라운드)" if env_k is not None else "")
+    + " 확인",
+    file=sys.stderr,
+)
 print(dim)
 PY
 )

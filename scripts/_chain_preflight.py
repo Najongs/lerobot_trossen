@@ -88,6 +88,29 @@ def main(argv: list[str]) -> int:
     if int(exec_steps) > chunk:
         problems.append(f"n_action_steps {exec_steps} > chunk {chunk}")
 
+    # 2라운드(env 토큰) 체크포인트: `observation.environment_state`
+    # (`FeatureType.ENV`, shape [K]) 를 **추가로** 선언한다. state 는 그대로
+    # 16+K 다 -- 같은 원핫을 ACT 인코더의 별도 토큰으로도 받는다
+    # (`modeling_act.py:344-346, 465-466`). 거부하지 않는다; 폭만 본다.
+    env_feature = (checkpoint.get("input_features") or {}).get(
+        "observation.environment_state"
+    )
+    env_k = None
+    if env_feature is not None:
+        env_type = env_feature.get("type")
+        if env_type != "ENV":
+            problems.append(
+                f"체크포인트의 observation.environment_state 가 type={env_type!r} 다 "
+                "-- ACT 는 ENV 타입일 때만 토큰화하고, 다른 타입이면 정규화기가 "
+                "건드린다"
+            )
+        try:
+            env_k = int(env_feature["shape"][0])
+        except (KeyError, IndexError, TypeError, ValueError):
+            problems.append(
+                "체크포인트의 observation.environment_state 에서 shape 를 못 읽었다"
+            )
+
     onehot_k = model.get("onehot_k")
     if onehot_k:
         if state != 16 + int(onehot_k):
@@ -95,10 +118,31 @@ def main(argv: list[str]) -> int:
                 f"체크포인트 state={state}D 인데 원핫 K={onehot_k} 는 "
                 f"16+{onehot_k}={16 + int(onehot_k)}D 를 요구한다"
             )
+        if env_k is not None and env_k != int(onehot_k):
+            problems.append(
+                f"체크포인트 env 토큰 {env_k}D 인데 원핫 K={onehot_k} 다 -- "
+                "env 토큰은 state 꼬리와 **같은** 원핫이라 폭이 같아야 한다"
+            )
+    elif env_k is not None:
+        # state 가 16 이어도 여기서 걸린다: 원핫을 안 주면 그 키를 채우는 것이
+        # 없고, ACT 는 첫 프레임에 `batch["observation.environment_state"]` 를
+        # 읽는다 -- robot.connect() 뒤다.
+        problems.append(
+            f"체크포인트가 env 토큰({env_k}D, 2라운드)을 선언했는데 YAML 의 "
+            "chain.model.onehot_k 가 비어 있다 -- 그 키를 채우는 것이 없어 첫 "
+            "프레임에 죽는다. onehot_k 를 학습 단계 수로 채워라"
+        )
     elif state not in (14, 16):
         problems.append(
             f"체크포인트 state={state}D -- 원핫 모델이면 YAML 의 "
             "chain.model.onehot_k 를 채워라"
+        )
+    # state 의 원핫 꼬리와도 대조한다 (위 K 검사와 별개 -- 체크포인트가 스스로
+    # 선언한 두 값이 어긋나는 경우를 따로 집어낸다).
+    if env_k is not None and env_k != state - 16:
+        problems.append(
+            f"체크포인트 env 토큰 {env_k}D 인데 state={state}D 의 원핫 꼬리는 "
+            f"{state - 16}D 다 -- 학습된 모델에선 같은 벡터다"
         )
 
     expected_progress = {16: False, 17: True}.get(action)
@@ -145,7 +189,9 @@ def main(argv: list[str]) -> int:
     print(
         f"   체크포인트 state {state}D · action {action}D "
         f"({'progress 있음' if action == 17 else '진행도 없음'}) · "
-        f"chunk {chunk} · exec {exec_steps} · fps {fps} 확인",
+        f"chunk {chunk} · exec {exec_steps} · fps {fps} · "
+        f"{f'env 토큰 {env_k}D (2라운드)' if env_k is not None else 'env 토큰 없음 (1라운드)'}"
+        " 확인",
         file=sys.stderr,
     )
     assert params is not None
@@ -158,6 +204,10 @@ def main(argv: list[str]) -> int:
     # 셸이 다시 읽는 줄. 원핫 모델이면 `set_stage` 가 이 체크아웃에 있는지 보게 한다.
     if onehot_k:
         print(f"ONEHOT_K={int(onehot_k)}")
+    # 셸은 `ONEHOT_K=` 만 grep 한다 (eval_chain.sh:136). 이 줄은 회차 로그에
+    # 어느 라운드의 체크포인트였는지 남기기 위한 것이다.
+    if env_k is not None:
+        print(f"ENV_K={env_k}")
     print(f"ACTION_DIM={action}")
     print(f"STATE_DIM={state}")
     print(f"FPS={int(fps)}")

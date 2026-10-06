@@ -170,6 +170,18 @@ D 에서 정지·실패한 단계에 한해:
 >
 > **`LEROBOT_TASK_ONEHOT` 도 주지 마라.** 그 변수는 `lerobot-record` 진입점을 패치해
 > 「한 프로세스 = 한 단계」를 가정한다. 체인은 번들을 한 번 만들고 `set_stage` 로 바꾼다.
+>
+> **2라운드(env 토큰) 체크포인트는 같은 패치로 돈다 — 로그에 `(+env token)`.** 학습 쪽 2라운드
+> 모델은 같은 원핫을 27D state 꼬리 **와** ACT 인코더의 별도 토큰
+> (`observation.environment_state`, `FeatureType.ENV`, shape `[K]`) 으로 둘 다 받는다.
+> `TaskOneHotStep` 이 **같은 벡터**로 두 자리를 채우므로 체인 쪽은 **설정 변경이 없다**:
+> `scripts/eval_chain.sh <owner>/<repo id>` 는 `configs/chain/chain_tph_all11.yaml`(이미
+> `onehot_k: 11`)로 떨어지고, 맞춰야 하는 것은 `has_progress`(action 폭 16/17) 뿐이다.
+> 단계마다 `stage i/K active … (+env token)` 가 다시 찍히는지 보고,
+> **`(+env token)` 이 없으면 1라운드 체크포인트를 돌리고 있는 것이다.** 폭이 안 맞으면
+> (`ENV ≠ K`, ENV 가 ENV 타입이 아님, `onehot_k: null` 인데 ENV 선언) `_chain_preflight.py` 가
+> 로봇 연결·가중치 다운로드 **전에** 거부하고, 통과하면 `env 토큰 11D (2라운드)` 를 찍는다.
+> 단발(`scripts/eval_najy.sh`)은 **아직 2라운드 alias 가 없다** — 그쪽은 case 추가가 필요하다.
 
 #### 띄우기 전에 — 10/06 교차검토로 바뀐 네 가지
 

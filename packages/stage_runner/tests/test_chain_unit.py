@@ -2491,9 +2491,10 @@ def _load_task_onehot_module():
     this file the same way (``spec_from_file_location`` on the path) for exactly
     this reason, and this is that convention in Python.
 
-    The module itself imports only ``torch`` and
-    ``lerobot.processor.pipeline``, so no stub is needed for it; the stub below
-    exists so the PARENT package name resolves without being executed.
+    The module itself imports only ``torch``, ``lerobot.processor.pipeline`` and
+    ``lerobot.configs.types`` (enums and one dataclass, for the round-2 env
+    feature), so no stub is needed for it; the stub below exists so the PARENT
+    package name resolves without being executed.
     """
     package = types.ModuleType("lerobot_robot_trossen")
     package.__path__ = [str(PLUGIN_SRC)]
@@ -2600,6 +2601,418 @@ class TaskOneHotStepTest(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             module.insert_task_onehot(object(), Config(), 1, 11)
+
+
+# --------------------------------------------------------------------------- #
+# round 2: the same one-hot ALSO as its own ACT encoder token
+# (observation.environment_state). Still loaded by PATH -- no robot SDK.
+# --------------------------------------------------------------------------- #
+
+_ENV_KEY = "observation.environment_state"
+_STATE_KEY = "observation.state"
+
+
+def _policy_cfg(state_dim: int | None = 27, env_dim: int | None = None, env_type="ENV"):
+    """A duck-typed stand-in for the checkpoint's ``PreTrainedConfig``.
+
+    Only ``input_features`` is read by the patch, and only ``shape``/``type`` off
+    each feature -- a real ``ACTConfig`` would need the whole checkpoint. Built
+    as a function rather than a class per case so the ENV-vs-no-ENV pair differs
+    in exactly one argument, which is the behaviour under test.
+    """
+    from lerobot.configs.types import FeatureType, PolicyFeature
+
+    features: dict[str, object] = {}
+    if state_dim is not None:
+        features[_STATE_KEY] = PolicyFeature(
+            type=FeatureType.STATE, shape=(state_dim,)
+        )
+    if env_dim is not None:
+        features[_ENV_KEY] = PolicyFeature(type=env_type, shape=(env_dim,))
+
+    class Config:
+        input_features = features
+
+    return Config()
+
+
+class EnvTokenStepTest(unittest.TestCase):
+    """The round-2 env token: same vector, second key, nothing else moves.
+
+    No NoRobotSdkMixin, for the same reason ``TaskOneHotStepTest`` has none: the
+    module under test is loaded by path with the package stubbed under another
+    name, and the real package's absence is asserted inline.
+    """
+
+    def _step(self, **kwargs):
+        module = _load_task_onehot_module()
+        self.assertNotIn("trossen_slate", sys.modules)
+        self.assertNotIn("lerobot_robot_trossen", sys.modules)
+        return module, module.insert_task_onehot(
+            self._preprocessor(module), _policy_cfg(**kwargs), 1, 11
+        )
+
+    @staticmethod
+    def _preprocessor(module):
+        from lerobot.processor.normalize_processor import NormalizerProcessorStep
+
+        class Preprocessor:
+            def __init__(self) -> None:
+                self.steps = [object.__new__(NormalizerProcessorStep)]
+
+        return Preprocessor()
+
+    def _run(self, step, state):
+        from lerobot.processor import create_transition
+        from lerobot.processor.core import TransitionKey
+
+        out = step(create_transition(observation={_STATE_KEY: state.clone()}))
+        return out[TransitionKey.OBSERVATION]
+
+    def test_env_feature_makes_both_keys_the_same_one_hot(self) -> None:
+        import torch
+
+        _, step = self._step(state_dim=27, env_dim=11)
+        self.assertEqual(step.env_k, 11)
+
+        obs = self._run(step, torch.zeros((1, 14), dtype=torch.float32))
+        self.assertIn(_ENV_KEY, obs)
+        state, env = obs[_STATE_KEY], obs[_ENV_KEY]
+        self.assertEqual(tuple(state.shape), (1, 27))
+        self.assertEqual(
+            tuple(env.shape),
+            (1, 11),
+            "ACT projects (B, K) through encoder_env_state_input_proj; the token "
+            "must carry the batch dimension the state carries",
+        )
+        self.assertTrue(
+            torch.equal(env, state[..., 16:]),
+            "the env token IS the state's one-hot tail -- not a second signal",
+        )
+        self.assertEqual(env.dtype, state.dtype)
+        self.assertEqual(env.device, state.device)
+        self.assertFalse(
+            env.data_ptr() == state.data_ptr(),
+            "cloned, not aliased: an in-place step must not move one copy only",
+        )
+
+    def test_a_round_1_checkpoint_gets_no_env_key_and_the_same_state(self) -> None:
+        import torch
+
+        _, with_env = self._step(state_dim=27, env_dim=11)
+        _, without = self._step(state_dim=27)
+        self.assertIsNone(without.env_k)
+
+        raw = torch.arange(14, dtype=torch.float32).reshape(1, 14)
+        plain = self._run(without, raw)
+        self.assertNotIn(
+            _ENV_KEY,
+            plain,
+            "a round-1 checkpoint (M1/M2/M3, tph) declares no ENV feature, and "
+            "adding the key anyway would hand ACT a tensor it never looks up "
+            "while changing a path that is in production",
+        )
+        self.assertTrue(
+            torch.equal(plain[_STATE_KEY], self._run(with_env, raw)[_STATE_KEY]),
+            "observation.state must be identical in both rounds",
+        )
+
+    def test_set_stage_moves_both_keys(self) -> None:
+        import torch
+
+        _, step = self._step(state_dim=27, env_dim=11)
+        state = torch.zeros((1, 14), dtype=torch.float32)
+
+        obs = self._run(step, state)
+        self.assertEqual(int(torch.argmax(obs[_ENV_KEY][0]).item()), 0)
+
+        step.set_stage(7)
+        obs = self._run(step, state)
+        self.assertEqual(int(torch.argmax(obs[_STATE_KEY][0, 16:]).item()), 6)
+        self.assertEqual(
+            int(torch.argmax(obs[_ENV_KEY][0]).item()),
+            6,
+            "both places the one-hot appears are built from one `hot` tensor, so "
+            "set_stage cannot move one and leave the other",
+        )
+        self.assertTrue(torch.equal(obs[_ENV_KEY], obs[_STATE_KEY][..., 16:]))
+
+    def test_the_announcement_carries_the_env_marker(self) -> None:
+        """``(+env token)`` is what the operator is told to look for.
+
+        docs/eval_najy.md G says its ABSENCE means a round-1 checkpoint is
+        running, so the string itself is an interface.
+        """
+        import logging
+
+        import torch
+
+        module, step = self._step(state_dim=27, env_dim=11)
+        with self.assertLogs(module.logger, level=logging.INFO) as caught:
+            self._run(step, torch.zeros((1, 14), dtype=torch.float32))
+        line = "\n".join(caught.output)
+        self.assertIn("stage 1/11 active", line)
+        self.assertIn("(+env token)", line)
+
+        _, round1 = self._step(state_dim=27)
+        with self.assertLogs(module.logger, level=logging.INFO) as caught:
+            self._run(round1, torch.zeros((1, 14), dtype=torch.float32))
+        self.assertNotIn("(+env token)", "\n".join(caught.output))
+
+    def test_a_mismatched_env_width_is_refused_before_the_robot_connects(self) -> None:
+        module = _load_task_onehot_module()
+        for env_dim in (10, 12):
+            with self.assertRaises(RuntimeError):
+                module.insert_task_onehot(
+                    self._preprocessor(module),
+                    _policy_cfg(state_dim=27, env_dim=env_dim),
+                    1,
+                    11,
+                )
+        # Constructing the step directly is guarded too -- insert_task_onehot is
+        # not the only caller the class has to survive.
+        with self.assertRaises(RuntimeError):
+            module.TaskOneHotStep(stage=1, k=11, expected_dim=27, env_k=10)
+
+    def test_a_non_env_type_is_refused(self) -> None:
+        module = _load_task_onehot_module()
+        with self.assertRaises(RuntimeError):
+            # Declared as STATE, the normalizer would MEAN_STD it and the token
+            # would silently stop being a one-hot.
+            module.insert_task_onehot(
+                self._preprocessor(module),
+                _policy_cfg(state_dim=27, env_dim=11, env_type="STATE"),
+                1,
+                11,
+            )
+
+    def test_transform_features_declares_the_env_feature(self) -> None:
+        from lerobot.configs.types import (
+            FeatureType,
+            PipelineFeatureType,
+            PolicyFeature,
+        )
+
+        module = _load_task_onehot_module()
+        initial = {
+            PipelineFeatureType.OBSERVATION: {
+                _STATE_KEY: PolicyFeature(type=FeatureType.STATE, shape=(14,))
+            },
+            PipelineFeatureType.ACTION: {},
+        }
+
+        _, step = self._step(state_dim=27, env_dim=11)
+        out = step.transform_features(initial)
+        declared = out[PipelineFeatureType.OBSERVATION][_ENV_KEY]
+        self.assertEqual(declared.type, FeatureType.ENV)
+        self.assertEqual(tuple(declared.shape), (11,))
+        self.assertNotIn(
+            _ENV_KEY,
+            initial[PipelineFeatureType.OBSERVATION],
+            "the pipeline hands the same dict to every step (pipeline.py:1332), "
+            "so this must not mutate its input",
+        )
+
+        _, round1 = self._step(state_dim=27)
+        self.assertIs(round1.transform_features(initial), initial)
+
+    def test_transform_features_never_reaches_the_dataset_features(self) -> None:
+        """The recorded schema is the ROBOT's, not the policy preprocessor's.
+
+        ``aggregate_pipeline_dataset_features`` is the only caller of
+        ``transform_features`` in 0.4.4 (``pipeline_features.py:91``), and both
+        upstream ``record()`` (``lerobot_record.py:449-462``) and this repo's
+        chain (``record_adapter.py:229-238``) call it on ``teleop_action`` /
+        ``robot_observation`` -- never on the pipeline the one-hot step is
+        inserted into. Asserted here because the step DOES declare a feature
+        now, so the reason it is harmless has to be pinned down.
+        """
+        from stage_runner import record_adapter
+
+        source = record_adapter.build_dataset_features.__code__.co_names
+        self.assertIn("aggregate_pipeline_dataset_features", source)
+        self.assertIn("teleop_action", source)
+        self.assertIn("robot_observation", source)
+        self.assertNotIn("preprocessor", source)
+
+    def test_the_env_token_survives_a_real_preprocessor_pipeline(self) -> None:
+        """End to end through the steps make_act_pre_post_processors builds.
+
+        Calling the step alone proves nothing about the two converters the real
+        pipeline runs it between: ``batch_to_transition`` keeps only keys
+        prefixed ``observation`` and ``transition_to_batch`` flattens them back
+        (``converters.py:354, 396-398``). A key added mid-pipeline has to
+        survive both, be left alone by the normalizer (ENV is absent from ACT's
+        ``normalization_mapping``, ``configuration_act.py:89-95``), and come out
+        in the dict ``select_action`` is handed.
+
+        Step order is ACT's own (``processor_act.py:56-66``) with the one-hot
+        step where ``_insert`` puts it: AFTER AddBatchDimension and Device, so
+        the state it widens already has its batch dimension and is on device.
+        """
+        import torch
+        from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
+        from lerobot.processor import (
+            AddBatchDimensionProcessorStep,
+            DeviceProcessorStep,
+            NormalizerProcessorStep,
+            PolicyProcessorPipeline,
+        )
+
+        _, step = self._step(state_dim=27, env_dim=11)
+        features = {
+            _STATE_KEY: PolicyFeature(type=FeatureType.STATE, shape=(27,)),
+            _ENV_KEY: PolicyFeature(type=FeatureType.ENV, shape=(11,)),
+        }
+        normalizer = NormalizerProcessorStep(
+            features=features,
+            # ACT's mapping verbatim: no ENV entry, which is what makes the
+            # token pass through untouched.
+            norm_map={
+                FeatureType.VISUAL: NormalizationMode.MEAN_STD,
+                FeatureType.STATE: NormalizationMode.MEAN_STD,
+                FeatureType.ACTION: NormalizationMode.MEAN_STD,
+            },
+            stats={
+                _STATE_KEY: {
+                    "mean": torch.zeros(27),
+                    # Not 1.0, so a state that went through the normalizer is
+                    # distinguishable from one that did not.
+                    "std": torch.full((27,), 2.0),
+                }
+            },
+        )
+        pipeline = PolicyProcessorPipeline(
+            steps=[
+                AddBatchDimensionProcessorStep(),
+                DeviceProcessorStep(device="cpu"),
+                step,
+                normalizer,
+            ],
+            name="task_onehot_pipeline_under_test",
+        )
+
+        step.set_stage(4)
+        batch = pipeline({_STATE_KEY: torch.zeros(14, dtype=torch.float32)})
+
+        self.assertIn(_ENV_KEY, batch)
+        env, state = batch[_ENV_KEY], batch[_STATE_KEY]
+        self.assertEqual(tuple(env.shape), (1, 11))
+        self.assertEqual(tuple(state.shape), (1, 27))
+        self.assertAlmostEqual(
+            float(env[0, 3]),
+            1.0,
+            msg="ENV has no entry in ACT's normalization_mapping, so the "
+            "normalizer leaves the token a one-hot",
+        )
+        self.assertAlmostEqual(
+            float(state[0, 19]),
+            0.5,
+            msg="the state tail IS normalized (std=2.0), which is exactly why "
+            "the env token has to be a separate key rather than a slice",
+        )
+        self.assertEqual(int(torch.argmax(env[0]).item()), 3)
+
+
+class EnvTokenPreflightTest(NoRobotSdkMixin, unittest.TestCase):
+    """``check_stage_dimensions`` accepts round 2 and refuses the near-misses.
+
+    The gate runs before ``robot.connect()`` and before any weights download, so
+    every refusal here is one the operator sees instead of a KeyError inside
+    ``record_loop`` on frame 1.
+    """
+
+    @staticmethod
+    def _robot(include_base: bool = False):
+        class Robot:
+            name = "mobileai_robot"
+            action_features = {
+                f"a{i}": float for i in range(16)
+            }
+            observation_features = {
+                **{f"j{i}": float for i in range(14)},
+                **({"x.vel": float, "theta.vel": float} if include_base else {}),
+                # One camera entry, which robot_state_dimension must exclude.
+                "cam": (480, 640, 3),
+            }
+
+        return Robot()
+
+    @staticmethod
+    def _stage(policy_path: str = "hub/ckpt"):
+        class Stage:
+            id = "s1"
+
+        Stage.policy_path = policy_path
+        return Stage()
+
+    def _check(self, *, state, env, onehot_k, action=16):
+        from stage_runner import preflight
+
+        config = _policy_cfg(state_dim=state, env_dim=env)
+
+        from lerobot.configs.types import FeatureType, PolicyFeature
+
+        config.output_features = {
+            "action": PolicyFeature(type=FeatureType.ACTION, shape=(action,))
+        }
+        preflight.check_stage_dimensions(
+            self._robot(),
+            [self._stage()],
+            {"s1": config},
+            onehot_k=onehot_k,
+            allow_extra_action=True,
+        )
+
+    def test_env_11_with_state_27_and_k_11_passes(self) -> None:
+        self._check(state=27, env=11, onehot_k=11)
+
+    def test_a_round_1_checkpoint_still_passes(self) -> None:
+        self._check(state=27, env=None, onehot_k=11)
+        self._check(state=14, env=None, onehot_k=None)
+
+    def test_env_11_with_a_state_that_has_no_one_hot_tail_is_refused(self) -> None:
+        from stage_runner import preflight
+
+        with self.assertRaises(preflight.PreflightError) as caught:
+            self._check(state=16, env=11, onehot_k=11)
+        self.assertIn("environment_state", str(caught.exception))
+
+    def test_env_declared_with_onehot_k_null_is_refused(self) -> None:
+        from stage_runner import preflight
+
+        with self.assertRaises(preflight.PreflightError) as caught:
+            # The dangerous shape: 16-D state matches the robot, so every width
+            # check passes and only the unfillable ENV key is wrong -- which ACT
+            # discovers on frame 1, after the arms are powered.
+            self._check(state=16, env=11, onehot_k=None)
+        self.assertIn("onehot_k", str(caught.exception))
+
+    def test_an_env_width_that_is_not_k_is_refused(self) -> None:
+        from stage_runner import preflight
+
+        with self.assertRaises(preflight.PreflightError):
+            self._check(state=27, env=10, onehot_k=11)
+
+    def test_the_env_reader_is_ordered_before_make_policy(self) -> None:
+        """Same contract as ``checkpoint_state_dimension``: read off config.json.
+
+        ``make_policy`` keeps ``input_features`` only because the checkpoint
+        declared it (``factory.py:471`` guards the assignment with
+        ``if not cfg.input_features``), so this reader works on both sides of
+        that call -- but it is called from the gate, which is before it.
+        """
+        from stage_runner import preflight
+
+        self.assertIsNone(
+            preflight.checkpoint_env_state_dimension(_policy_cfg(state_dim=27))
+        )
+        self.assertEqual(
+            preflight.checkpoint_env_state_dimension(
+                _policy_cfg(state_dim=27, env_dim=11)
+            ),
+            11,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -3502,13 +3915,27 @@ class ChainPreflightScriptTest(NoRobotSdkMixin, unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
         super().tearDown()
 
-    def _checkpoint(self, *, action: int, state: int = 27, chunk: int = 30) -> Path:
-        directory = self.tmp / f"ckpt_{action}_{state}"
+    def _checkpoint(
+        self,
+        *,
+        action: int,
+        state: int = 27,
+        chunk: int = 30,
+        env: int | None = None,
+        env_type: str = "ENV",
+    ) -> Path:
+        directory = self.tmp / f"ckpt_{action}_{state}_{env}_{env_type}"
         directory.mkdir(parents=True, exist_ok=True)
+        inputs: dict[str, dict] = {"observation.state": {"shape": [state]}}
+        if env is not None:
+            inputs["observation.environment_state"] = {
+                "type": env_type,
+                "shape": [env],
+            }
         (directory / "config.json").write_text(
             json.dumps(
                 {
-                    "input_features": {"observation.state": {"shape": [state]}},
+                    "input_features": inputs,
                     "output_features": {"action": {"shape": [action]}},
                     "chunk_size": chunk,
                 }
@@ -3517,26 +3944,39 @@ class ChainPreflightScriptTest(NoRobotSdkMixin, unittest.TestCase):
         )
         return directory
 
-    def _yaml(self, has_progress) -> Path:
+    def _yaml(self, has_progress, onehot_k: int | None = 11) -> Path:
         body = [
             "dataset:",
             "  fps: 21",
             "chain:",
             "  model:",
-            "    onehot_k: 11",
+            f"    onehot_k: {'null' if onehot_k is None else onehot_k}",
             "    n_action_steps: 30",
         ]
         if has_progress is not None:
             body.append(f"    has_progress: {has_progress}")
-        path = self.tmp / f"chain_{has_progress}.yaml"
+        path = self.tmp / f"chain_{has_progress}_{onehot_k}.yaml"
         path.write_text("\n".join(body) + "\n", encoding="utf-8")
         return path
 
-    def _run(self, *, action: int, has_progress) -> int:
+    def _run(
+        self,
+        *,
+        action: int,
+        has_progress,
+        state: int = 27,
+        env: int | None = None,
+        env_type: str = "ENV",
+        onehot_k: int | None = 11,
+    ) -> int:
         return self.module.main(
             [
-                str(self._checkpoint(action=action)),
-                str(self._yaml(has_progress)),
+                str(
+                    self._checkpoint(
+                        action=action, state=state, env=env, env_type=env_type
+                    )
+                ),
+                str(self._yaml(has_progress, onehot_k)),
                 str(MOCK_PARAMS),
             ]
         )
@@ -3556,6 +3996,36 @@ class ChainPreflightScriptTest(NoRobotSdkMixin, unittest.TestCase):
     def test_a_key_that_disagrees_with_the_width_is_refused(self) -> None:
         self.assertEqual(self._run(action=16, has_progress="true"), 3)
         self.assertEqual(self._run(action=17, has_progress="false"), 3)
+
+    def test_a_round_2_env_token_checkpoint_passes(self) -> None:
+        """Round 2 must get through the gate, not be rejected as "unknown"."""
+        self.assertEqual(
+            self._run(action=16, has_progress="false", state=27, env=11), 0
+        )
+
+    def test_an_env_width_that_is_not_k_is_refused(self) -> None:
+        self.assertEqual(
+            self._run(action=16, has_progress="false", state=27, env=10), 3
+        )
+
+    def test_an_env_token_without_a_onehot_k_is_refused(self) -> None:
+        """The dangerous shape: a 16-D state matches the robot, so every width
+        check passes and only the unfillable ENV key is wrong -- which ACT
+        discovers on frame 1, after ``robot.connect()``."""
+        self.assertEqual(
+            self._run(
+                action=16, has_progress="false", state=16, env=11, onehot_k=None
+            ),
+            3,
+        )
+
+    def test_an_env_feature_of_the_wrong_type_is_refused(self) -> None:
+        self.assertEqual(
+            self._run(
+                action=16, has_progress="false", state=27, env=11, env_type="STATE"
+            ),
+            3,
+        )
 
     def test_both_shipped_chain_configs_state_it(self) -> None:
         """The production YAMLs must not be the thing this change breaks."""
