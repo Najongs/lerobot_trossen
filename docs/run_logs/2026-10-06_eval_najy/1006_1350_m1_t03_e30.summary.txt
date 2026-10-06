@@ -1,0 +1,23 @@
+== 1006_1350_m1_t03_e30 종료 코드 0 · 팔 한 틱 상한 0.1
+[lerobot_robot_trossen] LEROBOT_TASK_ONEHOT=3/11 installed
+INFO 2026-10-06 13:50:22 ot_patch.py:224 LEROBOT_TASK_ONEHOT=3/11: one-hot step inserted before the normalizer
+INFO 2026-10-06 13:50:34 ot_patch.py:126 LEROBOT_TASK_ONEHOT: stage 3/11 active -- policy state 14 -> 27 (base slots zeroed)
+-- 루프 주기 (phase=policy 마지막 3줄 — mean 을 녹화 주기 20.9 Hz 와 비교)
+INFO 2026-10-06 13:55:30 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=15.3 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=24ms
+INFO 2026-10-06 13:55:32 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=15.6 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=24ms
+INFO 2026-10-06 13:55:33 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=17.0 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=24ms
+-- 팔 페이싱 발동 횟수: 0
+-- 팔 한 틱 상한에 잘린 arm-tick (policy): 0 (phase 끝 줄 합; 창 합 0; 필터 전 경고줄 0)
+-- 베이스 시리얼 재등록: WARNING 2026-10-06 13:54:08 al_rearm.py:160 LEROBOT_BASE_SERIAL_REARM: active for this policy loop at 21 fps (fd 51 -> /dev/ttyUSB0).
+-- 에피소드 시작 자세 (POSE-START = 첫 정책 틱, POSE = 리셋 마지막 줄):
+   INFO 2026-10-06 13:50:34 ls/utils.py:227 Recording episode 0
+   INFO 2026-10-06 13:50:34 se_guide.py:115 POSE-START task03 | 목표까지 1.47 rad | 가장 큰 차 R j4 -44° | L: j0 -1→-21↓ j1 +61→+92↑ j2 +31→+22 j3 +36→+42 j4 -0→+41↑ j5 -0→+23↑ | R: j0 +0→+19↑ j1 +62→+84↑ j2 +31→+24 j3 +37→+29 j4 +0→-44↓ j5 +0→-22↓
+   INFO 2026-10-06 13:50:55 ls/utils.py:227 Recording episode 0
+   INFO 2026-10-06 13:50:54 se_guide.py:115 POSE task03 | 목표까지 1.19 rad | 가장 큰 차 R j4 -39° | L: j0 -30→-21 j1 +73→+92↑ j2 +21→+22 j3 +46→+42 j4 +5→+41↑ j5 +3→+23↑ | R: j0 +32→+19↓ j1 +73→+84↑ j2 +27→+24 j3 +36→+29 j4 -5→-44↓ j5 +3→-22↓
+   INFO 2026-10-06 13:50:55 se_guide.py:115 POSE-START task03 | 목표까지 1.21 rad | 가장 큰 차 R j4 -40° | L: j0 -30→-21 j1 +73→+92↑ j2 +21→+22 j3 +46→+42 j4 +4→+41↑ j5 +3→+23↑ | R: j0 +32→+19↓ j1 +74→+84↑ j2 +28→+24 j3 +36→+29 j4 -4→-44↓ j5 +3→-22↓
+   INFO 2026-10-06 13:51:47 ls/utils.py:227 Recording episode 1
+   INFO 2026-10-06 13:51:27 se_guide.py:115 POSE task03 | 목표까지 0.56 rad | 가장 큰 차 R j4 -24° | L: j0 -26→-21 j1 +89→+92 j2 +27→+22 j3 +44→+42 j4 +23→+41↑ j5 +18→+23 | R: j0 +23→+19 j1 +80→+84 j2 +28→+24 j3 +27→+29 j4 -20→-44↓ j5 -23→-22
+   INFO 2026-10-06 13:51:47 se_guide.py:115 POSE-START task03 | 목표까지 0.82 rad | 가장 큰 차 R j4 -31° | L: j0 -29→-21 j1 +82→+92↑ j2 +21→+22 j3 +44→+42 j4 +14→+41↑ j5 +11→+23↑ | R: j0 +29→+19 j1 +75→+84 j2 +27→+24 j3 +33→+29 j4 -13→-44↓ j5 -15→-22
+   INFO 2026-10-06 13:54:08 ls/utils.py:227 Recording episode 2
+   INFO 2026-10-06 13:53:19 se_guide.py:115 POSE task03 | 목표까지 0.79 rad | 가장 큰 차 R j4 -23° | L: j0 -28→-21 j1 +85→+92 j2 +23→+22 j3 +56→+42↓ j4 +24→+41↑ j5 +9→+23↑ | R: j0 +29→+19 j1 +76→+84 j2 +22→+24 j3 +46→+29↓ j4 -21→-44↓ j5 -5→-22↓
+   INFO 2026-10-06 13:54:08 se_guide.py:115 POSE-START task03 | 목표까지 1.00 rad | 가장 큰 차 R j4 -32° | L: j0 -28→-21 j1 +79→+92↑ j2 +23→+22 j3 +47→+42 j4 +15→+41↑ j5 +3→+23↑ | R: j0 +30→+19↓ j1 +74→+84↑ j2 +29→+24 j3 +38→+29 j4 -12→-44↓ j5 +1→-22↓

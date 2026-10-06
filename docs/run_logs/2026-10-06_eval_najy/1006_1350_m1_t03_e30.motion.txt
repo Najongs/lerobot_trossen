@@ -1,0 +1,4 @@
+학습 kiroaiseoul/task03_turn_to_face_beaker: 117ep, 30 fps | 프레임당 이동 중앙값 0.021 rad, 방향 바뀜 0.46/s | 시작점끼리 최근접 거리 중앙값 0.32
+kiroaiseoul/eval_najy_1006_1350_m1_t03_e30 ep0: 32.0s, 21 fps | 프레임당 이동 0.018 rad, 방향 바뀜 0.32/s | 시작점 최근접 0.45 | 청크 경계 점프 0.119 / 그 외 0.015 (7.9x, exec 30)
+kiroaiseoul/eval_najy_1006_1350_m1_t03_e30 ep1: 92.1s, 21 fps | 프레임당 이동 0.010 rad, 방향 바뀜 0.31/s | 시작점 최근접 0.50 | 청크 경계 점프 0.115 / 그 외 0.007 (15.9x, exec 30)
+kiroaiseoul/eval_najy_1006_1350_m1_t03_e30 ep2: 85.5s, 21 fps | 프레임당 이동 0.005 rad, 방향 바뀜 0.27/s | 시작점 최근접 0.51 | 청크 경계 점프 0.086 / 그 외 0.004 (24.3x, exec 30)

@@ -7,7 +7,7 @@ INFO 2026-10-06 11:58:04 rate_log.py:253 Control loop rate over last 105 frames 
 INFO 2026-10-06 11:58:09 rate_log.py:253 Control loop rate over last 105 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=15.9 Hz, clamped=9 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
 INFO 2026-10-06 11:58:14 rate_log.py:253 Control loop rate over last 105 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=16.5 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
 -- 팔 페이싱 발동 횟수: 0
--- 팔 한 틱 상한에 잘린 arm-tick: 139 (필터 전 경고줄 0)
+-- 팔 한 틱 상한에 잘린 arm-tick (policy): 0 (phase 끝 줄 합; 창 합 30; 필터 전 경고줄 0)
 -- 베이스 시리얼 재등록: WARNING 2026-10-06 11:57:34 al_rearm.py:160 LEROBOT_BASE_SERIAL_REARM: active for this policy loop at 21 fps (fd 51 -> /dev/ttyUSB0).
 -- 에피소드 시작 자세 (POSE-START = 첫 정책 틱, POSE = 리셋 마지막 줄):
    INFO 2026-10-06 11:57:13 ls/utils.py:227 Recording episode 0
