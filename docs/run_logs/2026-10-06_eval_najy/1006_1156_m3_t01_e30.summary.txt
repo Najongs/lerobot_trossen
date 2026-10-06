@@ -1,0 +1,17 @@
+== 1006_1156_m3_t01_e30 종료 코드 0 · 팔 한 틱 상한 0.1
+[lerobot_robot_trossen] LEROBOT_TASK_ONEHOT=1/4 installed
+INFO 2026-10-06 11:57:01 ot_patch.py:224 LEROBOT_TASK_ONEHOT=1/4: one-hot step inserted before the normalizer
+INFO 2026-10-06 11:57:13 ot_patch.py:126 LEROBOT_TASK_ONEHOT: stage 1/4 active -- policy state 14 -> 20 (base slots zeroed)
+-- 루프 주기 (phase=policy 마지막 3줄 — mean 을 녹화 주기 20.9 Hz 와 비교)
+INFO 2026-10-06 11:58:04 rate_log.py:253 Control loop rate over last 105 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.0 Hz, clamped=9 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+INFO 2026-10-06 11:58:09 rate_log.py:253 Control loop rate over last 105 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=15.9 Hz, clamped=9 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+INFO 2026-10-06 11:58:14 rate_log.py:253 Control loop rate over last 105 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=16.5 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+-- 팔 페이싱 발동 횟수: 0
+-- 팔 한 틱 상한에 잘린 arm-tick: 139 (필터 전 경고줄 0)
+-- 베이스 시리얼 재등록: WARNING 2026-10-06 11:57:34 al_rearm.py:160 LEROBOT_BASE_SERIAL_REARM: active for this policy loop at 21 fps (fd 51 -> /dev/ttyUSB0).
+-- 에피소드 시작 자세 (POSE-START = 첫 정책 틱, POSE = 리셋 마지막 줄):
+   INFO 2026-10-06 11:57:13 ls/utils.py:227 Recording episode 0
+   INFO 2026-10-06 11:57:13 se_guide.py:112 POSE-START task01 | 목표까지 0.26 rad | 가장 큰 차 L j3 -10° | L: j0 -0→+0 j1 +61→+60 j2 +30→+35 j3 +37→+27 j4 +1→+0 j5 +0→+0 | R: j0 +0→+0 j1 +61→+60 j2 +30→+32 j3 +37→+28 j4 -0→+0 j5 +0→+0
+   INFO 2026-10-06 11:57:34 ls/utils.py:227 Recording episode 0
+   INFO 2026-10-06 11:57:34 se_guide.py:112 POSE task01 | 목표까지 1.28 rad | 가장 큰 차 L j3 -39° | L: j0 -24→+0↑ j1 +87→+60↓ j2 +19→+35↑ j3 +66→+27↓ j4 +10→+0↓ j5 +2→+0 | R: j0 +30→+0↓ j1 +87→+60↓ j2 +27→+32 j3 +52→+28↓ j4 -2→+0 j5 -0→+0
+   INFO 2026-10-06 11:57:34 se_guide.py:112 POSE-START task01 | 목표까지 1.56 rad | 가장 큰 차 L j3 -45° | L: j0 -30→+0↑ j1 +93→+60↓ j2 +14→+35↑ j3 +72→+27↓ j4 +15→+0↓ j5 +5→+0 | R: j0 +35→+0↓ j1 +92→+60↓ j2 +22→+32↑ j3 +58→+28↓ j4 -4→+0 j5 -2→+0

@@ -25,6 +25,9 @@ read (base emergency stop, base command NaN guard, velocity pacing ``FIRED``).
 
 So this module drops that per-frame warning and emits one summary line per 30
 frames instead, carrying the achieved rate that the comparison actually needs.
+Since 10/06 the same line also carries ``clamped=N``, the number of arm-ticks in
+the window on which ``max_relative_target`` shortened the step, and the per-tick
+WARNING lerobot prints for each of those is dropped (see ``_ClampWarningFilter``).
 
 Coupling
 --------
@@ -66,7 +69,37 @@ _ENV_VAR = "LEROBOT_LOOP_HZ_LOG"
 # short so a reworded tail upstream does not silently un-filter it.
 _UPSTREAM_WARNING_MARKER = "Record loop is running slower"
 
-LOOP_HZ_WINDOW = 30  # frames per summary line (~1 s at 30 fps)
+# Frames per summary line. 30 (~1.4 s at 21 Hz) by default; eval_najy.sh sets
+# LEROBOT_LOOP_HZ_WINDOW=105 (~5 s) so a run log is not dominated by these lines.
+_WINDOW_ENV_VAR = "LEROBOT_LOOP_HZ_WINDOW"
+
+
+def _window_from_env(default: int = 30) -> int:
+    raw = os.getenv(_WINDOW_ENV_VAR, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 5:
+        logger.warning(f"{_WINDOW_ENV_VAR}={raw!r}: expected an integer >= 5; using {default}.")
+        return default
+    return value
+
+
+LOOP_HZ_WINDOW = _window_from_env()
+
+# Substring of lerobot's per-arm "Relative goal position magnitude had to be clamped"
+# warning (lerobot/robots/utils.py ensure_safe_goal_position). With
+# --robot.*_max_relative_target set (eval_najy.sh MAX_REL, 0.1 rad) it fires on every
+# arm tick a policy chunk jumps, as a WARNING plus a pformat dict -- ~500 lines per
+# run on 10/06. It is replaced by a ``clamped=N`` count (arm-ticks) in the summary.
+_CLAMP_WARNING_MARKER = "Relative goal position magnitude had to be clamped"
+# window: the current summary window; phase: the current record_loop call (one episode or
+# one reset), reported in full when that call ends so a partial last window is not lost;
+# total: the process.
+_clamped = {"window": 0, "phase": 0, "total": 0}
 _LOOP_HZ_RESET_GAP_S = 1.0  # gaps longer than this (episode reset) are not counted
 
 # A window is escalated to WARNING when it drops below this fraction of the best
@@ -86,6 +119,9 @@ _meter = {"prev_t": None, "count": 0, "sum_dt": 0.0, "max_dt": 0.0, "sec": {}}
 # the wrapper could not be installed).
 _target_fps: float | None = None
 _phase: str | None = None
+# Incremented on every record_loop entry. pose_guide uses it to see a new episode even when
+# the reset in between ran for zero ticks (then the phase string alone never changes).
+_phase_seq = 0
 
 # Best window mean seen so far in the current phase, and how many windows fed it.
 _reference_hz: float | None = None
@@ -105,6 +141,7 @@ LOOP_HZ_LOG_ENABLED = enabled()
 
 
 def _reset_window() -> None:
+    _clamped["window"] = 0
     _meter["count"] = 0
     _meter["sum_dt"] = 0.0
     _meter["max_dt"] = 0.0
@@ -113,7 +150,17 @@ def _reset_window() -> None:
 
 def _reset_phase(phase: str | None, target_fps: float | None) -> None:
     """Start a new phase: drop the partial window and the rate reference with it."""
-    global _phase, _target_fps, _reference_hz, _reference_windows
+    global _phase, _target_fps, _reference_hz, _reference_windows, _phase_seq
+    if _phase is not None and LOOP_HZ_LOG_ENABLED:
+        # End of a record_loop call: report the clamps of the whole call (the summary
+        # windows above only cover complete windows; the tail of the call is here too).
+        logger.info(
+            f"Arm relative-target clamps this {_phase} phase: {_clamped['phase']} arm-ticks "
+            f"(last partial window {_clamped['window']})"
+        )
+    _clamped["phase"] = 0
+    if phase is not None:
+        _phase_seq += 1
     _phase = phase
     _target_fps = target_fps
     _reference_hz = None
@@ -131,6 +178,11 @@ def current_phase() -> str | None:
     already keeps costs nothing; deriving it again would mean a second wrapper.
     """
     return _phase
+
+
+def current_phase_seq() -> int:
+    """Number of record_loop calls started so far (episodes + resets); 0 before the first."""
+    return _phase_seq
 
 
 def current_target_fps() -> float | None:
@@ -178,6 +230,7 @@ def record_loop_tick() -> None:
 
     mean_hz = m["count"] / m["sum_dt"]
     min_hz = 1.0 / m["max_dt"]
+    clamped = _clamped["window"]
 
     # Escalate only on degradation within this run (see _DEGRADED_FRACTION).
     degraded_from = None
@@ -208,7 +261,7 @@ def record_loop_tick() -> None:
 
     message = (
         f"Control loop rate over last {m['count']} frames{context_str}: "
-        f"mean={mean_hz:.1f} Hz, min={min_hz:.1f} Hz "
+        f"mean={mean_hz:.1f} Hz, min={min_hz:.1f} Hz, clamped={clamped} "
         f"(divide the recording run's mean by this one for the base over-rotation multiplier)"
         + (f" | per-frame: {sections}  {other}" if sections else "")
     )
@@ -239,6 +292,37 @@ class _UpstreamFpsWarningFilter(logging.Filter):
         except Exception:  # a record whose args do not format
             return True
         return _UPSTREAM_WARNING_MARKER not in message
+
+
+class _ClampWarningFilter(logging.Filter):
+    """Count and drop lerobot's per-arm relative-target clamp warning.
+
+    Same placement as ``_UpstreamFpsWarningFilter`` (root logger; the warning is
+    emitted through module-level ``logging.warning``). The count is reported as
+    ``clamped=N`` (arm-ticks: both arms can clamp in one loop tick) in each
+    ``Control loop rate`` summary (reset with the window) and, for the whole
+    record_loop call, in the ``Arm relative-target clamps this <phase> phase`` line
+    logged when the call ends -- that one is what eval_najy_post sums.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.WARNING:
+            return True
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        if _CLAMP_WARNING_MARKER in message:
+            _clamped["window"] += 1
+            _clamped["phase"] += 1
+            _clamped["total"] += 1
+            return False
+        return True
+
+
+def clamped_total() -> int:
+    """Arm-ticks clamped by max_relative_target so far in this process."""
+    return _clamped["total"]
 
 
 def _wrap_record_loop(original):
@@ -307,6 +391,8 @@ def apply_loop_rate_logging_patch() -> bool:
         root = logging.getLogger()
         if not any(isinstance(f, _UpstreamFpsWarningFilter) for f in root.filters):
             root.addFilter(_UpstreamFpsWarningFilter())
+        if not any(isinstance(f, _ClampWarningFilter) for f in root.filters):
+            root.addFilter(_ClampWarningFilter())
 
         from lerobot.scripts import lerobot_record
 

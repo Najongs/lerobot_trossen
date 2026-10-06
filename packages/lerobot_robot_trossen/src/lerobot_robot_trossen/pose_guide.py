@@ -7,8 +7,11 @@ not from the one-hot (docs/eval_najy_results_1006.md, offline check). Setting th
 start pose by eye with the leader arms is hard, so during the reset phase this logs,
 once a second, how far each arm joint is from that stage's training start pose.
 
-Logging only: it reads the action already sent and never changes it. It is silent
-during the policy phase.
+Logging only: it reads the action already sent and never changes it. During the
+policy phase it is silent except for one ``POSE-START`` line on the first tick of
+each episode (episode 0 has no reset before it, so this is the only record of its
+start pose in the log; the value is the first *action* sent, which the relative
+clamp keeps within ``max_relative_target`` of the measured pose).
 
 Usage
 -----
@@ -26,7 +29,7 @@ import math
 import os
 import time
 
-from lerobot_robot_trossen.loop_rate_log import current_phase
+from lerobot_robot_trossen.loop_rate_log import current_phase, current_phase_seq
 
 logger = logging.getLogger(__name__)
 
@@ -67,17 +70,34 @@ def _parse() -> int | None:
 
 _STAGE = _parse()
 _last_t = 0.0
+_prev_seq = -1  # phase generation of the last tick seen (loop_rate_log.current_phase_seq)
 
 
 def pose_guide_tick(sent_arms: dict) -> None:
-    """Called once per loop with the arm action just sent; logs at 1 Hz in reset."""
-    global _last_t
-    if _STAGE is None or current_phase() != "teleop":
+    """Called once per loop with the arm action just sent.
+
+    Reset (teleop) phase: one ``POSE`` line per second. Policy phase: one
+    ``POSE-START`` line on the first tick of each episode, then silence.
+    """
+    global _last_t, _prev_seq
+    if _STAGE is None:
         return
-    now = time.monotonic()
-    if now - _last_t < _PERIOD_S:
+    phase = current_phase()
+    seq = current_phase_seq()
+    # A new record_loop call (episode or reset) since the last tick -- robust to a reset that
+    # ran for zero ticks, where the phase string alone would stay "policy".
+    first_policy_tick = phase == "policy" and seq != _prev_seq
+    _prev_seq = seq
+    if phase == "teleop":
+        now = time.monotonic()
+        if now - _last_t < _PERIOD_S:
+            return
+        _last_t = now
+        tag = "POSE"
+    elif first_policy_tick:
+        tag = "POSE-START"
+    else:
         return
-    _last_t = now
     try:
         parts, sq, worst = [], 0.0, (0.0, "")
         for side, target in zip(("left", "right"), TARGETS_DEG[_STAGE]):
@@ -93,7 +113,7 @@ def pose_guide_tick(sent_arms: dict) -> None:
             parts.append(f"{side[0].upper()}: " + " ".join(cells))
         note = " (⚠️ 시작 자세가 여러 무리 -- 중앙값은 참고만)" if _STAGE in _MULTIMODAL else ""
         logger.info(
-            f"POSE task{_STAGE:02d}{note} | 목표까지 {math.sqrt(sq):.2f} rad | "
+            f"{tag} task{_STAGE:02d}{note} | 목표까지 {math.sqrt(sq):.2f} rad | "
             f"가장 큰 차 {worst[1]} {worst[0]:+.0f}° | " + " | ".join(parts)
         )
     except Exception:  # never let a display break a recording

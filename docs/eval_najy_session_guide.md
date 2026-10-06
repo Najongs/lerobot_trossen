@@ -25,7 +25,7 @@ DGX_1 에서 열었으면 먼저 [`HANDOFF_najy_1006.md`](HANDOFF_najy_1006.md) 
 
 | 하는 일 | Claude 가 직접 | 사람에게 명령을 넘김 |
 |---|---|---|
-| 기록 분석 — `scripts/eval_motion_stats.py`, `scripts/eval_latency_stats.py` | ✅ (파일만 읽는다) | |
+| 기록 분석 — `scripts/eval_najy_post.sh` (motion·latency·base·report) | ✅ (파일만 읽는다) | |
 | 명령 확인 — `DRY_RUN=1 scripts/eval_najy.sh …` | ✅ (로봇 무접촉, `~/eval_logs`·HF 다운로드는 한다) | |
 | 결과 문서 작성·커밋·push | ✅ | |
 | 실기 회차 — `scripts/eval_najy.sh …` (DRY_RUN 없이) | ❌ | ✅ |
@@ -47,13 +47,13 @@ DGX_1 에서 열었으면 먼저 [`HANDOFF_najy_1006.md`](HANDOFF_najy_1006.md) 
 
 **B. 돈 뒤 (Claude)** — 사람이 「끝났다」 고 하면:
 ```shell
-tail -20 ~/eval_logs/<회차>.summary.txt
-uv run --no-sync python scripts/eval_motion_stats.py kiroaiseoul/<학습 데이터셋> kiroaiseoul/eval_najy_<회차> --exec <exec>
-uv run --no-sync python scripts/eval_latency_stats.py <회차> --train kiroaiseoul/<학습 데이터셋>
+cat ~/eval_logs/<회차>.report.md          # eval_najy.sh 가 끝에 eval_najy_post.sh 로 만든 한 장 보고서
+scripts/eval_najy_post.sh <회차>           # 중단 등으로 안 만들어졌을 때만 (로봇 무접촉)
 ```
-- `<회차>` = `MMDD_HHMM_<m1|m2|m3|base>_t<NN>_e<exec>` (스크립트가 실행 시작에 찍는다).
-- 학습 데이터셋 이름은 아래 표. 로컬 캐시(`~/.cache/huggingface/lerobot/kiroaiseoul/`)에 없으면 motion·latency 의 학습 대조만 빠진다 —
-  그 사실을 기록하고 넘어간다(내려받지 말 것: 수 GB).
+- `<회차>` = `MMDD_HHMM_<m1|m2|m3|base>_t<NN>_e<exec>` (스크립트가 실행 시작에 찍는다). 원자료는 `<회차>.{summary,motion,latency,base}.txt`.
+- 학습 데이터셋은 post 스크립트가 단계 번호로 고른다(아래 표). 로컬 캐시(`~/.cache/huggingface/lerobot/kiroaiseoul/`)에 없으면 학습 대조만 빠진다 —
+  report 에 그렇게 적힌다(내려받지 말 것: 수 GB).
+- report 의 「사람 판정」 열은 `results.csv` 에서 온다 — 먼저 사람 관찰을 CSV 에 적고 post 를 다시 돌리면 채워진다.
 - 확인할 것과 판정:
 
 | 볼 것 | 어디서 | 기준 |

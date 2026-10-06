@@ -17,7 +17,13 @@
 #            그 틱엔 0.1 만 간다 -- 청크 경계·시작 순간의 큰 점프로 팔이 다치는 것을 막는다(10/06 부터).
 #            21 Hz 에서 관절당 최대 약 2.1 rad/s. 그리퍼(m)에도 같은 값이 걸리지만 행정이 작아 영향 없다.
 #
+#        LOOP_HZ_WINDOW=105 scripts/eval_najy.sh …     # 루프 주기 요약을 105프레임(≈5초)마다. 기본 30 — 바꾸면 eval_latency_stats 의
+#                                                       # 추론 스파이크(창마다 최장 틱)가 10/02 기준선과 비교 불가가 된다
+#
 # 순서와 판정 기준: docs/eval_najy.md. 로그·CSV 는 ~/eval_logs/<회차>.* 에 남는다.
+# 끝나면 scripts/eval_najy_post.sh <회차> 가 요약·움직임·지연·베이스 측정과 한 장 보고서(.report.md)를 만든다 —
+# 그 단계가 안 돌았으면(중단 등) 손으로 다시 부른다.
+# 로그 소음 억제: 상한 경고는 loop_rate_log 가 걸러 clamped=N 으로 센다, 인코더 배너는 SVT_LOG=2.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -146,7 +152,10 @@ CMD=(uv run lerobot-record
 
 # 베이스 명령·실측 CSV 는 순수 기록이라 항상 켠다. 청크 실행 로그는 청크 실행기 자체를 설치해
 # 실행 경로가 바뀌므로 기본은 끈다 -- 필요하면 CHUNK_LOG=1.
-ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv")
+ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv"
+  PYTHONUNBUFFERED=1                          # 로그를 파일로 보내므로 (아래) 버퍼링 없이
+  SVT_LOG=2                                   # libsvtav1 인코더의 info 배너(에피소드 저장마다 ~20줄) 끄기 — warning 이상만
+  LEROBOT_LOOP_HZ_WINDOW="${LOOP_HZ_WINDOW:-30}")    # 루프 주기 요약 간격(프레임). 30 이 10/02 기준선과 같은 조건 (스파이크 지표)
 [[ "${CHUNK_LOG:-0}" == 1 ]] && ENVS+=(LEROBOT_CHUNK_EXECUTION_LOG="$LOGDIR/$RUN.chunks.csv")
 [[ -n "$ONEHOT" ]] && ENVS+=(LEROBOT_TASK_ONEHOT="$ONEHOT")
 # 리셋 구간에 1초마다 「현재 → 학습 시작 자세」 를 로그로 찍는다 (pose_guide.py, 로봇 동작은 안 바뀜). 끄려면 POSE_GUIDE=0
@@ -158,20 +167,18 @@ if [[ "$DRY_RUN" == 1 ]]; then
 fi
 
 echo "== 로그 $LOGDIR/$RUN.log  (리셋 구간은 리더암, 끝나면 →)"
+# 로그는 파일로 직접 쓰고 tail 로 보여 준다. `| tee` 를 쓰면 --display_data 가 띄운 rerun 뷰어가 파이프를
+# 물려받아, 창을 닫기 전엔 tee 가 끝나지 않아 아래 정리 단계가 안 돈다 (10/06 C-1). lerobot 은 전경에 둔다 —
+# Ctrl-C·ESC 가 그대로 간다. 백그라운드 tail 은 끝난 뒤 죽인다.
+: > "$LOGDIR/$RUN.log"
+tail -n +1 -f "$LOGDIR/$RUN.log" & TAIL_PID=$!
+trap 'kill "$TAIL_PID" 2>/dev/null || true' EXIT     # Ctrl-C 두 번 등으로 아래를 못 지나도 고아 tail 을 남기지 않는다
 set +e
-env "${ENVS[@]}" "${CMD[@]}" 2>&1 | tee "$LOGDIR/$RUN.log"
-rc=${PIPESTATUS[0]}
+env "${ENVS[@]}" "${CMD[@]}" > "$LOGDIR/$RUN.log" 2>&1
+rc=$?
 set -e
+sleep 1; kill "$TAIL_PID" 2>/dev/null || true; wait "$TAIL_PID" 2>/dev/null || true   # tail 이 먼저 죽어 있어도 set -e 에 안 걸리게
 
-# 4) 회차 요약 -- 판정에 쓰는 줄만
-{
-  echo "== $RUN 종료 코드 $rc · 팔 한 틱 상한 $MAX_REL"
-  grep -h "LEROBOT_TASK_ONEHOT" "$LOGDIR/$RUN.log" | head -3 || true
-  echo "-- 루프 주기 (phase=policy 마지막 3줄 -- mean·min 을 녹화 주기와 비교)"
-  grep -h "Control loop rate" "$LOGDIR/$RUN.log" | grep "phase=policy" | tail -3 || true
-  echo "-- 팔 페이싱 발동 횟수: $(grep -c "FIRED" "$LOGDIR/$RUN.log" || true)"
-  echo "-- 팔 한 틱 상한에 잘린 틱: $(grep -c "had to be clamped" "$LOGDIR/$RUN.log" || true)"
-  echo "-- 베이스 시리얼 재등록: $(grep -h "LEROBOT_BASE_SERIAL_REARM" "$LOGDIR/$RUN.log" | tail -1)"
-} | tee "$LOGDIR/$RUN.summary.txt"
-echo "에피소드별 성공/실패는 $LOGDIR/eval_najy_results.csv 에 손으로 한 줄씩: run,episode,success(0/1),비고"
+# 4) 회차 뒤 정리 — 요약·움직임·지연·베이스 측정·한 장 보고서 (scripts/eval_najy_post.sh, 로봇 무접촉)
+RC=$rc MAX_REL=$MAX_REL scripts/eval_najy_post.sh "$RUN" || echo "!! 정리 단계 실패 — 손으로: scripts/eval_najy_post.sh $RUN" >&2
 exit "$rc"
