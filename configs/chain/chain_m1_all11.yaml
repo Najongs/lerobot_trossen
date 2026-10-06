@@ -1,0 +1,131 @@
+# 11단계 자율 체인 — M1(16D action, 진행도 출력 없음). **참조군**.
+#
+#   scripts/eval_chain.sh M1 <회차태그>
+#
+# 새 모델과 같은 리셋 러너를 쓰는 대조군이다(사용자 결정 10/06). 다른 것은 셋:
+# 체크포인트 · `has_progress: false` · 완료 판정이 **정지 + 끝 자세 NN** 이다
+# (M1 에는 진행도 출력이 없다). 그 신호는 진행도보다 약하다 — §93 에서 M1 은
+# t04 끝 장면에서 아예 멈추지 않는다(0.56~0.79 rad 계속 움직임) — 그래서
+# `→` 수동 완료가 M1 에서 특히 load-bearing 하다.
+#
+# 이 파일은 **로봇을 움직인다.** 직접 실행하지 않고 scripts/eval_chain.sh 가
+# 조립하는 명령을 사람에게 넘긴다 (전역 rules/robot-safety.md).
+#
+# 매 회차 바꿀 것은 `dataset.repo_id` 하나다 — LeRobotDataset.create 가
+# exist_ok=False 로 mkdir 하므로 재사용하면 런이 죽는다. eval_chain.sh 가
+# `--dataset.repo_id=` 로 덮어쓰지만, 그 값은 config.source.yaml 에 남지 않고
+# 재파싱 불가한 config.resolved.yaml 에만 남는다 — 회차를 이 파일에서 재현할
+# 거면 여기를 고쳐라.
+
+version: 2
+
+robot:
+  type: mobileai_robot
+  id: follower
+  left_arm_ip_address: 192.168.1.5
+  right_arm_ip_address: 192.168.1.4
+  # 팔 한 틱 이동 상한. 0.1 rad 은 10/06 부터의 기준이고 **올리지 마라** —
+  # 청크 경계·시작 순간의 큰 점프를 막는다. 리셋 램프는 이 값의 절반 미만으로
+  # 설계돼 있어(최악 0.047 rad/틱) 여기에 걸리지 않는다. 걸렸다면 램프가
+  # 틀렸다는 뜻이고 stage_end 의 `clamped_ticks` 가 0 이 아니게 된다.
+  left_arm_max_relative_target: 0.1
+  right_arm_max_relative_target: 0.1
+  # 체인은 eval 이므로 베이스 토크를 켠다 (README:343, 350).
+  enable_base_motor_torque: true
+  # false: state 는 팔 14값이고 베이스 칸은 정책에 먹이지 않는다. 원핫 패치가
+  # [arms14, 0, 0, one_hot(11)] = 27D 를 만든다. 9/16 이전 16D 체크포인트만
+  # true 였다 (a015c68).
+  include_base_in_state: false
+  cameras:
+    cam_high:
+      type: intelrealsense
+      serial_number_or_name: "230422273501"
+      width: 640
+      height: 480
+      fps: 30
+    cam_left_wrist:
+      type: intelrealsense
+      serial_number_or_name: "230422271234"
+      width: 640
+      height: 480
+      fps: 30
+    cam_right_wrist:
+      type: intelrealsense
+      serial_number_or_name: "230322274369"
+      width: 640
+      height: 480
+      fps: 30
+
+dataset:
+  # 회차마다 새로. `eval_` 접두사 필수 (lerobot 의 정책 출력 규약).
+  repo_id: kiroaiseoul/eval_chain_m1_0000_0000
+  # 21, 표기 30 이 아니다 — 실기 녹화 주기가 20~21 Hz 로 측정됐다(§90). 이 값을
+  # 빠뜨리면 base_serial_rearm 이 꺼진다(MAXIMUM_LOOP_FPS=21). stage_params.json
+  # 의 `fps` 와 **같아야 한다** (로더가 대조한다).
+  fps: 21
+  video: true
+  num_image_writer_threads_per_camera: 4
+
+defaults:
+  executor: chain_policy
+  manual_ceiling_s: 300.0
+
+output:
+  root: outputs/stage_runner
+
+# rerun 뷰어. 켜면 `| tee` 를 쓰지 말 것 — 뷰어가 파이프를 물려받아 창을 닫기
+# 전엔 정리 단계가 돌지 않는다 (10/06 C-1). eval_chain.sh 는 파일로 직접 쓴다.
+display_data: true
+
+chain:
+  enabled: true
+  params_path: configs/chain/stage_params.json
+  from_stage: 1
+  to_stage: 11
+
+  model:
+    # eval_najy.sh:64 의 M1. 회차마다 eval_chain.sh 가 허브에서 받아
+    # `--chain.model.policy_path=` 로 로컬 경로를 넣는다.
+    policy_path: kiroaiseoul/NAJY_act_all11_hot_27D_120k_s1000
+    onehot_k: 11
+    # 10/02 에 확정된 exec. 체크포인트 chunk(30) 이하여야 한다.
+    n_action_steps: 30
+    # false 로 **명시**한다. null 로 두면 체크포인트에서 16 을 읽어 같은 결론에
+    # 이르지만, 참조군이 16D 라는 것은 설정이 말해야 하는 사실이다 -- 어긋나면
+    # preflight 가 거부한다.
+    has_progress: false
+
+  completion:
+    # 16D 의 완료 = 출력 정지 stall_s ∧ 경과 ≥ p10 ∧ 실측 팔이 시연 끝 자세
+    # 중 하나에서 `end_pose_tol_rad`(∞-노름) 안. `p_done`·`p_hold_s` 는 이
+    # 모델에서 **읽히지 않는다** — 진행도 칸이 없다. 지운 것이 아니라 남겨 둔
+    # 이유: 두 YAML 의 차이를 체크포인트와 `has_progress` 두 줄로 좁혀 둔다.
+    p_done: 0.95
+    p_hold_s: 1.0
+    stall_s: 3.0
+    stall_arm_rad: 0.05
+    stall_base: 0.05
+    # control_time_s = 단계 p90_s × 이 값. 도달하면 **체인 실패**, 재시도 없음.
+    timeout_factor: 1.3
+    # `→` = 「이 단계 완료, 다음으로」. 새 모델·M1 **둘 다 켜 둔다**
+    # (사용자 결정 10/06). 자동 신호가 늦거나 안 와도 1→11 을 끝까지 보는 것이
+    # 목적이고, 자동(`complete`)/수동(`manual`)은 따로 센다. ESC 는 여전히 중단.
+    allow_manual_complete: true
+
+  reset:
+    t_min_s: 1.5
+    # 30 °/s 평균. 5차식의 최대 속도는 이것의 1.875배.
+    v_des_rad_s: 0.524
+    # 이보다 큰 간격은 **거부**한다(움직이기 전). 측정된 10개 경계가
+    # 0.25~1.28 rad 이라 여기 닿는다는 건 팔이 이전 단계가 남길 자리에 없다는
+    # 뜻 -- 그때 느리고 올바르게 생긴 궤적으로 작업공간을 건너는 것이 오답이다.
+    max_jump_rad: 1.5
+    tol_rad: 0.05
+    settle_s: 1.0
+    ceiling_factor: 2.0
+    settle_check_tries: 3
+    settle_check_gap_s: 0.1
+    settle_check_tol_rad: 0.02
+    # 1단계 앞에도 리셋을 넣는다: P2(시작 관측이 조금 어긋나면 출발하지 않는다)
+    # 때문에 팔을 시연 분포 안으로 되돌리는 것이 리셋의 목적이다.
+    initial: true
