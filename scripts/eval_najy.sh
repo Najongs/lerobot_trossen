@@ -11,6 +11,7 @@
 #   예)  DRY_RUN=1 scripts/eval_najy.sh M1 4 30 3     # 명령만 출력, 로봇 안 건드림
 #        scripts/eval_najy.sh M1 4 30 3               # 실행
 #        MAX_REL=none scripts/eval_najy.sh M1 4 30 3  # 팔 한 틱 이동 제한을 끈다 (10/06 이전 회차와 같은 조건)
+#        POSE_GUIDE=0 scripts/eval_najy.sh M1 4 30 3  # 리셋 중 시작 자세 안내 로그(POSE …)를 끈다
 #
 #   MAX_REL  팔 관절 한 틱 이동 상한(rad, 기본 0.1). 정책 action 이 현재 자세에서 이만큼 넘게 떨어지면
 #            그 틱엔 0.1 만 간다 -- 청크 경계·시작 순간의 큰 점프로 팔이 다치는 것을 막는다(10/06 부터).
@@ -148,6 +149,8 @@ CMD=(uv run lerobot-record
 ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv")
 [[ "${CHUNK_LOG:-0}" == 1 ]] && ENVS+=(LEROBOT_CHUNK_EXECUTION_LOG="$LOGDIR/$RUN.chunks.csv")
 [[ -n "$ONEHOT" ]] && ENVS+=(LEROBOT_TASK_ONEHOT="$ONEHOT")
+# 리셋 구간에 1초마다 「현재 → 학습 시작 자세」 를 로그로 찍는다 (pose_guide.py, 로봇 동작은 안 바뀜). 끄려면 POSE_GUIDE=0
+[[ "${POSE_GUIDE:-1}" != 0 ]] && ENVS+=(LEROBOT_POSE_GUIDE="$STAGE")
 
 if [[ "$DRY_RUN" == 1 ]]; then
   echo "-- DRY_RUN: 실행하지 않는다"; printf '%q ' env "${ENVS[@]}" "${CMD[@]}"; echo

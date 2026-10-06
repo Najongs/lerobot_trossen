@@ -17,6 +17,7 @@ from lerobot_robot_trossen.config_mobileai import MobileAIRobotConfig
 from lerobot_robot_trossen.base_vel_log import flush as flush_base_vel_log
 from lerobot_robot_trossen.base_vel_log import record_sample as record_base_vel_sample
 from lerobot_robot_trossen.loop_rate_log import add_loop_section, record_loop_tick
+from lerobot_robot_trossen.pose_guide import pose_guide_tick
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +473,8 @@ class MobileAIRobot(Robot):
             {k: v for k, v in action.items() if k in self.arms.action_features}
         )
         add_loop_section("arms_write", time.perf_counter() - _t)
+        # Reset-phase start-pose readout, off unless LEROBOT_POSE_GUIDE is set (pose_guide.py).
+        pose_guide_tick(send_action_arms)
         action_base_x_vel, action_base_theta_vel = _sanitize_base_command(
             action.get("x.vel", 0.0), action.get("theta.vel", 0.0)
         )
