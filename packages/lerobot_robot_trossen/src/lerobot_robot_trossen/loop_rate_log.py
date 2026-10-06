@@ -360,7 +360,19 @@ def _wrap_record_loop(original):
         try:
             arguments = _call_arguments(args, kwargs)
             fps = arguments.get("fps")
-            phase = "policy" if arguments.get("policy") is not None else "teleop"
+            # A policy object may NAME its own phase. The chain runner drives the
+            # boundary resets through the same record_loop with a trajectory
+            # "policy" (stage_runner.reset_policy.ResetPolicy) instead of a leader
+            # arm, and those ticks are neither a policy rollout nor a teleop
+            # recording: tagging them "policy" would mix 11 reset ramps into the
+            # eval summary and into eval_base_stats' policy filter, and tagging
+            # them "teleop" would make base_serial_rearm refuse the very 21 Hz
+            # loop the fix is paired with. The attribute is read off the object,
+            # so anything that does not declare it keeps the old two-way answer.
+            policy = arguments.get("policy")
+            phase = getattr(policy, "record_loop_phase", None) or (
+                "policy" if policy is not None else "teleop"
+            )
             _reset_phase(phase, float(fps) if fps else None)
         except Exception:  # never let instrumentation break a recording
             logger.exception(

@@ -934,6 +934,106 @@ LEROBOT_TASK_ONEHOT=2/11 uv run lerobot-record ... --policy.path=<11-stage ckpt>
   recordings (arms, then `x.vel`, `theta.vel`); not for base-first (MuJoCo teleop) data.
 - Verified offline against the training-side conversion: identical action chunks (max |diff| 0)
   for stages 1, 2, 6, 11 with 14- and 16-wide robot state. Not yet run on the robot.
+- `TaskOneHotStep.set_stage(stage)` re-points the one-hot inside ONE process and clears the
+  announcement, so `stage i/K active` is re-emitted per stage. That is what lets `stage_runner`
+  run all 11 stages against one loaded checkpoint (see **Stage Chaining** below).
+  **If the line does not reappear at a stage boundary, stop the run** -- the one-hot did not switch.
+
+## Stage Chaining (`stage_runner`)
+
+Runs stages 1..11 as ONE episode with no human intervention: stage k's policy, an automatic
+completion decision, a minimum-jerk reset of the 12 arm joints to stage k+1's designated start
+pose, one-hot k+1, repeat. Supports both a 16-D checkpoint (M1) and a 17-D one whose extra action
+slot is a progress scalar.
+
+```shell
+DRY_RUN=1 scripts/eval_chain.sh M1                   # assemble and print the command only
+RESET_ONLY=1 scripts/eval_chain.sh M1 resets         # the ramps alone, no checkpoint loaded
+FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 r4  # one boundary: reset to task04, then task04
+scripts/eval_chain.sh TPH bringup5                   # the whole chain
+```
+
+`RESET_ONLY=1` (`chain.reset.only`) drops every policy stage from the expansion, so bring-up
+steps ② and ③ move the arms with no checkpoint in the process at all. It is a MODE and not an
+operator procedure for a reason: "press ESC right after the reset reports `reached`" lets the
+policy send several ticks at 21 Hz before a human can react, and on the first run of a new
+runner -- possibly with glassware in the grippers -- those ticks are the whole risk the step
+exists to retire. The ramps are the same ones the full chain runs, with the same ids, because
+nothing between two ramps moves the arm: the ramp to stage k+1 anchors exactly where the ramp to
+stage k left it, which is the boundary gap the step measures.
+
+`configs/chain/{chain_m1_all11,chain_tph_all11}.yaml` are the two configs (reference and
+main); `configs/chain/stage_params.json` carries the per-stage start poses, the p10/p50/p90
+demonstration lengths and the end-pose candidates, and is generated in `trossen-ai-simulation`
+(`scripts/export_chain_params.py`). Its schema and every refusal are documented in
+`configs/chain/README.md`. The bring-up order is in `docs/eval_najy.md`.
+
+Why each piece exists -- all three failures are measured, not assumed:
+
+- **The reset.** Stage k's end pose and stage k+1's start pose are 0.25-1.28 rad apart at all ten
+  boundaries, because every stage was recorded from its own hand-built start pose. The transition
+  is not in the training data, so no policy can produce it.
+- **The completion rule.** The stage **departed** (below) **and** `p >= 0.95` held for 1 s
+  **and** the output stalled for 3 s **and** the elapsed time past the stage's p10. None of the
+  four works alone: demonstration lengths spread 1.3-2.7x, 23-35% of the demonstrations of
+  task02/06/08 pause for over two seconds mid-task, and the progress scalar wobbles in exactly
+  those pauses. A 16-D model has no progress output, so its second clause becomes "the measured
+  arm is within `end_pose_tol_rad` of a demonstrated end pose" -- a weaker signal, which is why
+  the manual key matters more for it. "Stalled" reads two separate knobs: `stall_track_rad`
+  (0.08, how far the arm may lag its command -- a loaded arm holding still lags it) and
+  `stall_arm_rad` (0.05, how far the MEASURED arm may travel across the window).
+- **The departure latch.** Completion is refused for the whole stage until the measured arm
+  leaves 0.10 rad of its designated start pose, or the commanded base integrates past 0.17 rad of
+  net rotation or 0.10 m of travel. Without it the 16-D rule fires on a stage that never started:
+  in `configs/chain/stage_params.json` the designated START pose of task03, task04 and task10 is
+  within 0.0008 rad of one of that same stage's END poses (measured off the file; WHY is
+  [추정] -- read off the task names, and task04 is `pour_liquid_from_...`), and 20-40% of M1's
+  holdout starts predict a stop on the first chunk -- so eleven stages could report a full 1->11 run having moved nothing. A stage that
+  times out without departing says `never_departed` in its reason and gets a `✗` in the report's
+  departure column; the thing to look at then is the start scene, not the policy.
+- **The right arrow.** `allow_manual_complete: true` for BOTH models: it means "this stage is
+  done, go on". Recorded as `terminated_by="manual"` and counted separately from the automatic
+  `"complete"`, so the chain report says how much of the run the model finished by itself.
+  It applies to POLICY stages only -- pressing it during a reset cuts the ramp short, which is
+  `not_reached` and therefore a chain failure. That case is labelled `manual_interrupt` in the
+  reset's `reason_detail`, so a ramp a human cut is not read as a ramp that failed.
+- **Two gap limits for the ramp.** A boundary reset is refused above `max_jump_rad` (1.5 rad,
+  outside the measured 0.25-1.28 rad spread). The INITIAL reset -- from wherever a human left the
+  arms to `from_stage`'s pose -- is refused above `initial_max_jump_rad` (0.6 rad), because there
+  is no measured distribution for it at all; the refusal says to put the arms within 0.3 rad of
+  the stage's start pose by hand, which is the fix. Both refuse BEFORE anything is commanded.
+
+What the runner does NOT do:
+
+- **No retry, anywhere.** A stage that times out, or a reset that does not arrive, ends the run
+  (`trial_end.reason="chain_failed"`, exit code 4). The episode IS saved -- a partial chain is
+  data. Retrying a reset would repeat the motion that already failed; retrying a stage would roll
+  it out from a pose no demonstration has.
+- **No bypass of the safety path.** The ramp goes through `make_robot_action` ->
+  `robot_action_processor` -> `send_action` -> the 0.1 rad relative-target clamp -> the 0.4
+  velocity pacing, exactly like a policy action. `staged_positions` /
+  `set_all_positions(blocking=True)` are never called. The ramp is sized so the clamp does not
+  fire (worst measured boundary: 0.047 rad/tick against a 0.1 limit) -- `clamped_ticks` in the
+  stage_end event is 0 on a correct run, and a nonzero count during a reset means the ramp was
+  wrong.
+- **No gripper or base motion in a reset.** The grippers are commanded to their MEASURED position
+  every tick (the arm may be carrying something) and the base to zero.
+
+Reading a run:
+
+| Where | What |
+|---|---|
+| `outputs/stage_runner/<run>/events.jsonl` | one line per stage boundary, with `kind`, `stage_number`, `onehot_index`, `t_mono` and a `reason_detail` carrying the numbers behind the terminator |
+| `outputs/stage_runner/<run>/config.{source,resolved}.yaml` | the file as edited, and the fully expanded 22-stage list that actually ran |
+| `~/eval_logs/<run>.log` / `.basevel.csv` | the run log, and the per-tick base command/measurement (`phase=reset` rows are the ramps) |
+| `scripts/eval_chain_report.py <run dir>` | the per-stage table: terminator, departure time (`✗` = never departed), elapsed vs p10/p90, p and stall, reset T / dmax / arrival error and WHY it ended, base integral per stage, clamped ticks |
+
+`display_data` is `false` in both chain configs. Turn it on only after bring-up steps ①-④ have
+established a loop-rate baseline: the 10/02 figures (20.9-21.1 Hz) were measured on a SINGLE
+stage with rerun running, so a chain rate measured with the viewer on is not comparable to them.
+
+`eval_najy_post.sh` and `eval_najy_report.py` are NOT used and NOT modified: they assume one run
+= one stage.
 
 ## Upstream flags (not fork changes)
 

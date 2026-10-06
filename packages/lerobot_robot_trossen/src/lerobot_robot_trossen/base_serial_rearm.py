@@ -101,6 +101,20 @@ EXPLICIT = _SETTING is not None
 REQUESTED = _switch_on(_SETTING) if EXPLICIT else True
 
 
+# Loop phases the switch may run in. "policy" is the eval rollout it was
+# measured against; "reset" is the chain runner's boundary pose ramp
+# (stage_runner.reset_policy), which runs through the SAME record_loop at the
+# SAME 21 fps and sends a full action -- base velocities included, commanded to
+# zero -- on every tick. This is NOT a widening of what the robot may do: the
+# ramp commands x.vel = theta.vel = 0.0, so what the switch changes there is only
+# the 20 ms the driver spends waiting for a receive it already has. Excluding it
+# would leave the boundary ticks running at a different serial cadence from the
+# policy ticks either side of them, which is the one thing a per-stage rate
+# comparison must not have. Leader-arm teleop ("teleop") stays excluded: a
+# RECORDING must keep the rate its data was captured at.
+PERMITTED_LOOP_PHASES: tuple[str, ...] = ("policy", "reset")
+
+
 def loop_refusal_reason(phase: str | None, fps: float | None) -> str | None:
     """Why the switch must stay off in this loop phase, or None if it may run."""
     if phase is None:
@@ -108,7 +122,7 @@ def loop_refusal_reason(phase: str | None, fps: float | None) -> str | None:
             "no record_loop phase tag (outside a loop, or LEROBOT_LOOP_HZ_LOG=0 "
             "turned the tagging off)"
         )
-    if phase != "policy":
+    if phase not in PERMITTED_LOOP_PHASES:
         return f"{phase} phase (a recording must keep its rate)"
     if fps is None:
         return "loop fps unknown"

@@ -71,13 +71,69 @@ def _parse() -> int | None:
 _STAGE = _parse()
 _last_t = 0.0
 _prev_seq = -1  # phase generation of the last tick seen (loop_rate_log.current_phase_seq)
+# Overrides TARGETS_DEG[_STAGE] when the caller knows the target better than this
+# table does -- see set_stage().
+_TARGET_OVERRIDE: tuple[tuple[float, ...], tuple[float, ...]] | None = None
+# Phases that get the once-a-second "how far to the target" line. "teleop" is the
+# leader-arm reset of `lerobot-record`; "reset" is the chain runner's automatic
+# pose ramp, which is the one phase where this readout can be checked against a
+# target the runner itself is driving towards.
+_GUIDE_PHASES = ("teleop", "reset")
+
+
+def set_stage(
+    stage: int | None,
+    target_deg: tuple[tuple[float, ...], tuple[float, ...]] | None = None,
+) -> None:
+    """Re-point the guide at another stage inside ONE process (chain runner).
+
+    ``lerobot-record`` runs one stage per process, so the stage came from the
+    environment once at import. A chain runs all 11 in a single process and the
+    reset before stage k must be measured against stage k's target, not stage
+    1's.
+
+    ``target_deg`` replaces :data:`TARGETS_DEG` for this stage, as
+    ``((left j0..j5), (right j0..j5))`` in DEGREES. Pass it whenever the caller
+    has the DESIGNATED reset pose: this module's table is the per-joint MEDIAN of
+    every demo's first frame, and for t02·03·04·05·10 the start poses are
+    bimodal, so the median is a pose no demonstration ever used
+    (docs/eval_najy.md, offline §92.1). Measuring a ramp whose target came from
+    `configs/chain/stage_params.json` against the median would print a nonzero
+    distance at the exact moment the ramp has arrived. ``None`` restores the
+    table.
+
+    ``stage=None`` turns the guide off, which is what a run with no stage context
+    (an initial reset before stage 1 has been chosen) should print: nothing.
+    """
+    global _STAGE, _TARGET_OVERRIDE, _last_t
+    if stage is not None and stage not in TARGETS_DEG and target_deg is None:
+        logger.warning(f"{_ENV_VAR}: stage {stage} has no target; guide off.")
+        stage = None
+    if target_deg is not None and (
+        len(target_deg) != 2 or any(len(side) != 6 for side in target_deg)
+    ):
+        raise ValueError(
+            "pose_guide target_deg must be ((left j0..j5), (right j0..j5)) in degrees"
+        )
+    _STAGE = stage
+    _TARGET_OVERRIDE = target_deg
+    # So the first tick of the new stage prints immediately instead of waiting
+    # out the remainder of the previous stage's one-second period.
+    _last_t = 0.0
+
+
+def _target() -> tuple[tuple[float, ...], tuple[float, ...]]:
+    if _TARGET_OVERRIDE is not None:
+        return _TARGET_OVERRIDE
+    return TARGETS_DEG[_STAGE]
 
 
 def pose_guide_tick(sent_arms: dict) -> None:
     """Called once per loop with the arm action just sent.
 
-    Reset (teleop) phase: one ``POSE`` line per second. Policy phase: one
-    ``POSE-START`` line on the first tick of each episode, then silence.
+    Reset phase (leader-arm ``teleop`` or the chain runner's ``reset``): one
+    ``POSE`` line per second. Policy phase: one ``POSE-START`` line on the first
+    tick of each episode, then silence.
     """
     global _last_t, _prev_seq
     if _STAGE is None:
@@ -88,7 +144,7 @@ def pose_guide_tick(sent_arms: dict) -> None:
     # ran for zero ticks, where the phase string alone would stay "policy".
     first_policy_tick = phase == "policy" and seq != _prev_seq
     _prev_seq = seq
-    if phase == "teleop":
+    if phase in _GUIDE_PHASES:
         now = time.monotonic()
         if now - _last_t < _PERIOD_S:
             return
@@ -100,7 +156,7 @@ def pose_guide_tick(sent_arms: dict) -> None:
         return
     try:
         parts, sq, worst = [], 0.0, (0.0, "")
-        for side, target in zip(("left", "right"), TARGETS_DEG[_STAGE]):
+        for side, target in zip(("left", "right"), _target()):
             cells = []
             for j, tgt in enumerate(target):
                 cur = math.degrees(sent_arms[f"{side}_joint_{j}.pos"])
@@ -109,9 +165,20 @@ def pose_guide_tick(sent_arms: dict) -> None:
                 if abs(need) > abs(worst[0]):
                     worst = (need, f"{side[0].upper()} j{j}")
                 mark = "" if abs(need) < 10 else ("↑" if need > 0 else "↓")
-                cells.append(f"j{j} {cur:+.0f}→{tgt:+d}{mark}")
+                # `:+.0f`, not `:+d`: an override target comes from
+                # stage_params.json as a float, and `:+d` raises on one -- which
+                # the except below would swallow into a debug line, leaving the
+                # reset phase silent for no visible reason.
+                cells.append(f"j{j} {cur:+.0f}→{tgt:+.0f}{mark}")
             parts.append(f"{side[0].upper()}: " + " ".join(cells))
-        note = " (⚠️ 시작 자세가 여러 무리 -- 중앙값은 참고만)" if _STAGE in _MULTIMODAL else ""
+        # Only for the TABLE's medians. An override is the designated single pose
+        # the runner is actually driving to, so the "median may be a pose no demo
+        # used" caveat does not apply to it.
+        note = (
+            " (⚠️ 시작 자세가 여러 무리 -- 중앙값은 참고만)"
+            if _TARGET_OVERRIDE is None and _STAGE in _MULTIMODAL
+            else ""
+        )
         logger.info(
             f"{tag} task{_STAGE:02d}{note} | 목표까지 {math.sqrt(sq):.2f} rad | "
             f"가장 큰 차 {worst[1]} {worst[0]:+.0f}° | " + " | ".join(parts)
