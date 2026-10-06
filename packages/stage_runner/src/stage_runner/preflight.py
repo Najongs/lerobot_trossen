@@ -503,7 +503,99 @@ def extra_action_names(
     )
 
 
-def check_chain_definitions(config: StageRunnerConfig, params) -> None:
+def _checkpoint_document(policy_path: str) -> Mapping[str, object] | None:
+    """A local checkpoint's ``config.json`` as a plain dict, or None.
+
+    None for a hub id, a mock path, or a directory with no readable
+    ``config.json``. Deliberately NOT a ``PreTrainedConfig``: this runs in the
+    gate that must not import ``lerobot.policies.factory``, and the one key it
+    reads (``temporal_ensemble_coeff``) is a scalar in the file.
+    """
+    if not policy_path or policy_path.startswith(_MOCK_POLICY_SCHEME):
+        return None
+    candidate = Path(policy_path).expanduser() / "config.json"
+    if not candidate.is_file():
+        return None
+    import json
+
+    try:
+        document = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def temporal_ensemble_problem(
+    config: StageRunnerConfig, policy_config=None
+) -> str | None:
+    """The message refusing ``temporal_ensemble_coeff`` with ``n_action_steps>1``.
+
+    ACT enforces this itself, in ``ACTConfig.__post_init__``, and the chain
+    WALKS AROUND that enforcement without meaning to: ``policies.load_chain_bundles``
+    assigns ``policy_config.n_action_steps = 30`` AFTER ``from_pretrained`` has
+    run, which is exactly how ``lerobot-record --policy.n_action_steps=`` works
+    and is why the assignment is there -- but a plain attribute write re-runs no
+    validator. A checkpoint saved with ``temporal_ensemble_coeff: 0.01`` and
+    ``n_action_steps: 1`` therefore loads cleanly, gets widened to 30, and runs a
+    combination upstream declares NotImplementedError on.
+
+    What it costs on this rig is measured, not theoretical: the ensemble runs the
+    policy on every tick instead of once per chunk, the loop went 20% slower and
+    the base over-rotated by 1.29x (aa30006), and the base holds its last
+    velocity command until the next ``send_action`` -- so a slow loop drives
+    every rotation further.
+
+    ``scripts/_chain_preflight.py`` already refuses this, but only for runs
+    started through ``scripts/eval_chain.sh``. ``python -m stage_runner`` is a
+    supported entry point and had no gate at all.
+
+    ``policy_config`` is the ``PreTrainedConfig`` ``cli.main`` has already
+    fetched, when there is one; otherwise the checkpoint's ``config.json`` is
+    read from disk. Either way this happens BEFORE the assignment.
+    """
+    chain = config.chain
+    coefficient = None
+    checkpoint_steps = None
+    if policy_config is not None:
+        coefficient = getattr(policy_config, "temporal_ensemble_coeff", None)
+        checkpoint_steps = getattr(policy_config, "n_action_steps", None)
+    else:
+        document = _checkpoint_document(chain.model.policy_path)
+        if document is None:
+            return None
+        coefficient = document.get("temporal_ensemble_coeff")
+        checkpoint_steps = document.get("n_action_steps")
+    if coefficient is None:
+        return None
+    # The EFFECTIVE value: the YAML's override when it sets one (that is the
+    # number that will be assigned), else whatever the checkpoint carries.
+    effective = (
+        chain.model.n_action_steps
+        if chain.model.n_action_steps is not None
+        else checkpoint_steps
+    )
+    try:
+        steps = int(effective or 1)
+    except (TypeError, ValueError):
+        steps = 1
+    if steps <= 1:
+        return None
+    return (
+        f"the checkpoint `{chain.model.policy_path}` was saved with "
+        f"`temporal_ensemble_coeff: {coefficient}`, and this run would execute "
+        f"`n_action_steps: {steps}`. ACT refuses that combination in its own "
+        "__post_init__, but the chain assigns n_action_steps AFTER "
+        "from_pretrained (as `--policy.n_action_steps=` does), which re-runs no "
+        "validator -- so it would have run anyway. Measured cost on this rig: "
+        "the loop 20% slower and base over-rotation 1.29x (aa30006). Either set "
+        "`chain.model.n_action_steps: 1`, or point at a checkpoint whose "
+        "config.json has `temporal_ensemble_coeff: null`."
+    )
+
+
+def check_chain_definitions(
+    config: StageRunnerConfig, params, policy_config=None
+) -> None:
     """Gate the expanded chain: ids, kinds, one-hot indices, required terminators.
 
     Everything here is produced by ``config.expand_chain``, so a failure is a
@@ -561,6 +653,31 @@ def check_chain_definitions(config: StageRunnerConfig, params) -> None:
             "be positive -- the ramp's duration is max_jump/v_des and its "
             "refusal threshold is max_jump."
         )
+    if chain.reset.initial_max_jump_rad <= 0:
+        problems.append(
+            "`chain.reset.initial_max_jump_rad` must be positive -- it is the "
+            "gap the INITIAL reset (from wherever a human left the arms) is "
+            "refused above, and a non-positive value refuses every start."
+        )
+    if chain.reset.initial_max_jump_rad > chain.reset.max_jump_rad:
+        problems.append(
+            f"`chain.reset.initial_max_jump_rad: "
+            f"{chain.reset.initial_max_jump_rad}` is larger than "
+            f"`max_jump_rad: {chain.reset.max_jump_rad}`. The initial ramp "
+            "starts from a pose nothing has measured, so it must be the "
+            "TIGHTER of the two, never the looser."
+        )
+    if chain.reset.ceiling_factor <= 1.0:
+        problems.append(
+            f"`chain.reset.ceiling_factor: {chain.reset.ceiling_factor}` must "
+            "be > 1.0. The ramp is tick-based, so arrival is only possible "
+            "while the achieved loop rate is at least "
+            "dataset.fps / ceiling_factor -- a factor at or below 1 makes the "
+            "ceiling shorter than the ramp itself."
+        )
+    coefficient_problem = temporal_ensemble_problem(config, policy_config)
+    if coefficient_problem:
+        problems.append(coefficient_problem)
     if chain.reset.tol_rad <= 0 or chain.reset.settle_s <= 0:
         problems.append(
             "`chain.reset.tol_rad` and `chain.reset.settle_s` must both be "

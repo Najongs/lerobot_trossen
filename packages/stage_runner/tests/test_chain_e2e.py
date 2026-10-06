@@ -183,6 +183,15 @@ class ChainEndToEndTest(unittest.TestCase):
             self.assertEqual(detail["completion_reason"], "progress")
             self.assertEqual(detail["p_last"], 1.0)
             self.assertGreaterEqual(detail["elapsed_s"], detail["p10_s"])
+            # The departure latch is a premise of every completion, and the
+            # report's `출발` column reads these two keys.
+            self.assertTrue(
+                detail["departed"],
+                f"stage {event['stage_id']} completed without ever leaving its "
+                "start pose, which the monitor must refuse",
+            )
+            self.assertIsNotNone(detail["departed_s"])
+            self.assertLessEqual(detail["departed_s"], detail["elapsed_s"])
         for event in reset_ends:
             self.assertEqual(
                 event["terminator"],
@@ -190,6 +199,7 @@ class ChainEndToEndTest(unittest.TestCase):
                 f"reset {event['stage_id']} did not arrive: {event['reason']}",
             )
             detail = event["reason_detail"]
+            self.assertEqual(detail["reset_end_reason"], "reached")
             self.assertLess(detail["reach_err"], detail["reset_tol_rad"])
             self.assertLessEqual(
                 detail["reset_max_step_rad"],
@@ -288,6 +298,28 @@ class ChainEndToEndTest(unittest.TestCase):
         self.assertEqual(
             ends[1]["required_terminator"],
             [TERMINATED_BY_COMPLETE, TERMINATED_BY_MANUAL],
+        )
+        # `stuck` holds the arm AND the base, so it also never departs -- and a
+        # timeout with no departure is a different finding from an ordinary one:
+        # the stage did not run out of time doing its task, it never started.
+        self.assertFalse(ends[1]["reason_detail"]["departed"])
+        self.assertIsNone(ends[1]["reason_detail"]["departed_s"])
+        self.assertIn(
+            "never_departed",
+            ends[1]["reason"],
+            "the reason must name it, because that is what tells the operator "
+            "to look at the start scene instead of at the policy",
+        )
+        self.assertEqual(
+            ends[0]["reason_detail"]["reset_initial"],
+            True,
+            "the first ramp is the INITIAL one, held to initial_max_jump_rad",
+        )
+        self.assertEqual(
+            ends[0]["reason_detail"]["reset_jump_limit_rad"],
+            0.6,
+            "chain_mock.yaml leaves initial_max_jump_rad at its default, and "
+            "the initial ramp must be held to THAT and not to max_jump_rad",
         )
 
         # The base was still stopped at the failing boundary.

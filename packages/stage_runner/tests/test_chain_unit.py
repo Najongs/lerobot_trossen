@@ -548,6 +548,306 @@ class ResetPolicyTest(NoRobotSdkMixin, unittest.TestCase):
         self.assertFalse(still, "a drifting arm must not be used as a ramp anchor")
 
 
+class AnchorDriftTest(NoRobotSdkMixin, unittest.TestCase):
+    """M-1: the mid-entry backstop is a FIRST-TICK check, not a per-tick one."""
+
+    ACTION_NAMES = ResetPolicyTest.ACTION_NAMES
+
+    def _policy(self, *, delta: float, max_jump_rad: float, fps: int = 21):
+        import torch
+
+        anchor = {name: 0.0 for name in cp.ARM_JOINT_NAMES}
+        target = {name: delta for name in cp.ARM_JOINT_NAMES}
+        settings = rp.ResetSettings(
+            t_min_s=0.5, settle_s=0.1, tol_rad=0.05, max_jump_rad=max_jump_rad
+        )
+        plan = rp.plan_reset(
+            stage_number=6,
+            anchor=anchor,
+            target=target,
+            fps=fps,
+            settings=settings,
+        )
+        state_names = [f"{name}.pos" for name in REALISTIC_JOINT_NAMES]
+        events: dict[str, bool] = {"exit_early": False}
+        policy = rp.ResetPolicy(
+            plan,
+            events,
+            action_names=list(self.ACTION_NAMES),
+            state_names=state_names,
+            settings=settings,
+        )
+        return policy, plan, events, state_names, torch
+
+    def _batch(self, torch, state_names, measured):
+        return {
+            "observation.state": torch.tensor(
+                [[measured[name] for name in state_names]], dtype=torch.float32
+            )
+        }
+
+    def test_the_drift_check_runs_exactly_once_over_a_whole_ramp(self) -> None:
+        """It is called before the FIRST command and never again.
+
+        `_anchor_drift` grows monotonically as the ramp does its job -- by the
+        last tick it IS delta_max -- so a per-tick check measures the ramp's own
+        progress. Counting the calls is what pins the fix: the behaviour it
+        caused (a refusal at the END of a correct ramp) is only reachable when
+        the drift limit is below delta_max, which plan_reset refuses outright.
+        """
+        policy, plan, events, state_names, torch = self._policy(
+            delta=1.0, max_jump_rad=1.1
+        )
+        calls = {"n": 0}
+        original = policy._anchor_drift
+
+        def counted(measured):
+            calls["n"] += 1
+            return original(measured)
+
+        policy._anchor_drift = counted
+
+        measured = {name: 0.0 for name in state_names}
+        ticks = 0
+        while not events["exit_early"] and ticks < plan.ticks + 200:
+            action = dict(
+                zip(
+                    self.ACTION_NAMES,
+                    policy.select_action(
+                        self._batch(torch, state_names, measured)
+                    ).squeeze(0).tolist(),
+                )
+            )
+            for name in state_names:
+                measured[name] = action[name]
+            ticks += 1
+
+        self.assertEqual(
+            calls["n"],
+            1,
+            "the anchor-drift backstop must run on the first tick only; it ran "
+            f"{calls['n']} times over a {plan.ticks}-tick ramp",
+        )
+        self.assertEqual(policy.refused, "")
+        self.assertTrue(policy.reached)
+
+    def test_a_mid_ramp_measurement_past_the_limit_does_not_refuse(self) -> None:
+        """The behaviour the per-tick check produced, now impossible.
+
+        One tick reports the arm 1.2 rad from the anchor -- past the 1.1 rad
+        limit this ramp was planned under. With a per-tick check that is a
+        refusal, the policy holds position and the reset reports `not_reached`,
+        which is a chain failure. It is not the first tick, so it is not the
+        thing the backstop exists for.
+        """
+        policy, plan, events, state_names, torch = self._policy(
+            delta=1.0, max_jump_rad=1.1
+        )
+        measured = {name: 0.0 for name in state_names}
+        policy.select_action(self._batch(torch, state_names, measured))
+        self.assertEqual(policy.refused, "")
+
+        spiked = {name: 1.2 for name in state_names}
+        policy.select_action(self._batch(torch, state_names, spiked))
+        self.assertEqual(
+            policy.refused,
+            "",
+            "a measurement past the limit on a tick other than the first is not "
+            "what this backstop judges -- it is the ramp, or noise",
+        )
+        self.assertFalse(events["exit_early"])
+
+    def test_the_first_tick_past_the_limit_still_refuses(self) -> None:
+        """The backstop itself is intact: the arm moved before the ramp began."""
+        policy, plan, events, state_names, torch = self._policy(
+            delta=1.0, max_jump_rad=1.1
+        )
+        moved = {name: 1.3 for name in state_names}
+        values = policy.select_action(
+            self._batch(torch, state_names, moved)
+        ).squeeze(0).tolist()
+        self.assertIn("moved", policy.refused)
+        self.assertTrue(events["exit_early"])
+        # And the refusal action HOLDS the measurement, it does not ramp.
+        action = dict(zip(self.ACTION_NAMES, values))
+        for name in cp.ARM_JOINT_NAMES:
+            self.assertAlmostEqual(action[f"{name}.pos"], 1.3, places=5)
+
+
+class ArrivalWindowTest(NoRobotSdkMixin, unittest.TestCase):
+    """M-3: arrival is a RATIO over the settle window, not a consecutive run."""
+
+    ACTION_NAMES = ResetPolicyTest.ACTION_NAMES
+
+    def _policy(self, fps: int = 21):
+        import torch
+
+        anchor = {name: 0.0 for name in cp.ARM_JOINT_NAMES}
+        target = {name: 0.3 for name in cp.ARM_JOINT_NAMES}
+        # settle_s 1.0 at 21 Hz = 21 ticks, the production window.
+        settings = rp.ResetSettings(t_min_s=0.5, settle_s=1.0, tol_rad=0.05)
+        plan = rp.plan_reset(
+            stage_number=3,
+            anchor=anchor,
+            target=target,
+            fps=fps,
+            settings=settings,
+        )
+        state_names = [f"{name}.pos" for name in REALISTIC_JOINT_NAMES]
+        events: dict[str, bool] = {"exit_early": False}
+        policy = rp.ResetPolicy(
+            plan,
+            events,
+            action_names=list(self.ACTION_NAMES),
+            state_names=state_names,
+            settings=settings,
+        )
+        return policy, plan, events, state_names, settings, torch
+
+    def _drive(self, *, glitches: set[int]):
+        """Ramp with the arm following, glitching the MEASUREMENT on given ticks.
+
+        Returns ``(policy, plan, ticks spent)``. A glitch is one tick reporting
+        the arm 0.2 rad off target: an encoder read, or a pacing tick that
+        landed outside tol. The command is unaffected.
+        """
+        policy, plan, events, state_names, settings, torch = self._policy()
+        measured = {name: 0.0 for name in state_names}
+        ticks = 0
+        while not events["exit_early"] and ticks < plan.ticks + 200:
+            reported = dict(measured)
+            if ticks in glitches:
+                for name in cp.ARM_JOINT_NAMES:
+                    reported[f"{name}.pos"] = measured[f"{name}.pos"] + 0.2
+            batch = {
+                "observation.state": torch.tensor(
+                    [[reported[name] for name in state_names]], dtype=torch.float32
+                )
+            }
+            action = dict(
+                zip(self.ACTION_NAMES, policy.select_action(batch).squeeze(0).tolist())
+            )
+            for name in state_names:
+                measured[name] = action[name]
+            ticks += 1
+        return policy, plan, ticks
+
+    def _shape(self):
+        """``plan.ticks`` / ``plan.settle_ticks`` without driving anything."""
+        _, plan, _, _, _, _ = self._policy()
+        return plan
+
+    def test_one_glitched_tick_in_twenty_one_still_arrives(self) -> None:
+        shape = self._shape()
+        self.assertEqual(shape.settle_ticks, 21, "the production settle window")
+        # The 5th tick of the SETTLE window. Ticks inside the ramp do not count
+        # toward arrival at all, so a glitch there would prove nothing.
+        policy, plan, ticks = self._drive(glitches={shape.ticks + 4})
+        self.assertTrue(policy.reached)
+        self.assertLessEqual(
+            ticks,
+            plan.ticks + plan.settle_ticks,
+            "a single tick outside tol must not restart the settle window: with "
+            "a consecutive counter this needed 21 MORE ticks, and `not_reached` "
+            "is a chain failure with no retry",
+        )
+
+    def test_three_glitched_ticks_in_twenty_one_delay_arrival(self) -> None:
+        """90% is a threshold, not a free pass: 18 of 21 is not enough."""
+        shape = self._shape()
+        policy, plan, ticks = self._drive(
+            glitches={shape.ticks + 2, shape.ticks + 6, shape.ticks + 10}
+        )
+        self.assertTrue(policy.reached, "it must still arrive, just later")
+        self.assertGreater(
+            ticks,
+            plan.ticks + plan.settle_ticks,
+            "three of twenty-one outside tol is below the 90% the window asks "
+            "for, so arrival waits until they have rolled out of it",
+        )
+
+    def test_an_arm_that_never_arrives_is_still_never_reached(self) -> None:
+        """The ratio loosened the window; it did not remove the requirement."""
+        policy, plan, events, state_names, settings, torch = self._policy()
+        batch = {
+            "observation.state": torch.zeros(
+                (1, len(state_names)), dtype=torch.float32
+            )
+        }
+        for _ in range(plan.ticks + 100):
+            policy.select_action(batch)
+        self.assertFalse(policy.reached)
+        self.assertFalse(events["exit_early"])
+
+
+class InitialResetJumpTest(NoRobotSdkMixin, unittest.TestCase):
+    """C-2: the initial ramp (from a pose a HUMAN chose) has its own limit."""
+
+    def _plan(self, *, gap: float, initial: bool, settings=None):
+        anchor = {name: 0.0 for name in cp.ARM_JOINT_NAMES}
+        target = dict(anchor, left_joint_2=gap)
+        return rp.plan_reset(
+            stage_number=1,
+            anchor=anchor,
+            target=target,
+            fps=21,
+            settings=settings or rp.ResetSettings(),
+            initial=initial,
+        )
+
+    def test_an_initial_gap_over_point_six_is_refused(self) -> None:
+        with self.assertRaises(rp.ResetAbort) as caught:
+            self._plan(gap=0.8, initial=True)
+        message = str(caught.exception)
+        self.assertIn("nothing moved", message)
+        self.assertIn("initial_max_jump_rad", message)
+        self.assertIn(
+            "0.3 rad",
+            message,
+            "the refusal has to say what to DO -- put the arms near the stage's "
+            "start pose by hand -- or the operator raises the threshold instead",
+        )
+
+    def test_the_same_gap_is_accepted_at_a_boundary(self) -> None:
+        """0.8 rad is INSIDE the measured 0.25-1.28 rad boundary spread."""
+        plan = self._plan(gap=0.8, initial=False)
+        self.assertAlmostEqual(plan.delta_max, 0.8)
+        self.assertEqual(plan.jump_limit_rad, 1.5)
+        self.assertFalse(plan.initial)
+
+    def test_an_initial_gap_under_the_limit_is_planned_normally(self) -> None:
+        plan = self._plan(gap=0.5, initial=True)
+        self.assertAlmostEqual(plan.delta_max, 0.5)
+        self.assertEqual(plan.jump_limit_rad, 0.6)
+        self.assertTrue(plan.initial)
+        self.assertEqual(plan.as_detail()["reset_initial"], True)
+
+    def test_the_backstop_uses_the_limit_the_plan_was_approved_under(self) -> None:
+        """Not `settings.max_jump_rad`: an initial ramp is held to 0.6 there too."""
+        import torch
+
+        plan = self._plan(gap=0.5, initial=True)
+        state_names = [f"{name}.pos" for name in REALISTIC_JOINT_NAMES]
+        events: dict[str, bool] = {"exit_early": False}
+        policy = rp.ResetPolicy(
+            plan,
+            events,
+            action_names=list(ResetPolicyTest.ACTION_NAMES),
+            state_names=state_names,
+            settings=rp.ResetSettings(),
+        )
+        # 0.7 rad from the anchor on the FIRST tick: inside max_jump_rad (1.5)
+        # but outside the 0.6 this ramp was approved under.
+        moved = {name: 0.7 for name in state_names}
+        batch = {
+            "observation.state": torch.tensor(
+                [[moved[name] for name in state_names]], dtype=torch.float32
+            )
+        }
+        policy.select_action(batch)
+        self.assertIn("0.600", policy.refused)
+
+
 def _realistic_names():
     return REALISTIC_JOINT_NAMES
 
@@ -557,12 +857,22 @@ def _realistic_names():
 # --------------------------------------------------------------------------- #
 
 
-class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
+class _MonitorHarness(NoRobotSdkMixin):
     """Synthetic tick sequences against an injected clock.
 
     The clock is injected so a loaded machine cannot change the answer: these
     are assertions about the RULE, and the rule is defined in seconds.
+
+    A mixin rather than a base TestCase, so the two suites below share the
+    harness without ``unittest discover`` collecting every case twice.
     """
+
+    # Every tick of a test that is NOT about the departure latch is sent with
+    # the arm this far from the designated start pose, so the latch is satisfied
+    # on the first tick and the rule under test is the only thing that can
+    # refuse. 0.2 rad is twice `departure_arm_rad`. The latch itself is tested
+    # in DepartureLatchTest, where the offset is the variable.
+    DEPARTED = 0.2
 
     def setUp(self) -> None:
         self.params = load_params().stage(1)  # p10 0.3, p50 0.5, p90 0.8
@@ -570,7 +880,12 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         self.now = 0.0
         self.events: dict[str, bool] = {"exit_early": False}
         self.settings = comp.CompletionSettings(
-            p_done=0.95, p_hold_s=0.2, stall_s=0.4, stall_arm_rad=0.05, stall_base=0.05
+            p_done=0.95,
+            p_hold_s=0.2,
+            stall_s=0.4,
+            stall_track_rad=0.08,
+            stall_arm_rad=0.05,
+            stall_base=0.05,
         )
 
     def _monitor(self, *, has_progress: bool):
@@ -583,24 +898,45 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         monitor.begin_stage(self.params, has_progress=has_progress, started=0.0)
         return monitor
 
-    def _tick(self, monitor, *, progress=None, offset=0.0, base=0.0, dt=1 / 21.0):
+    def _tick(
+        self,
+        monitor,
+        *,
+        progress=None,
+        offset=0.0,
+        base=0.0,
+        theta=0.0,
+        track=0.0,
+        dt=1 / 21.0,
+    ):
+        """One transition. ``offset`` moves BOTH command and measurement.
+
+        ``track`` separates them: the measurement lags the command by that much,
+        which is a tracking error and not motion. ``offset`` is motion.
+        """
         from lerobot.processor import create_transition
 
         self.now += dt
         action = {
             f"{name}.pos": self.params.start_pose[name] + offset for name in self.names
         }
-        observation = dict(action)
+        observation = {key: value - track for key, value in action.items()}
         action["x.vel"] = base
-        action["theta.vel"] = 0.0
+        action["theta.vel"] = theta
         if progress is not None:
             action[comp.PROGRESS_KEY] = progress
         monitor(create_transition(action=action, observation=observation))
 
+
+class CompletionMonitorTest(_MonitorHarness, unittest.TestCase):
+    """The conjunction's four synthetic sequences, departure held satisfied."""
+
     def test_a_progress_ramp_that_stalls_completes(self) -> None:
         monitor = self._monitor(has_progress=True)
         for index in range(60):
-            self._tick(monitor, progress=min(1.0, index / 4.0))
+            self._tick(
+                monitor, progress=min(1.0, index / 4.0), offset=self.DEPARTED
+            )
             if self.events["exit_early"]:
                 break
         self.assertTrue(self.events["exit_early"])
@@ -614,7 +950,7 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
     def test_stalled_but_progress_only_point_three_is_not_complete(self) -> None:
         monitor = self._monitor(has_progress=True)
         for _ in range(80):
-            self._tick(monitor, progress=0.3)
+            self._tick(monitor, progress=0.3, offset=self.DEPARTED)
         self.assertFalse(self.events["exit_early"])
         self.assertIsNone(monitor.end_stage())
 
@@ -630,7 +966,7 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         # 1. Pause: nothing moves for 2 s, well past stall_s (0.4) and p10
         #    (0.3). Stall and the elapsed floor are both satisfied; p is not.
         for _ in range(42):
-            self._tick(monitor, progress=0.6)
+            self._tick(monitor, progress=0.6, offset=self.DEPARTED)
         self.assertFalse(
             self.events["exit_early"],
             "a mid-task pause must not complete the stage: p is 0.6, not >= 0.95",
@@ -640,7 +976,7 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         # 2. It resumes and travels, with p now above the threshold. The arm's
         #    peak-to-peak over the window is what refuses here -- |cmd - meas|
         #    is zero on every tick, because the mock arm follows perfectly.
-        offset = 0.0
+        offset = self.DEPARTED
         for _ in range(42):
             offset += 0.01
             self._tick(monitor, progress=1.0, offset=offset)
@@ -667,7 +1003,7 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         # and stall_s is 0.4 s, so the earliest honest completion is at 0.4 s.
         fired_at = None
         for _ in range(40):
-            self._tick(monitor, progress=1.0)
+            self._tick(monitor, progress=1.0, offset=self.DEPARTED)
             if self.events["exit_early"]:
                 fired_at = self.now
                 break
@@ -678,7 +1014,7 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
     def test_a_commanded_base_velocity_blocks_completion(self) -> None:
         monitor = self._monitor(has_progress=True)
         for _ in range(60):
-            self._tick(monitor, progress=1.0, base=0.2)
+            self._tick(monitor, progress=1.0, offset=self.DEPARTED, base=0.2)
         self.assertFalse(
             self.events["exit_early"],
             "a base still being driven is not a stage that has finished",
@@ -697,9 +1033,9 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
 
     def test_a_frozen_loop_does_not_trivially_stall(self) -> None:
         monitor = self._monitor(has_progress=True)
-        self._tick(monitor, progress=1.0, dt=1 / 21.0)
+        self._tick(monitor, progress=1.0, offset=self.DEPARTED, dt=1 / 21.0)
         # The loop blocks for 5 s (a RealSense async_read), then one tick.
-        self._tick(monitor, progress=1.0, dt=5.0)
+        self._tick(monitor, progress=1.0, offset=self.DEPARTED, dt=5.0)
         self.assertFalse(
             self.events["exit_early"],
             "two samples spanning a 5 s gap are not a covered stall window",
@@ -707,7 +1043,14 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
 
     def test_a_sixteen_d_model_completes_by_stall_plus_end_pose(self) -> None:
         monitor = self._monitor(has_progress=False)
-        # end_poses[0] of the mock file is start_pose + 0.05, tol 0.12.
+        # end_poses[0] of the mock file is start_pose + 0.05, tol 0.12 -- which
+        # is WITHIN the tolerance of the start pose itself, the C-1 geometry.
+        # So the stage has to actually go somewhere first: out to 0.3, then back
+        # to the end pose and stop. Standing at 0.05 from the first tick is the
+        # case the latch refuses and it has its own test below.
+        for _ in range(8):
+            self._tick(monitor, offset=0.3)
+        self.assertFalse(self.events["exit_early"])
         for _ in range(40):
             self._tick(monitor, offset=0.05)
             if self.events["exit_early"]:
@@ -732,7 +1075,7 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         """record_loop never resets the robot action pipeline; begin_stage does."""
         monitor = self._monitor(has_progress=True)
         for _ in range(40):
-            self._tick(monitor, progress=1.0)
+            self._tick(monitor, progress=1.0, offset=self.DEPARTED)
             if self.events["exit_early"]:
                 break
         self.assertTrue(self.events["exit_early"])
@@ -740,7 +1083,7 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         self.events["exit_early"] = False
 
         monitor.begin_stage(self.params, has_progress=True, started=self.now)
-        self._tick(monitor, progress=1.0)
+        self._tick(monitor, progress=1.0, offset=self.DEPARTED)
         self.assertFalse(
             self.events["exit_early"],
             "the previous stage's stalled window must not complete this stage "
@@ -750,7 +1093,9 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
     def test_a_missing_progress_key_makes_the_monitor_blind_not_wrong(self) -> None:
         monitor = self._monitor(has_progress=True)
         for _ in range(60):
-            self._tick(monitor, progress=None)  # 17-D declared, key absent
+            self._tick(
+                monitor, progress=None, offset=self.DEPARTED
+            )  # 17-D declared, key absent
         self.assertFalse(
             self.events["exit_early"],
             "a monitor that cannot read its signal must never declare completion",
@@ -784,6 +1129,218 @@ class CompletionMonitorTest(NoRobotSdkMixin, unittest.TestCase):
         self.assertIsNotNone(monitor({}))
         self.assertFalse(self.events["exit_early"])
         self.assertIsNone(monitor.end_stage())
+
+    def test_a_steady_tracking_error_is_still_a_stopped_arm(self) -> None:
+        """M-2: 0.06 rad of LAG is not 0.06 rad of travel.
+
+        The arm sits still at a fixed offset while its measurement trails the
+        command by a constant 0.06 rad -- what a loaded arm holding against
+        gravity does. With one knob for both quantities (0.05) this ran to its
+        timeout forever, because every tick looked like it was "still moving".
+        """
+        monitor = self._monitor(has_progress=True)
+        for _ in range(40):
+            self._tick(
+                monitor, progress=1.0, offset=self.DEPARTED, track=0.06
+            )
+            if self.events["exit_early"]:
+                break
+        self.assertTrue(
+            self.events["exit_early"],
+            "a steady-state following error below stall_track_rad (0.08) must "
+            "not block completion; only MEASURED travel above stall_arm_rad "
+            "(0.05) may",
+        )
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_PROGRESS)
+
+    def test_a_tracking_error_over_the_track_knob_still_blocks(self) -> None:
+        """The split loosened one quantity, it did not remove the check."""
+        monitor = self._monitor(has_progress=True)
+        for _ in range(60):
+            self._tick(
+                monitor, progress=1.0, offset=self.DEPARTED, track=0.12
+            )
+        self.assertFalse(
+            self.events["exit_early"],
+            "an arm 0.12 rad behind its command is not following it",
+        )
+        self.assertIsNone(monitor.end_stage())
+
+
+class DepartureLatchTest(_MonitorHarness, unittest.TestCase):
+    """C-1: completion is refused until the stage leaves its start scene.
+
+    Shares the harness, not the premise: here the offset IS the variable.
+    """
+
+    def test_standing_still_at_the_start_pose_never_completes(self) -> None:
+        """The 16-D failure that motivated the latch, in its exact geometry.
+
+        The mock file's ``end_poses[0]`` for stage 1 is ``start_pose + 0.05``
+        with ``end_pose_tol_rad`` 0.12, so an arm parked ON the start pose is
+        0.05 from a demonstrated end pose -- inside tolerance. In the real
+        ``configs/chain/stage_params.json`` t03, t04 and t10 are 0.001 rad from
+        their own end poses, which is the same thing with no slack at all.
+        Stalled plus near-an-end-pose plus past p10 is therefore all true, and
+        the stage still did nothing.
+        """
+        monitor = self._monitor(has_progress=False)
+        for _ in range(80):
+            self._tick(monitor, offset=0.0)
+        self.assertFalse(
+            self.events["exit_early"],
+            "a stage whose arm never left the designated start pose must NOT "
+            "be declared complete, however near an end pose it is standing",
+        )
+        self.assertIsNone(monitor.end_stage())
+        departure = monitor.last_departure
+        self.assertFalse(departure.departed)
+        self.assertIsNone(departure.at_s)
+        self.assertAlmostEqual(departure.arm_rad, 0.0, places=6)
+
+    def test_the_same_refusal_applies_to_a_seventeen_d_progress_head(self) -> None:
+        """p = 1.0 out of the start scene is the same failure, other sensor."""
+        monitor = self._monitor(has_progress=True)
+        for _ in range(80):
+            self._tick(monitor, progress=1.0, offset=0.0)
+        self.assertFalse(
+            self.events["exit_early"],
+            "the latch gates the progress path too: a head reading 1.0 before "
+            "the arm has moved is not evidence the stage is done",
+        )
+        self.assertIsNone(monitor.end_stage())
+
+    def test_an_arm_that_leaves_and_comes_back_may_complete(self) -> None:
+        """0.15 rad out, back to the end pose, stop -> completion allowed."""
+        monitor = self._monitor(has_progress=False)
+        for _ in range(8):
+            self._tick(monitor, offset=0.15)
+        for _ in range(40):
+            self._tick(monitor, offset=0.05)
+            if self.events["exit_early"]:
+                break
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_STALL_NN)
+        self.assertIsNotNone(result.departed_s)
+        self.assertLess(
+            result.departed_s,
+            result.elapsed_s,
+            "the latch must have set BEFORE the completion it is a premise of",
+        )
+        self.assertTrue(monitor.last_departure.departed)
+
+    def test_an_arm_just_inside_the_threshold_does_not_latch(self) -> None:
+        """0.09 < departure_arm_rad 0.10. A reset lands within tol_rad 0.05."""
+        monitor = self._monitor(has_progress=False)
+        for _ in range(80):
+            self._tick(monitor, offset=0.09)
+        self.assertFalse(self.events["exit_early"])
+        monitor.end_stage()
+        self.assertFalse(monitor.last_departure.departed)
+
+    def test_the_base_alone_can_latch_it(self) -> None:
+        """t01, t03 and t10 turn and drive without moving an arm joint.
+
+        theta.vel 0.5 rad/s for 10 ticks at 21 Hz integrates to about 0.21 rad,
+        past departure_base_rot_rad (0.17). The arm never moves.
+        """
+        monitor = self._monitor(has_progress=False)
+        for _ in range(10):
+            self._tick(monitor, offset=0.0, theta=0.5)
+        self.assertTrue(
+            monitor._stage.departed,
+            "a stage that only turned the base has still departed",
+        )
+        # Now the base stops and the arm holds on an end pose: completion may
+        # fire, because the premise is satisfied.
+        for _ in range(40):
+            self._tick(monitor, offset=0.05)
+            if self.events["exit_early"]:
+                break
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_STALL_NN)
+        self.assertGreater(abs(monitor.last_departure.base_rot_rad), 0.17)
+
+    def test_the_first_tick_integrates_no_base_distance(self) -> None:
+        """dt is the tick-to-tick difference, so the first tick's dt is 0.
+
+        Without that, the first tick would be charged a whole 1/fps of whatever
+        velocity it happened to command, and a single spurious tick at the
+        start could latch a stage that never moved.
+        """
+        monitor = self._monitor(has_progress=False)
+        self._tick(monitor, offset=0.0, theta=1.0, dt=1 / 21.0)
+        self.assertEqual(monitor._stage.base_rot_rad, 0.0)
+        self.assertFalse(monitor._stage.departed)
+
+    def test_a_rocking_base_is_not_a_departure(self) -> None:
+        """The threshold is on |INTEGRAL|, not on accumulated absolute rotation.
+
+        Four cycles of 6 ticks each way at 0.5 rad/s: the NET rotation never
+        leaves (-0.03, +0.12) rad while the total travelled is over 0.5 rad. The
+        base is rocking in place, which is where it started, and the arm has not
+        moved -- so nothing departed. Summing |theta.vel|*dt instead would latch
+        on a stage that went nowhere, which is the whole failure C-1 is about.
+        """
+        monitor = self._monitor(has_progress=False)
+        for _ in range(4):
+            for _ in range(6):
+                self._tick(monitor, offset=0.0, theta=0.5)
+            for _ in range(6):
+                self._tick(monitor, offset=0.0, theta=-0.5)
+        self.assertFalse(monitor._stage.departed)
+        monitor.end_stage()
+        self.assertLess(abs(monitor.last_departure.base_rot_rad), 0.17)
+        # And it really did keep commanding the base for ~0.5 rad of travel.
+        self.assertGreater(self.now, 2.0)
+
+    def test_a_driven_base_can_latch_it_too(self) -> None:
+        """x.vel: 0.3 m/s for 10 ticks at 21 Hz is about 0.13 m > 0.10 m."""
+        monitor = self._monitor(has_progress=False)
+        for _ in range(10):
+            self._tick(monitor, offset=0.0, base=0.3)
+        self.assertTrue(monitor._stage.departed)
+        monitor.end_stage()
+        self.assertGreater(abs(monitor.last_departure.base_fwd_m), 0.10)
+
+    def test_the_latch_is_cleared_by_begin_stage(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        for _ in range(8):
+            self._tick(monitor, offset=0.3)
+        self.assertTrue(monitor._stage.departed)
+        monitor.end_stage()
+        monitor.begin_stage(self.params, has_progress=False, started=self.now)
+        self._tick(monitor, offset=0.0)
+        self.assertFalse(
+            monitor._stage.departed,
+            "the previous stage's departure must not carry into this one -- the "
+            "robot action pipeline is the one record_loop never resets",
+        )
+
+    def test_the_departure_survives_window_pruning(self) -> None:
+        """_prune drops samples older than the longest window; the latch is not one.
+
+        The arm departs at the start and is then still for ten times stall_s.
+        By the time completion is possible every sample that proved it moved has
+        been pruned, so a latch derived from `samples` would have forgotten.
+        """
+        monitor = self._monitor(has_progress=False)
+        for _ in range(4):
+            self._tick(monitor, offset=0.3)
+        for _ in range(200):
+            self._tick(monitor, offset=0.05)
+            if self.events["exit_early"]:
+                break
+        self.assertTrue(self.events["exit_early"])
+        self.assertLess(
+            len(monitor._stage.samples),
+            200,
+            "the sample list must be pruned, or this test proves nothing",
+        )
+        self.assertIsNotNone(monitor.end_stage())
 
 
 # --------------------------------------------------------------------------- #
@@ -1150,6 +1707,480 @@ class ExtraActionFeatureTest(NoRobotSdkMixin, unittest.TestCase):
             preflight.extra_action_names(18, 16)
         with self.assertRaises(preflight.PreflightError):
             preflight.extra_action_names(14, 16)
+
+
+class TemporalEnsembleGateTest(NoRobotSdkMixin, unittest.TestCase):
+    """M-4: refuse ``temporal_ensemble_coeff`` with ``n_action_steps > 1``.
+
+    The combination is one ACT refuses in its own ``__post_init__``, and the
+    chain walks around that refusal by assigning ``n_action_steps`` AFTER
+    ``from_pretrained``. The checkpoint below is exactly the bypass: coeff set
+    and steps 1, which is VALID on disk and becomes invalid the moment the
+    runner widens it.
+    """
+
+    def _config(self, directory: Path, *, n_action_steps, coefficient=0.01):
+        import tempfile as _tempfile  # noqa: F401  (directory is the caller's)
+
+        from stage_runner import config as cfg_module
+        from stage_runner.mock_robot import MockRobotConfig
+
+        checkpoint = directory / "ckpt"
+        checkpoint.mkdir(parents=True, exist_ok=True)
+        document: dict = {"type": "act", "chunk_size": 30, "n_action_steps": 1}
+        if coefficient is not None:
+            document["temporal_ensemble_coeff"] = coefficient
+        (checkpoint / "config.json").write_text(
+            json.dumps(document), encoding="utf-8"
+        )
+        chain = cfg_module.ChainConfig(
+            enabled=True,
+            params_path=str(MOCK_PARAMS),
+            model=cfg_module.ChainModelConfig(
+                policy_path=str(checkpoint),
+                onehot_k=None,
+                n_action_steps=n_action_steps,
+            ),
+        )
+        config = cfg_module.StageRunnerConfig(
+            robot=MockRobotConfig(), version=2, chain=chain
+        )
+        config.stages = cfg_module.expand_chain(config, load_params())
+        return config
+
+    def test_a_coefficient_with_thirty_exec_steps_is_refused(self) -> None:
+        import tempfile
+
+        from stage_runner import preflight
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = self._config(Path(directory), n_action_steps=30)
+            with self.assertRaises(preflight.PreflightError) as caught:
+                preflight.check_chain_definitions(config, load_params())
+        message = str(caught.exception)
+        self.assertIn("temporal_ensemble_coeff", message)
+        self.assertIn("n_action_steps", message)
+
+    def test_the_gate_reads_the_effective_value_not_the_file(self) -> None:
+        """`n_action_steps: 1` in the YAML is the one safe way to run it."""
+        import tempfile
+
+        from stage_runner import preflight
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = self._config(Path(directory), n_action_steps=1)
+            self.assertIsNone(preflight.temporal_ensemble_problem(config))
+            # And `null` takes the checkpoint's own 1, which is also safe.
+            config.chain.model.n_action_steps = None
+            self.assertIsNone(preflight.temporal_ensemble_problem(config))
+
+    def test_no_coefficient_is_no_problem_at_any_exec(self) -> None:
+        import tempfile
+
+        from stage_runner import preflight
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = self._config(
+                Path(directory), n_action_steps=30, coefficient=None
+            )
+            self.assertIsNone(preflight.temporal_ensemble_problem(config))
+            preflight.check_chain_definitions(config, load_params())
+
+    def test_a_loaded_config_object_is_read_the_same_way(self) -> None:
+        """cli.main hands over the PreTrainedConfig it already fetched."""
+        import tempfile
+
+        from stage_runner import preflight
+
+        class Loaded:
+            temporal_ensemble_coeff = 0.01
+            n_action_steps = 1
+
+        with tempfile.TemporaryDirectory() as directory:
+            # The file says nothing; the object is what is read.
+            config = self._config(
+                Path(directory), n_action_steps=None, coefficient=None
+            )
+            problem = preflight.temporal_ensemble_problem(config, Loaded())
+            self.assertIsNone(
+                problem, "the checkpoint's own 1 step is safe"
+            )
+            config.chain.model.n_action_steps = 30
+            problem = preflight.temporal_ensemble_problem(config, Loaded())
+            self.assertIsNotNone(problem)
+            self.assertIn("temporal_ensemble_coeff", problem)
+
+    def test_a_hub_id_is_not_guessed_at(self) -> None:
+        """No local config.json, no opinion. The gate must not block a hub run."""
+        from stage_runner import config as cfg_module
+        from stage_runner import preflight
+        from stage_runner.mock_robot import MockRobotConfig
+
+        chain = cfg_module.ChainConfig(
+            enabled=True,
+            params_path=str(MOCK_PARAMS),
+            model=cfg_module.ChainModelConfig(
+                policy_path="kiroaiseoul/NAJY_act_all11_hot_27D_120k_s1000",
+                n_action_steps=30,
+            ),
+        )
+        config = cfg_module.StageRunnerConfig(
+            robot=MockRobotConfig(), version=2, chain=chain
+        )
+        self.assertIsNone(preflight.temporal_ensemble_problem(config))
+
+
+class ResetTerminationTest(NoRobotSdkMixin, unittest.TestCase):
+    """M-5: `not_reached` is the OUTCOME of three different events."""
+
+    class _Policy:
+        def __init__(self, *, reached=False, refused="", worst=0.42) -> None:
+            self.reached = reached
+            self.refused = refused
+            self.worst_error_rad = worst
+
+    def _plan(self, control_time_s: float = 9.0):
+        anchor = {name: 0.0 for name in cp.ARM_JOINT_NAMES}
+        return rp.plan_reset(
+            stage_number=5,
+            anchor=anchor,
+            target=dict(anchor, left_joint_1=0.5),
+            fps=21,
+            settings=rp.ResetSettings(),
+        )
+
+    def _classify(self, *, events=None, policy=None, elapsed_s=9.0):
+        from stage_runner import executors
+
+        plan = self._plan()
+        return executors.classify_chain_reset(
+            events=events or {},
+            policy=policy or self._Policy(),
+            plan=plan,
+            elapsed_s=elapsed_s,
+            margin_s=0.5,
+            tol_rad=0.05,
+        )
+
+    def test_a_right_arrow_during_the_ramp_is_manual_interrupt(self) -> None:
+        from stage_runner import executors
+
+        plan = self._plan()
+        terminated_by, reason, end_reason = self._classify(
+            elapsed_s=1.0, events={"exit_early": True}
+        )
+        self.assertEqual(
+            terminated_by,
+            TERMINATED_BY_NOT_REACHED,
+            "the OUTCOME is unchanged -- the arms are genuinely not at the next "
+            "stage's start pose, so the chain still fails",
+        )
+        self.assertEqual(
+            end_reason, executors.RESET_REASON_MANUAL_INTERRUPT
+        )
+        self.assertIn("CUT SHORT", reason)
+        self.assertLess(1.0, plan.control_time_s - 0.5)
+
+    def test_running_the_ceiling_out_is_not_manual_interrupt(self) -> None:
+        from stage_runner import executors
+
+        plan = self._plan()
+        terminated_by, reason, end_reason = self._classify(
+            elapsed_s=plan.control_time_s
+        )
+        self.assertEqual(terminated_by, TERMINATED_BY_NOT_REACHED)
+        self.assertEqual(end_reason, executors.RESET_REASON_CEILING)
+        self.assertIn("NO RETRY", reason)
+
+    def test_arrival_outranks_the_elapsed_heuristic(self) -> None:
+        """A reset that arrives EARLY also ends early. It is not an interrupt."""
+        from stage_runner import executors
+
+        terminated_by, _, end_reason = self._classify(
+            elapsed_s=1.0,
+            policy=self._Policy(reached=True, worst=0.01),
+            events={"exit_early": True},
+        )
+        self.assertEqual(terminated_by, TERMINATED_BY_REACHED)
+        self.assertEqual(end_reason, executors.RESET_REASON_REACHED)
+
+    def test_a_refusal_outranks_arrival_and_the_heuristic(self) -> None:
+        from stage_runner import executors
+
+        terminated_by, reason, end_reason = self._classify(
+            elapsed_s=0.2, policy=self._Policy(refused="no counterpart")
+        )
+        self.assertEqual(terminated_by, TERMINATED_BY_NOT_REACHED)
+        self.assertEqual(end_reason, executors.RESET_REASON_REFUSED)
+        self.assertIn("refused mid-entry", reason)
+
+    def test_an_escape_outranks_everything(self) -> None:
+        from stage_runner.results import TERMINATED_BY_STOP_RECORDING
+
+        terminated_by, _, _ = self._classify(
+            elapsed_s=0.2,
+            events={"stop_recording": True, "exit_early": True},
+            policy=self._Policy(reached=True),
+        )
+        self.assertEqual(terminated_by, TERMINATED_BY_STOP_RECORDING)
+
+
+class ResetExecutorRefusalTest(NoRobotSdkMixin, unittest.TestCase):
+    """C-2 through the executor: refused BEFORE anything was commanded."""
+
+    def _context(self, robot):
+        import types
+
+        from stage_runner import config as cfg_module
+        from stage_runner.completion import CompletionMonitorStep
+        from stage_runner.context import ChainRuntime
+
+        params = load_params()
+        action_names = [f"{name}.pos" for name in REALISTIC_JOINT_NAMES] + [
+            "x.vel",
+            "theta.vel",
+        ]
+        state_names = [f"{name}.pos" for name in REALISTIC_JOINT_NAMES]
+        reset_config = cfg_module.ResetConfig()
+        completion_config = cfg_module.CompletionConfig()
+        events: dict[str, bool] = {}
+        chain = ChainRuntime(
+            params=params,
+            monitor=CompletionMonitorStep(events),
+            completion=completion_config.to_settings(),
+            reset=reset_config.to_settings(),
+            has_progress=False,
+            action_names=tuple(action_names),
+            state_names=tuple(state_names),
+            onehot=None,
+            onehot_k=None,
+            allow_manual_complete=True,
+        )
+        return types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                dataset=types.SimpleNamespace(fps=21), display_data=False
+            ),
+            robot=robot,
+            events=events,
+            chain=chain,
+            buffered_frame_count=lambda: 0,
+            # Only reached on the path where call_record_loop is stubbed out.
+            processors=None,
+            dataset=None,
+        )
+
+    def _robot(self, **positions):
+        from stage_runner.mock_robot import MockRobot, MockRobotConfig
+
+        robot = MockRobot(
+            MockRobotConfig(
+                joint_count=14,
+                realistic_joint_names=True,
+                include_base_in_state=False,
+            )
+        )
+        robot.connect()
+        robot._joint_positions.update(positions)
+        return robot
+
+    def _stage(self, *, initial: bool):
+        from stage_runner import config as cfg_module
+
+        return cfg_module.StageConfig(
+            id=cfg_module.reset_stage_id(1, initial=initial),
+            name="reset to task01",
+            executor=cfg_module.EXECUTOR_CHAIN_RESET,
+            instruction="reset:01",
+            kind=cfg_module.STAGE_KIND_RESET,
+            stage_number=1,
+            initial_reset=initial,
+        )
+
+    def test_an_initial_reset_from_far_away_commands_nothing(self) -> None:
+        from stage_runner import executors
+
+        # Stage 1's designated left_joint_0 is 0.0 in the mock file; put the arm
+        # 0.8 rad away, which is inside max_jump_rad (1.5) and outside
+        # initial_max_jump_rad (0.6).
+        robot = self._robot(left_joint_0=0.8)
+        context = self._context(robot)
+        result = executors.run_chain_reset_stage(context, self._stage(initial=True))
+        robot.disconnect()
+
+        self.assertEqual(result.terminated_by, TERMINATED_BY_NOT_REACHED)
+        self.assertEqual(
+            result.frames,
+            0,
+            "refused before record_loop was entered, so no frame was recorded",
+        )
+        self.assertEqual(result.elapsed_s, 0.0)
+        self.assertEqual(
+            robot.sent_actions,
+            [],
+            "NOTHING was commanded -- this is the assertion that matters, "
+            "because a refusal that had already sent one tick would have moved "
+            "the arms toward a pose the runner then refused to drive to",
+        )
+        self.assertIn("initial_max_jump_rad", result.reason)
+        self.assertIn("0.3 rad", result.reason)
+
+    def test_the_same_pose_at_a_boundary_is_planned_and_entered(self) -> None:
+        """Contrast: 0.8 rad is an ordinary boundary gap, not a refusal.
+
+        ``call_record_loop`` is stubbed out, so the ramp is planned and the
+        bundle built but no tick runs -- which lands in the manual_interrupt
+        branch (elapsed ~0 with no arrival). That is the point: the wiring
+        reaches the classifier, and the classifier names what happened.
+        """
+        from stage_runner import executors, record_adapter
+
+        robot = self._robot(left_joint_0=0.8)
+        context = self._context(robot)
+        original = record_adapter.call_record_loop
+        record_adapter.call_record_loop = lambda **kwargs: None
+        try:
+            result = executors.run_chain_reset_stage(
+                context, self._stage(initial=False)
+            )
+        finally:
+            record_adapter.call_record_loop = original
+        robot.disconnect()
+
+        self.assertEqual(result.terminated_by, TERMINATED_BY_NOT_REACHED)
+        self.assertEqual(
+            result.detail["reset_end_reason"],
+            executors.RESET_REASON_MANUAL_INTERRUPT,
+        )
+        self.assertAlmostEqual(result.detail["reset_dmax"], 0.8, places=6)
+        self.assertEqual(result.detail["reset_jump_limit_rad"], 1.5)
+        self.assertFalse(result.detail["reset_initial"])
+
+
+class BaseFallbackTest(NoRobotSdkMixin, unittest.TestCase):
+    """The direct base command, which only the uncollected pytest files covered.
+
+    ``test_smoke_runner.py`` exercises this path, but it is pytest-style bare
+    functions and ``unittest discover`` collects ZERO tests from it -- so in the
+    suite that actually runs, the fallback's SUCCESS path was never executed.
+    """
+
+    class _Base:
+        """The smallest thing that behaves like MobileAIRobot.base.
+
+        ``TrossenSlate.set_cmd_vel`` returns a bool and mobileai.py:554/:569
+        both test it that way, which makes it a real delivery signal -- unlike
+        ``send_action``'s echo, which carries the commanded values either way.
+        """
+
+        def __init__(self, robot, *, accepts=True) -> None:
+            self.robot = robot
+            self.accepts = accepts
+            self.commands: list[tuple[float, float]] = []
+
+        def set_cmd_vel(self, x_vel: float, theta_vel: float) -> bool:
+            self.commands.append((float(x_vel), float(theta_vel)))
+            if not self.accepts:
+                return False
+            self.robot._base_velocity = {
+                "x.vel": float(x_vel),
+                "theta.vel": float(theta_vel),
+            }
+            return True
+
+    def _robot(self, *, with_base=True, accepts=True, driving=True):
+        from stage_runner.mock_robot import MockRobot, MockRobotConfig
+
+        robot = MockRobot(
+            MockRobotConfig(joint_count=14, realistic_joint_names=True)
+        )
+        robot.connect()
+        if driving:
+            robot._base_velocity = {"x.vel": 0.4, "theta.vel": 0.0}
+        if with_base:
+            robot.base = self._Base(robot, accepts=accepts)
+        return robot
+
+    def _break_observation(self, robot):
+        def get_observation():
+            # The measured fault this path exists for: MobileAIRobot reads all
+            # three RealSense cameras through an unguarded async_read
+            # (mobileai.py:526-528), so a dead camera takes out the hold action
+            # the primary stop needs.
+            raise RuntimeError("RealSense async_read timed out (injected)")
+
+        robot.get_observation = get_observation
+
+    def test_zero_base_directly_succeeds_and_reports_empty(self) -> None:
+        from stage_runner import transitions
+
+        robot = self._robot()
+        self.assertEqual(transitions.zero_base_directly(robot), "")
+        self.assertEqual(robot.base.commands, [(0.0, 0.0)])
+        self.assertEqual(robot._base_velocity, {"x.vel": 0.0, "theta.vel": 0.0})
+        robot.disconnect()
+
+    def test_a_dead_observation_falls_back_and_the_base_stops(self) -> None:
+        from stage_runner import transitions
+
+        robot = self._robot()
+        self._break_observation(robot)
+        outcome = transitions.stop_base(robot)
+        self.assertEqual(outcome.path, transitions.STOP_PATH_FALLBACK)
+        self.assertTrue(outcome.base_is_stopped)
+        self.assertEqual(outcome.reason, "stop_base_fallback")
+        self.assertIsNone(
+            outcome.action,
+            "the fallback builds no action dict -- not commanding the arms is "
+            "the point of it, and they hold their position anyway",
+        )
+        self.assertEqual(robot.base.commands, [(0.0, 0.0)])
+        self.assertEqual(robot._base_velocity, {"x.vel": 0.0, "theta.vel": 0.0})
+        self.assertEqual(
+            robot.sent_actions,
+            [],
+            "send_action was never reached, so the arms were not commanded",
+        )
+
+    def test_a_base_that_refuses_the_transaction_is_a_failed_stop(self) -> None:
+        from stage_runner import transitions
+
+        robot = self._robot(accepts=False)
+        self._break_observation(robot)
+        outcome = transitions.stop_base(robot)
+        self.assertEqual(outcome.path, transitions.STOP_PATH_FAILED)
+        self.assertFalse(
+            outcome.base_is_stopped, "cli.main turns this into exit code 3"
+        )
+        self.assertIn("returned False", outcome.error)
+
+    def test_a_robot_with_no_base_has_no_fallback(self) -> None:
+        """MockRobot ships WITHOUT `.base`; the option is opt-in per test."""
+        from stage_runner import transitions
+
+        robot = self._robot(with_base=False)
+        self.assertFalse(hasattr(robot, "base"))
+        self.assertIn("no .base", transitions.zero_base_directly(robot))
+
+    def test_a_keyboard_interrupt_reaches_the_operator_after_the_stop(self) -> None:
+        from stage_runner import transitions
+
+        robot = self._robot()
+
+        def get_observation():
+            raise KeyboardInterrupt
+
+        robot.get_observation = get_observation
+        with self.assertRaises(KeyboardInterrupt):
+            transitions.stop_base(robot)
+        self.assertEqual(
+            robot.base.commands,
+            [(0.0, 0.0)],
+            "the fallback must run BEFORE the interrupt is re-raised",
+        )
+        # And the caller that is already unwinding gets the truth instead.
+        robot.base.commands.clear()
+        outcome = transitions.stop_base(robot, reraise_interrupt=False)
+        self.assertEqual(outcome.path, transitions.STOP_PATH_FALLBACK)
 
 
 class TerminatorVocabularyTest(NoRobotSdkMixin, unittest.TestCase):

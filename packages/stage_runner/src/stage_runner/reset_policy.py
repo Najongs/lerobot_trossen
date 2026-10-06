@@ -57,6 +57,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -110,16 +111,40 @@ class ResetSettings:
     # the one case where a slow, correct-looking sweep across the workspace is
     # the wrong answer.
     max_jump_rad: float = 1.5
-    # Arrival: max |measured - target| over the 12 joints. Same norm and same
-    # value as the completion monitor's stall threshold, so "arrived" and "still"
-    # mean one thing in this package.
+    # The same refusal for the INITIAL reset, and deliberately much tighter.
+    # The ten BOUNDARY gaps are measured (0.25-1.28 rad) and the previous stage
+    # is supposed to have left the arm at one end of one of them, so 1.5 rad
+    # there is a "something is wrong" threshold. The initial reset starts from
+    # wherever a HUMAN left the arms, where there is no measured distribution at
+    # all -- so the answer to a large gap is not a slow correct-looking sweep
+    # across the workspace, it is a person moving the arms by hand first.
+    initial_max_jump_rad: float = 0.6
+    # Arrival: max |measured - target| over the 12 joints. Same NORM as the
+    # completion monitor's thresholds (inf-norm, per joint, radians) so
+    # "arrived" and "still" are measured the same way; the VALUES are separate
+    # knobs (see CompletionSettings.stall_track_rad / stall_arm_rad).
     tol_rad: float = 0.05
     # How long arrival must hold before the reset is declared reached.
     settle_s: float = 1.0
     # control_time_s = (T + settle_s) * this. The ceiling exists so a reset that
     # never arrives ends instead of running to a 300 s manual ceiling; reaching
     # it is a CHAIN FAILURE with no retry.
-    ceiling_factor: float = 2.0
+    #
+    # 3.0, raised from 2.0 on 2026-10-06, and raising it is the SAFE direction:
+    # the ramp is tick-based (u = tick / N), so a bigger ceiling gives a slow
+    # loop more wall-clock time to finish the SAME trajectory at the SAME
+    # per-tick step -- it never makes the arm move faster. The bound it buys:
+    # the ramp plus the settle window costs (T + settle_s) * fps ticks, which at
+    # an achieved loop rate r takes (T + settle_s) * fps / r seconds, so arrival
+    # is only POSSIBLE while
+    #
+    #     r >= fps / ceiling_factor
+    #
+    # i.e. 7.0 Hz at fps 21 with factor 3 (it was 10.5 Hz with factor 2). Below
+    # that the reset reports not_reached no matter how correct the ramp is, and
+    # the thing to fix is the loop rate (README "Control loop rate"), not this
+    # number.
+    ceiling_factor: float = 3.0
     # Pre-entry stillness check: the arm must be at rest before a ramp anchors
     # on its position, or the anchor is a point the arm is already leaving.
     settle_check_tries: int = 3
@@ -141,6 +166,13 @@ class ResetPlan:
     control_time_s: float
     max_step_rad: float
     fps: int
+    # Whether this is the initial reset (from wherever a human left the arms).
+    initial: bool = False
+    # The gap threshold that WAS applied -- initial_max_jump_rad for an initial
+    # reset and max_jump_rad for a boundary one. Carried on the plan rather than
+    # re-derived in ResetPolicy, so the mid-entry backstop and the pre-entry
+    # refusal can never disagree about which limit this ramp was approved under.
+    jump_limit_rad: float = 1.5
 
     def as_detail(self) -> dict[str, Any]:
         return {
@@ -149,6 +181,8 @@ class ResetPlan:
             "reset_ticks": self.ticks,
             "reset_max_step_rad": round(self.max_step_rad, 4),
             "reset_settle_ticks": self.settle_ticks,
+            "reset_jump_limit_rad": round(self.jump_limit_rad, 3),
+            "reset_initial": self.initial,
         }
 
 
@@ -169,6 +203,10 @@ def quintic(u: float) -> float:
 # max |d/du quintic(u)| = 15/8, at u = 0.5.
 QUINTIC_PEAK_SLOPE: float = 1.875
 
+# How much of the trailing `settle_ticks` window must be inside `tol_rad` for
+# the reset to count as arrived. See ResetPolicy._check_arrival.
+ARRIVAL_WINDOW_RATIO: float = 0.9
+
 
 def plan_reset(
     *,
@@ -178,11 +216,18 @@ def plan_reset(
     fps: int,
     settings: ResetSettings,
     arm_joint_names: Sequence[str] = ARM_JOINT_NAMES,
+    initial: bool = False,
 ) -> ResetPlan:
     """Size the ramp, or refuse it. Called BEFORE ``record_loop``.
 
-    Refuses on a missing joint, a non-finite value, or a gap over
-    ``max_jump_rad``. A non-finite value has to be caught HERE because it does
+    ``initial=True`` is the first ramp of a chain, whose anchor is wherever a
+    HUMAN left the arms rather than where the previous stage ended. It is
+    refused at ``initial_max_jump_rad`` (0.6) instead of ``max_jump_rad`` (1.5),
+    and the message says what to do about it, because the fix is a person
+    moving the arms -- not a 1.5 rad sweep from a pose no demonstration has.
+
+    Refuses on a missing joint, a non-finite value, or a gap over the applicable
+    limit. A non-finite value has to be caught HERE because it does
     not fail loudly downstream: ``WidowXAIFollower``'s pacing compares
     ``abs(goal - present) > limit``, every comparison with NaN is False, so the
     clamp silently does not fire and the NaN goal reaches ``set_all_positions``
@@ -212,11 +257,30 @@ def plan_reset(
             f"reset before stage {stage_number} refused (nothing moved):\n  - "
             + "\n  - ".join(problems)
         )
-    if delta_max > settings.max_jump_rad:
+    limit = (
+        settings.initial_max_jump_rad if initial else settings.max_jump_rad
+    )
+    limit_name = "initial_max_jump_rad" if initial else "max_jump_rad"
+    if delta_max > limit:
+        if initial:
+            raise ResetAbort(
+                f"INITIAL reset before stage {stage_number} refused (nothing "
+                f"moved): the largest joint gap is {delta_max:.3f} rad, over "
+                f"{limit_name}={limit:.3f}. This is the ramp from wherever the "
+                f"arms were LEFT BY HAND to task{stage_number:02d}'s start "
+                f"pose, and there is no measured distribution for it -- so put "
+                f"the arms near task{stage_number:02d}'s start pose (within "
+                "0.3 rad) by hand and start again. The `POSE` line of a "
+                "teleoperate session, or the per-stage table in "
+                "docs/eval_najy.md, gives the pose in degrees. Raising "
+                f"`chain.reset.{limit_name}` instead means asking the runner "
+                "to sweep the arms across the workspace from a pose nothing has "
+                "validated."
+            )
         raise ResetAbort(
             f"reset before stage {stage_number} refused (nothing moved): the "
-            f"largest joint gap is {delta_max:.3f} rad, over max_jump_rad="
-            f"{settings.max_jump_rad:.3f}. The ten measured stage boundaries span "
+            f"largest joint gap is {delta_max:.3f} rad, over {limit_name}="
+            f"{limit:.3f}. The ten measured stage boundaries span "
             "0.25-1.28 rad, so this means the arm is not where the previous stage "
             "was supposed to leave it -- check the pose by hand before retrying."
         )
@@ -236,6 +300,8 @@ def plan_reset(
         # The bound, not a measurement: the largest step the ramp can take.
         max_step_rad=QUINTIC_PEAK_SLOPE * delta_max / ticks,
         fps=int(fps),
+        initial=bool(initial),
+        jump_limit_rad=float(limit),
     )
 
 
@@ -393,13 +459,17 @@ class ResetPolicy:
         self.refused: str = ""
         self.worst_error_rad: float = float("inf")
         self.tick: int = 0
-        self._settled_ticks: int = 0
+        # The last `settle_ticks` arrival answers, newest last. A RATIO over
+        # this window, not a consecutive count -- see _check_arrival.
+        self._arrival_window: deque[bool] = deque(
+            maxlen=max(1, plan.settle_ticks)
+        )
         self._last_action: list[float] | None = None
 
     # ``record_loop`` calls this on entry to every stage.
     def reset(self) -> None:
         self.tick = 0
-        self._settled_ticks = 0
+        self._arrival_window.clear()
         self._last_action = None
         self.reached = False
         self.worst_error_rad = float("inf")
@@ -412,18 +482,30 @@ class ResetPolicy:
             if index < len(state)
         }
 
-        # Backstop only. plan_reset already refused an impossible gap before the
-        # loop was entered; this covers the case where the arm has MOVED between
-        # the anchor read and the first tick by more than the whole budget --
-        # something only a fault can do. It holds position instead of raising,
-        # because raising here discards the episode (see ResetAbort).
-        if not self.refused:
+        # Backstop only, and ON THE FIRST TICK ONLY (`self.tick == 0`, i.e.
+        # before this policy has commanded anything). plan_reset already refused
+        # an impossible gap before the loop was entered; this covers the case
+        # where the arm MOVED between the anchor read and the first tick by more
+        # than the whole budget -- something only a fault can do. It holds
+        # position instead of raising, because raising here discards the episode
+        # (see ResetAbort).
+        #
+        # WITHOUT the tick guard it ran on every tick, and then it was not a
+        # backstop at all but a second, wrong, interpretation of the same
+        # number: `_anchor_drift` grows monotonically as the ramp does its job
+        # (by the last tick it IS delta_max), so the check measured the ramp's
+        # own progress and refused it near the END -- a reset that had just
+        # arrived, reported as `not_reached`, which is a chain failure. The
+        # docstring always said "between the anchor read and the first tick";
+        # the code did not.
+        if not self.refused and self.tick == 0:
             drift = self._anchor_drift(measured)
-            if drift is not None and drift > self.settings.max_jump_rad:
+            if drift is not None and drift > self.plan.jump_limit_rad:
                 self.refused = (
                     f"the arm moved {drift:.3f} rad away from the anchor between "
-                    f"the pre-entry read and the first tick, over max_jump_rad="
-                    f"{self.settings.max_jump_rad:.3f}; holding position"
+                    f"the pre-entry read and the first tick, over the "
+                    f"{self.plan.jump_limit_rad:.3f} rad limit this ramp was "
+                    "planned under; holding position"
                 )
                 logger.error(f"reset refused mid-entry: {self.refused}")
                 self.events["exit_early"] = True
@@ -517,6 +599,22 @@ class ResetPolicy:
         return 0.0
 
     def _check_arrival(self, measured: Mapping[str, float]) -> None:
+        """Count this tick as arrived or not, and declare arrival on the window.
+
+        A RATIO over the trailing ``settle_ticks``, not a consecutive run. The
+        consecutive version reset the counter to zero on a single tick outside
+        ``tol_rad``, so one noisy encoder read -- or one tick where the follower's
+        velocity pacing happened to land just outside 0.05 rad -- cost the whole
+        settle window and started it again. At 21 Hz the window is 21 ticks, and
+        requiring all 21 in a row of a real arm settling against gravity made
+        `not_reached` a coin flip; `not_reached` is a CHAIN FAILURE with no
+        retry, so the cost of that flip is the rest of the run.
+
+        90% is the threshold, and it is still a window every tick of which was
+        MEASURED: the window must be FULL (``settle_ticks`` answers present)
+        before arrival can be declared, so this never shortens the settle time,
+        it only tolerates up to 10% of it being outside tol.
+        """
         if self.tick < self.plan.ticks:
             # Still ramping. Arrival is only meaningful once the trajectory has
             # commanded the target at least once.
@@ -528,17 +626,21 @@ class ResetPolicy:
                 return
             worst = max(worst, abs(measured[key] - self.plan.target[name]))
         self.worst_error_rad = worst
-        if worst < self.settings.tol_rad:
-            self._settled_ticks += 1
-        else:
-            self._settled_ticks = 0
-        if self._settled_ticks >= self.plan.settle_ticks and not self.reached:
+        self._arrival_window.append(worst < self.settings.tol_rad)
+        window = self._arrival_window
+        if len(window) < (window.maxlen or 1):
+            return
+        inside = sum(1 for value in window if value)
+        needed = math.ceil(ARRIVAL_WINDOW_RATIO * len(window))
+        if inside >= needed and not self.reached:
             self.reached = True
             self.events["exit_early"] = True
             logger.info(
                 f"reset before stage {self.plan.stage_number} reached: worst joint "
-                f"error {worst:.4f} rad held for {self.plan.settle_ticks} ticks "
-                f"({self.tick} ticks total, T={self.plan.duration_s:.2f}s)"
+                f"error {worst:.4f} rad, {inside}/{len(window)} of the last "
+                f"{self.plan.settle_ticks} ticks within tol "
+                f"{self.settings.tol_rad:.3f} (needed {needed}); "
+                f"{self.tick} ticks total, T={self.plan.duration_s:.2f}s"
             )
 
 

@@ -71,8 +71,20 @@ chain:
     p_done: 0.95
     p_hold_s: 0.2
     stall_s: 0.4
+    # Explicit at the DEFAULT, because the mock policy's departure ramp is
+    # sized against it: it commands 0.09 rad/tick for three ticks, so those
+    # three ticks exceed stall_track_rad (0.08) and the stall window cannot
+    # start until the arm is parked again. If this were raised, the mock's own
+    # departure would look like a stopped arm.
+    stall_track_rad: 0.08
     stall_arm_rad: 0.05
     stall_base: 0.05
+    # Defaults, spelled out: the departure latch is what makes `mock://stuck`
+    # two failures (no progress AND no departure) and `mock://progress` a model
+    # of a policy that actually does something.
+    departure_arm_rad: 0.10
+    departure_base_rot_rad: 0.17
+    departure_base_fwd_m: 0.10
     timeout_factor: 1.3
     allow_manual_complete: true
 

@@ -195,8 +195,19 @@ class CompletionConfig:
     p_done: float = 0.95
     p_hold_s: float = 1.0
     stall_s: float = 3.0
+    # TWO knobs, not one: `stall_track_rad` is how far the arm may lag the
+    # command it is being given (a steady-state following error under load is a
+    # stopped arm), `stall_arm_rad` is how far the MEASURED arm may travel
+    # across the window (it is not). See CompletionSettings.
+    stall_track_rad: float = 0.08
     stall_arm_rad: float = 0.05
     stall_base: float = 0.05
+    # The departure latch: completion is refused for the whole stage until the
+    # arm leaves `departure_arm_rad` of its designated start pose, or the
+    # commanded base integrates past one of the two base thresholds.
+    departure_arm_rad: float = 0.10
+    departure_base_rot_rad: float = 0.17
+    departure_base_fwd_m: float = 0.10
     # control_time_s = stage p90_s * this. Reaching it is a chain failure.
     timeout_factor: float = 1.3
     # The right arrow means "this stage is done, go on". ON for BOTH models by
@@ -218,8 +229,12 @@ class CompletionConfig:
             p_done=self.p_done,
             p_hold_s=self.p_hold_s,
             stall_s=self.stall_s,
+            stall_track_rad=self.stall_track_rad,
             stall_arm_rad=self.stall_arm_rad,
             stall_base=self.stall_base,
+            departure_arm_rad=self.departure_arm_rad,
+            departure_base_rot_rad=self.departure_base_rot_rad,
+            departure_base_fwd_m=self.departure_base_fwd_m,
         )
 
 
@@ -230,9 +245,15 @@ class ResetConfig:
     t_min_s: float = 1.5
     v_des_rad_s: float = 0.524
     max_jump_rad: float = 1.5
+    # The INITIAL reset only (the one from wherever a human left the arms to
+    # `from_stage`'s pose). Tighter than the boundary limit on purpose: a
+    # boundary gap is a measured 0.25-1.28 rad, while the initial gap is
+    # whatever a person happened to leave, and a 1.5 rad sweep across the
+    # workspace from an unknown pose is the one ramp nothing has validated.
+    initial_max_jump_rad: float = 0.6
     tol_rad: float = 0.05
     settle_s: float = 1.0
-    ceiling_factor: float = 2.0
+    ceiling_factor: float = 3.0
     settle_check_tries: int = 3
     settle_check_gap_s: float = 0.1
     settle_check_tol_rad: float = 0.02
@@ -264,6 +285,7 @@ class ResetConfig:
             t_min_s=self.t_min_s,
             v_des_rad_s=self.v_des_rad_s,
             max_jump_rad=self.max_jump_rad,
+            initial_max_jump_rad=self.initial_max_jump_rad,
             tol_rad=self.tol_rad,
             settle_s=self.settle_s,
             ceiling_factor=self.ceiling_factor,

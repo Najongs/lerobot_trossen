@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 
 from stage_runner import record_adapter
+from stage_runner.completion import REASON_NEVER_DEPARTED
 from stage_runner.config import (
     EXECUTOR_CHAIN_POLICY,
     EXECUTOR_CHAIN_RESET,
@@ -240,12 +241,19 @@ def run_chain_policy_stage(context: StageContext, stage: StageConfig) -> StageRe
             "no one-hot step is installed (chain.model.onehot_k is null)"
         )
 
-    chain.monitor.begin_stage(params, has_progress=chain.has_progress)
     _set_pose_guide(None)
 
     clamped_before = record_adapter.clamped_arm_ticks()
     frames_before = context.buffered_frame_count()
     started = time.perf_counter()
+    # `started=started`, not the monitor's own clock reading: the monitor
+    # compares `elapsed >= p10_s` and this function reports `elapsed_s` into the
+    # stage_end event, and when the two origins differ by a begin_stage plus two
+    # bookkeeping calls the number in the log is not the number the decision was
+    # made on. Same clock (perf_counter), now the same zero.
+    chain.monitor.begin_stage(
+        params, has_progress=chain.has_progress, started=started
+    )
     record_adapter.call_record_loop(
         robot=context.robot,
         events=context.events,
@@ -260,6 +268,7 @@ def run_chain_policy_stage(context: StageContext, stage: StageConfig) -> StageRe
     elapsed_s = time.perf_counter() - started
     frames = context.buffered_frame_count() - frames_before
     completion = chain.monitor.end_stage()
+    departure = chain.monitor.last_departure
 
     terminated_by, reason, detail = _classify_chain_policy(
         context=context,
@@ -267,6 +276,7 @@ def run_chain_policy_stage(context: StageContext, stage: StageConfig) -> StageRe
         plan=plan,
         elapsed_s=elapsed_s,
         completion=completion,
+        departure=departure,
         allow_manual=chain.allow_manual_complete,
     )
     detail.update(
@@ -276,6 +286,13 @@ def run_chain_policy_stage(context: StageContext, stage: StageConfig) -> StageRe
             "clamped_ticks": _clamped_delta(clamped_before),
         }
     )
+    if departure is not None:
+        # On EVERY terminator, not only the ones the departure explains: the
+        # report's `출발` column has to be readable for a stage that completed,
+        # one that timed out and one a human ended, or it cannot be compared
+        # across stages. A CompletionResult's own departed_s is the same number;
+        # this overwrites it with the identical value.
+        detail.update(departure.as_detail())
     logger.info(
         f"stage {stage.id!r} (task{stage.stage_number:02d}) ended: {terminated_by} "
         f"({frames} frames in {elapsed_s:.2f}s, p10 {params.p10_s:.1f} / p90 "
@@ -297,6 +314,7 @@ def _classify_chain_policy(
     plan,
     elapsed_s: float,
     completion,
+    departure,
     allow_manual: bool,
 ) -> tuple[str, str, dict]:
     """Why a chain policy stage ended. PRECEDENCE MATTERS; see the order below.
@@ -359,6 +377,21 @@ def _classify_chain_policy(
             TERMINATED_BY_MANUAL,
             "ended early with no completion result, so a right-arrow press is "
             f"the only explanation left; {measured}",
+            {},
+        )
+    if departure is not None and not departure.departed:
+        # A DIFFERENT FINDING from an ordinary timeout, and the one the chain
+        # report has to separate: the stage did not run out of time doing its
+        # task, it never started. Nothing about the stage's difficulty was
+        # measured, and the thing to look at is the start scene (the reset's
+        # arrival error, the one-hot index, the cameras) -- not the policy.
+        return (
+            TERMINATED_BY_TIMEOUT,
+            f"{REASON_NEVER_DEPARTED}: ran to control_time_s and the stage "
+            f"never left its start scene (worst arm "
+            f"{departure.arm_rad:.3f} rad from the designated start pose, base "
+            f"{departure.base_rot_rad:+.3f} rad / {departure.base_fwd_m:+.3f} "
+            f"m); {measured}",
             {},
         )
     return (
@@ -445,6 +478,9 @@ def run_chain_reset_stage(context: StageContext, stage: StageConfig) -> StageRes
             fps=context.config.dataset.fps,
             settings=chain.reset,
             arm_joint_names=chain.params.arm_joint_order,
+            # The INITIAL reset gets its own, tighter gap limit: its anchor is
+            # wherever a human left the arms, not where a previous stage ended.
+            initial=bool(stage.initial_reset),
         )
     except ResetAbort as error:
         return _reset_refused(stage, str(error), {})
@@ -492,31 +528,17 @@ def run_chain_reset_stage(context: StageContext, stage: StageConfig) -> StageRes
         }
     )
 
-    if context.events.get("stop_recording"):
-        terminated_by = TERMINATED_BY_STOP_RECORDING
-        reason = "events['stop_recording'] was set during the reset"
-    elif context.events.get("rerecord_episode"):
-        terminated_by = TERMINATED_BY_RERECORD_REQUESTED
-        reason = "events['rerecord_episode'] was set during the reset"
-    elif policy.refused:
-        terminated_by = TERMINATED_BY_NOT_REACHED
-        reason = f"the ramp refused mid-entry: {policy.refused}"
-    elif policy.reached:
-        terminated_by = TERMINATED_BY_REACHED
-        reason = (
-            f"arrived within {chain.reset.tol_rad:.3f} rad and held it for "
-            f"{reset_plan.settle_ticks} ticks "
-            f"(worst joint {policy.worst_error_rad:.4f} rad)"
-        )
-    else:
-        terminated_by = TERMINATED_BY_NOT_REACHED
-        reason = (
-            f"ran out the {reset_plan.control_time_s:.1f}s ceiling without "
-            f"holding the pose: worst joint error "
-            f"{policy.worst_error_rad:.4f} rad against tol "
-            f"{chain.reset.tol_rad:.3f}. NO RETRY -- a second ramp at the same "
-            "pose would repeat the motion that already failed."
-        )
+    terminated_by, reason, end_reason = classify_chain_reset(
+        events=context.events,
+        policy=policy,
+        plan=reset_plan,
+        elapsed_s=elapsed_s,
+        margin_s=record_adapter.manual_detection_margin_s(
+            context.config.dataset.fps
+        ),
+        tol_rad=chain.reset.tol_rad,
+    )
+    detail["reset_end_reason"] = end_reason
     logger.info(
         f"stage {stage.id!r} ended: {terminated_by} ({frames} frames in "
         f"{elapsed_s:.2f}s, {detail})"
@@ -527,6 +549,102 @@ def run_chain_reset_stage(context: StageContext, stage: StageConfig) -> StageRes
         frames=frames,
         reason=reason,
         detail=detail,
+    )
+
+
+# `reset_end_reason` on a reset stage's detail. Four, because `not_reached` is
+# the OUTCOME of three different events and a report that could not tell them
+# apart would blame the ramp for a keypress.
+RESET_REASON_REACHED: str = "reached"
+RESET_REASON_REFUSED: str = "refused"
+RESET_REASON_CEILING: str = "ceiling"
+# The operator pressed `->` (or something else set exit_early) DURING the ramp.
+# README and docs/eval_najy.md both say not to, because it ends the reset short
+# and a short reset is `not_reached` -- which is a chain failure. The terminator
+# stays `not_reached` and the chain still fails: the arms are genuinely not at
+# the next stage's start pose, and pretending otherwise would roll the next
+# stage out from a pose no demonstration has. What changes is that the log says
+# WHY, instead of reporting a ramp that was working as a ramp that failed.
+RESET_REASON_MANUAL_INTERRUPT: str = "manual_interrupt"
+
+
+def classify_chain_reset(
+    *,
+    events,
+    policy,
+    plan,
+    elapsed_s: float,
+    margin_s: float,
+    tol_rad: float,
+) -> tuple[str, str, str]:
+    """Why a reset ended: ``(terminated_by, reason, reset_end_reason)``.
+
+    A free function and not a method, so it can be exercised without a robot,
+    a dataset and a ``record_loop`` -- the four-way distinction below is the
+    whole value of this executor's post-loop block and it used to be reachable
+    only through a full run.
+
+    PRECEDENCE, and it matters:
+
+    1. the abort flags, so an Esc in the ramp is not overtaken by anything else;
+    2. ``policy.refused`` -- the ramp held position instead of ramping, which is
+       a stronger statement than "did not arrive";
+    3. ``policy.reached``;
+    4. ended EARLY without arriving -> ``manual_interrupt``. Esc and the left
+       arrow also set ``exit_early`` but they were caught in 1, so what is left
+       is the right arrow (or the completion monitor, which is inert during a
+       reset). The margin is ``record_adapter.manual_detection_margin_s``, the
+       same one ``classify_termination`` uses;
+    5. ran the ceiling out -> ``ceiling``.
+    """
+    if events.get("stop_recording"):
+        return (
+            TERMINATED_BY_STOP_RECORDING,
+            "events['stop_recording'] was set during the reset",
+            RESET_REASON_REFUSED,
+        )
+    if events.get("rerecord_episode"):
+        return (
+            TERMINATED_BY_RERECORD_REQUESTED,
+            "events['rerecord_episode'] was set during the reset",
+            RESET_REASON_REFUSED,
+        )
+    if policy.refused:
+        return (
+            TERMINATED_BY_NOT_REACHED,
+            f"the ramp refused mid-entry: {policy.refused}",
+            RESET_REASON_REFUSED,
+        )
+    if policy.reached:
+        return (
+            TERMINATED_BY_REACHED,
+            f"arrived within {tol_rad:.3f} rad and held it over "
+            f"{plan.settle_ticks} ticks "
+            f"(worst joint {policy.worst_error_rad:.4f} rad)",
+            RESET_REASON_REACHED,
+        )
+    threshold_s = plan.control_time_s - margin_s
+    if elapsed_s < threshold_s:
+        return (
+            TERMINATED_BY_NOT_REACHED,
+            f"{RESET_REASON_MANUAL_INTERRUPT}: the ramp was CUT SHORT after "
+            f"{elapsed_s:.2f}s of a {plan.control_time_s:.1f}s ceiling "
+            f"(threshold {threshold_s:.2f}s) without arriving -- the right "
+            "arrow was pressed during a reset. `->` is for policy stages only; "
+            "a reset judges its own arrival. The arms are NOT at the next "
+            "stage's start pose, so this is still a chain failure "
+            f"(worst joint {policy.worst_error_rad:.4f} rad against tol "
+            f"{tol_rad:.3f})",
+            RESET_REASON_MANUAL_INTERRUPT,
+        )
+    return (
+        TERMINATED_BY_NOT_REACHED,
+        f"{RESET_REASON_CEILING}: ran out the {plan.control_time_s:.1f}s "
+        f"ceiling without holding the pose: worst joint error "
+        f"{policy.worst_error_rad:.4f} rad against tol {tol_rad:.3f}. "
+        "NO RETRY -- a second ramp at the same pose would repeat the motion "
+        "that already failed.",
+        RESET_REASON_CEILING,
     )
 
 

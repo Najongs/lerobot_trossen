@@ -191,7 +191,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for stage in cfg.stages
                 if stage.policy_path
             }
-            preflight.check_chain_definitions(cfg, chain_params)
+            # The config object is handed over so the gate can read
+            # `temporal_ensemble_coeff` off it. HERE and not later: step 11c's
+            # load_chain_bundles assigns `n_action_steps` onto this very object,
+            # and once it has, the combination ACT refuses is no longer visible
+            # as one.
+            preflight.check_chain_definitions(
+                cfg, chain_params, policy_config=chain_policy_config
+            )
         else:
             policy_configs = policies.load_policy_configs(cfg.stages)
 
