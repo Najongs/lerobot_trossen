@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 dependencies = [
   "lerobot_robot_trossen>=0.1.0",
   "lerobot_teleoperator_trossen>=0.1.0",
+  "stage_runner>=0.1.0",
   "trossen-slate>=0.0.3",
   # cu128 wheels ship Volta (sm_70) only in torch 2.8.0-2.10.0.
   # 2.7.x never had it and 2.11.0 dropped it again (CuDNN 9.15.1).
@@ -42,6 +43,7 @@ explicit = true
 [tool.uv.sources]
 lerobot_robot_trossen = { workspace = true }
 lerobot_teleoperator_trossen = { workspace = true }
+stage_runner = { workspace = true }
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
 transformers = { git = "https://github.com/huggingface/transformers.git", branch = "fix/lerobot_openpi" }
