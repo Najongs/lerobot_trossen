@@ -45,9 +45,10 @@ Trossen Mobile AI(WidowX AI 팔 4대 + SLATE 베이스 + RealSense 3대)용 lero
 - 재생성 가능: `outputs/`(gitignore), `~/eval_logs/` 는 결과 원본이니 옮기기 전 지우지 마라
 
 ## 실험
-- 다단계 ACT 실기 순서표 정본: `docs/eval_najy.md`. 학습·오프라인 판정 배경: `docs/act_checkpoints_najy.md` · `docs/data_layout_traps.md` · `docs/offline_eval_findings_act.md`
+- **다단계 ACT 실기 Eval 을 이어 갈 때는 `docs/eval_najy_session_guide.md` 부터** — 현재 위치 찾기, Claude 가 직접 할 것/사람에게 넘길 것, 회차 진행·기록 형식.
+  순서표·명령 정본: `docs/eval_najy.md`. 지난 결과: `docs/eval_najy_results_<MMDD>.md` (가장 최근 것의 「다음」 절이 현재 위치). 실기 exec 는 30 으로 확정(10-02). 학습·오프라인 판정 배경: `docs/act_checkpoints_najy.md` · `docs/data_layout_traps.md` · `docs/offline_eval_findings_act.md`
 - SmolVLA 권장 설정 정본: `docs/offline_eval_2026-09-22.md`. 런 로그는 `docs/run_logs/<날짜>_*` (`*.log` 도 추적됨)
-- 학습 정본은 private 레포 `Najongs/trossen-ai-simulation` (`docs/mobile_base_investigation.md` §82~86, `docs/real_robot_eval.md`)
+- 학습 정본은 private 레포 `Najongs/trossen-ai-simulation` (`docs/mobile_base_investigation.md` §82~87, `docs/real_robot_eval.md`)
 - **낡은 것 — 근거로 쓰지 마라**: 「ACT temporal ensemble 필수」(1aacc90 → aadcb08 철회) · smolvla_inference_experiments.md 「현재 쓸 수 있는 구성」(offline_eval §5 가 뒤집음) ·
   implementation_code.sh 상단 SmolVLA 명령 · `Start.txt`(개인 메모, 정본 아님)
 
