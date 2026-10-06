@@ -95,6 +95,33 @@ class TaskOneHotStep(ProcessorStep):
         self.expected_dim = expected_dim
         self._announced = False
 
+    def set_stage(self, stage: int) -> None:
+        """Re-point the one-hot at another stage, for a chain inside ONE process.
+
+        ``lerobot-record`` runs one stage per process and reads the stage from
+        the environment once, so the index was fixed at construction. The chain
+        runner (``stage_runner``) re-enters ``record_loop`` for every stage of a
+        single episode against ONE loaded checkpoint, and the one-hot is the only
+        thing that differs between those entries.
+
+        ``_announced`` is cleared on purpose: the "stage i/K active" line is the
+        only evidence in the log that the policy was fed the one-hot the operator
+        asked for, and a chain that announced stage 1 and then silently ran
+        stages 2..11 would be indistinguishable from one that never switched. The
+        line is emitted once per stage, not once per run.
+
+        Deliberately NOT done in ``reset()``: ``record_loop`` resets the
+        preprocessor on entry to every stage (lerobot_record.py:332-335), so a
+        reset that re-pointed the index would undo the caller's choice right
+        after it was made. ``reset()`` stays a no-op.
+        """
+        if not 1 <= stage <= self.k:
+            raise RuntimeError(
+                f"{_ENV_VAR}: stage must be in 1..{self.k}, got {stage}"
+            )
+        self.index = stage - 1
+        self._announced = False
+
     def __call__(self, transition):
         from lerobot.processor.core import TransitionKey
 
@@ -158,7 +185,7 @@ def _expected_state_dim(policy_cfg) -> int | None:
     return int(shape[0]) if shape else None
 
 
-def _insert(preprocessor, step) -> None:
+def _insert(preprocessor, step):
     from lerobot.processor.normalize_processor import NormalizerProcessorStep
 
     steps = list(preprocessor.steps)
@@ -171,10 +198,19 @@ def _insert(preprocessor, step) -> None:
         )
     steps.insert(at, step)
     preprocessor.steps = steps
+    return step
 
 
-def insert_task_onehot(preprocessor, policy_cfg, stage: int, k: int) -> None:
-    """Insert the step into an already-built preprocessor (for callers other than lerobot-record)."""
+def insert_task_onehot(preprocessor, policy_cfg, stage: int, k: int):
+    """Insert the step into an already-built preprocessor (for callers other than lerobot-record).
+
+    RETURNS THE STEP. ``lerobot-record`` never needs the handle -- one stage per
+    process -- but the chain runner holds it and calls
+    :meth:`TaskOneHotStep.set_stage` before each stage's ``record_loop``, which
+    is the only way one loaded checkpoint can serve all 11 stages in a single
+    episode. Returning it also means the caller can assert the step is installed
+    instead of inferring it from a log line that may not have been flushed yet.
+    """
     expected = _expected_state_dim(policy_cfg)
     if expected != 16 + k:
         raise RuntimeError(
@@ -183,7 +219,7 @@ def insert_task_onehot(preprocessor, policy_cfg, stage: int, k: int) -> None:
         )
     if not 1 <= stage <= k:
         raise RuntimeError(f"{_ENV_VAR}: stage must be in 1..{k}")
-    _insert(preprocessor, TaskOneHotStep(stage, k, expected))
+    return _insert(preprocessor, TaskOneHotStep(stage, k, expected))
 
 
 def apply_task_onehot_patch() -> bool:
