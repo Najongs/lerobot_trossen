@@ -18,7 +18,12 @@ from pathlib import Path
 import lerobot
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.robots import Robot
-from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STATE
+from lerobot.utils.constants import (
+    ACTION,
+    HF_LEROBOT_HOME,
+    OBS_ENV_STATE,
+    OBS_STATE,
+)
 from lerobot.utils.control_utils import is_headless, sanity_check_dataset_name
 
 from stage_runner.config import (
@@ -359,6 +364,25 @@ def checkpoint_state_dimension(policy_config: PreTrainedConfig) -> int | None:
     return _feature_dimension(policy_config.input_features, OBS_STATE)
 
 
+def checkpoint_env_state_dimension(policy_config: PreTrainedConfig) -> int | None:
+    """Read ``input_features['observation.environment_state']``, or None.
+
+    None is the ROUND-1 answer (M1/M2/M3, ``tph``): no env token. A number is a
+    ROUND-2 checkpoint, which feeds the stage one-hot to ACT twice -- the tail of
+    the 27-D state AND a separate encoder token
+    (``modeling_act.py:344-346, 465-466``). ``task_onehot_patch`` writes both
+    from one vector, so this width MUST equal K; anything else means the
+    checkpoint is not the one the chain thinks it is.
+
+    Same ordering rule as :func:`checkpoint_state_dimension`: read BEFORE
+    ``make_policy``. The input side survives that call (``factory.py:471`` guards
+    the assignment with ``if not cfg.input_features``) but only because the
+    checkpoint declared it -- a dataset-filled config would carry no ENV key at
+    all, and then nothing would be comparable.
+    """
+    return _feature_dimension(policy_config.input_features, OBS_ENV_STATE)
+
+
 def checkpoint_action_dimension(policy_config: PreTrainedConfig) -> int | None:
     """Read ``output_features['action']`` out of the checkpoint config.
 
@@ -404,6 +428,13 @@ def check_stage_dimensions(
       dataset declares (see :func:`extra_action_names`).
 
     Passing neither reproduces the pre-chain behaviour exactly.
+
+    A ROUND-2 checkpoint additionally declares
+    ``observation.environment_state`` (``FeatureType.ENV``, shape ``[K]``) --
+    the same stage one-hot handed to ACT as its own encoder token. That is
+    ACCEPTED here, not required: it has to agree with ``onehot_k`` and with the
+    state's one-hot tail, and declaring it with ``onehot_k`` null is refused
+    because nothing would then write the key.
     """
     state_dim = robot_state_dimension(robot)
     action_dim = robot_action_dimension(robot)
@@ -438,6 +469,50 @@ def check_stage_dimensions(
                 "`include_base_in_state` in the robot block (it adds x.vel and "
                 "theta.vel, i.e. 2 dims) or use the checkpoint trained on this "
                 "state layout."
+            )
+
+        # The round-2 env token. Accepted, never REQUIRED -- a round-1
+        # checkpoint declares no ENV feature and must keep passing unchanged --
+        # but when it is declared it has to agree with K, in BOTH directions:
+        #
+        # * declared and onehot_k is null: nothing would write the key, and ACT
+        #   dies on `batch[OBS_ENV_STATE]` (modeling_act.py:466) on the FIRST
+        #   FRAME, i.e. after robot.connect(). Refusing here moves that to
+        #   before any weights download.
+        # * declared K wide but not the chain's K: the env token IS the state
+        #   tail, so the two widths cannot legitimately differ.
+        checkpoint_env = checkpoint_env_state_dimension(policy_config)
+        if checkpoint_env is not None and not onehot_k:
+            problems.append(
+                f"stage {stage.id!r} ({stage.policy_path}): checkpoint declares "
+                f"observation.environment_state ({checkpoint_env}-dim, the "
+                "round-2 stage token), but `chain.model.onehot_k` is null. "
+                "Nothing would write that key and ACT reads it on the first "
+                "frame -- set onehot_k to the stage count this checkpoint was "
+                "trained with."
+            )
+        elif checkpoint_env is not None and checkpoint_env != int(onehot_k):
+            problems.append(
+                f"stage {stage.id!r} ({stage.policy_path}): checkpoint declares a "
+                f"{checkpoint_env}-dim observation.environment_state but "
+                f"`chain.model.onehot_k` is {onehot_k}. The env token is the same "
+                "one-hot as the state tail, so the two widths must be equal."
+            )
+        # Independent of the 16+K check above ON PURPOSE: that one compares the
+        # state against the chain's DECLARED K, this one compares the two things
+        # the CHECKPOINT itself declares. An internally inconsistent config.json
+        # earns both messages, and each is separately actionable.
+        if (
+            checkpoint_env is not None
+            and checkpoint_state is not None
+            and checkpoint_env != checkpoint_state - 16
+        ):
+            problems.append(
+                f"stage {stage.id!r} ({stage.policy_path}): checkpoint declares a "
+                f"{checkpoint_env}-dim observation.environment_state and a "
+                f"{checkpoint_state}-dim observation.state, whose one-hot tail is "
+                f"{checkpoint_state - 16} wide. Those are the same vector in the "
+                "trained model; this checkpoint's config.json is inconsistent."
             )
 
         checkpoint_action = checkpoint_action_dimension(policy_config)

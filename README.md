@@ -938,13 +938,31 @@ LEROBOT_TASK_ONEHOT=2/11 uv run lerobot-record ... --policy.path=<11-stage ckpt>
   announcement, so `stage i/K active` is re-emitted per stage. That is what lets `stage_runner`
   run all 11 stages against one loaded checkpoint (see **Stage Chaining** below).
   **If the line does not reappear at a stage boundary, stop the run** -- the one-hot did not switch.
+- **Round-2 (env token) checkpoints run on this same patch, unchanged.** They declare one extra
+  input feature -- `observation.environment_state` (`FeatureType.ENV`, shape `[K]`) -- and ACT
+  tokenizes it through `encoder_env_state_input_proj` in addition to the 16+K state. The step
+  writes that key from the SAME one-hot vector as the state tail, so `set_stage` moves both, and
+  the log line reads `stage i/K active -- ... (+env token)`. A round-1 checkpoint (M1/M2/M3,
+  `tph`) declares no ENV feature and the key is then not added at all. Mismatches (ENV width != K,
+  ENV not ENV-typed, ENV declared where no one-hot is asked for) are refused before
+  `robot.connect()`: by `scripts/eval_najy.sh` / `scripts/_chain_preflight.py` off `config.json`,
+  and again by `preflight.check_stage_dimensions`.
+- **`scripts/eval_najy.sh` has no round-2 alias yet.** It sets `LEROBOT_TASK_ONEHOT` only in the
+  `M1`/`M2`/`M3` branches, which are hard-wired to round-1 repo ids; a bare hub repo id runs
+  without a one-hot and is now refused outright when the checkpoint declares an ENV feature.
+  Running a round-2 model single-stage means adding a `case` entry of its own
+  (`REPO=<repo id>; ONEHOT="$STAGE/11"; TAG=…`). The chain needs no such entry:
+  `scripts/eval_chain.sh <owner>/<repo id>` falls through to `configs/chain/chain_tph_all11.yaml`,
+  which already carries `onehot_k: 11` (match `has_progress` to the action width).
 
 ## Stage Chaining (`stage_runner`)
 
 Runs stages 1..11 as ONE episode with no human intervention: stage k's policy, an automatic
 completion decision, a minimum-jerk reset of the 12 arm joints to stage k+1's designated start
 pose, one-hot k+1, repeat. Supports both a 16-D checkpoint (M1) and a 17-D one whose extra action
-slot is a progress scalar.
+slot is a progress scalar. A **round-2 (env token) checkpoint runs on the same patch** -- it also
+gets the one-hot as `observation.environment_state`, and the per-stage `stage i/K active` line
+then carries `(+env token)`; see **Stage One-Hot for Multi-Stage ACT** above.
 
 ```shell
 DRY_RUN=1 scripts/eval_chain.sh M1                   # assemble and print the command only

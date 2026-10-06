@@ -18,7 +18,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import PolicyAction, PolicyProcessorPipeline
-from lerobot.utils.constants import ACTION, OBS_STATE
+from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_STATE
 
 from stage_runner.config import StageConfig
 
@@ -231,6 +231,20 @@ def load_chain_bundles(
         if policy_config is None
         else _feature_dimension(getattr(policy_config, "output_features", None), ACTION)
     )
+    # Same reason, for the round-2 env token. `make_policy` is EXPECTED to keep
+    # the input side -- factory.py:471 guards that assignment with
+    # `if not cfg.input_features` -- so this is a real before/after comparison
+    # and not a restatement: captured here, re-read after load_bundle, and a
+    # difference is refused rather than logged (the eval dataset declares no ENV
+    # key, so a config filled from it would carry none and ACT would die on
+    # `batch[OBS_ENV_STATE]` on the first frame, after robot.connect()).
+    checkpoint_env_dim = (
+        None
+        if policy_config is None
+        else _feature_dimension(
+            getattr(policy_config, "input_features", None), OBS_ENV_STATE
+        )
+    )
 
     if n_action_steps is not None and policy_config is not None:
         previous = getattr(policy_config, "n_action_steps", None)
@@ -302,6 +316,39 @@ def load_chain_bundles(
             "'stage i/K active' line is re-emitted each time and its ABSENCE "
             "means the one-hot did not switch -- stop the run."
         )
+        # The before/after comparison the capture above exists for: `env_after`
+        # is read from the config `make_policy` has already mutated, while
+        # `checkpoint_env_dim` was read before it. Equal means the ENV feature
+        # survived; anything else means `input_features` was refilled from the
+        # eval dataset, which declares no ENV key, and the one-hot step would
+        # then have been built for a round-1 checkpoint while the weights expect
+        # a round-2 one. Refused rather than logged: ACT would otherwise die on
+        # `batch[OBS_ENV_STATE]` on frame 1, after robot.connect().
+        env_after = _feature_dimension(
+            getattr(policy_config, "input_features", None), OBS_ENV_STATE
+        )
+        if env_after != checkpoint_env_dim:
+            raise ValueError(
+                f"the checkpoint declared observation.environment_state="
+                f"{checkpoint_env_dim} before make_policy and {env_after} after, "
+                "so input_features was refilled from the recording dataset "
+                "(factory.py:471 is supposed to keep the checkpoint's). The "
+                "one-hot step was built from the post-call value and would feed "
+                "the model the wrong number of tokens."
+            )
+        if onehot.env_k is None:
+            logger.info(
+                "chain: round-1 checkpoint (no observation.environment_state in "
+                "input_features) -- the one-hot goes into observation.state only"
+            )
+        else:
+            logger.info(
+                f"chain: round-2 checkpoint -- observation.environment_state "
+                f"({onehot.env_k}-dim ENV token) was declared by config.json and "
+                f"is still there after make_policy; it is written from the SAME "
+                "one-hot as the state tail, and the 'stage i/K active' line "
+                "carries '(+env token)'"
+            )
 
     bundles = {
         stage.id: replace(bundle, stage_id=stage.id)
