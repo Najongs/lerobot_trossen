@@ -517,6 +517,13 @@ def _emit_boundary(
         stop_action=outcome.action,
         stop_base_path=outcome.path,
         stop_base_error=outcome.error or None,
+        # The ONLY delivery ack in the whole stop path: what
+        # base.set_cmd_vel(0.0, 0.0) returned. True = the base accepted it,
+        # False = it refused or raised, null = this robot has no base to command
+        # (the mock, a single-arm rig) -- which is not a failure. A reader asking
+        # "did the base actually stop" uses stop_base_path; this field says what
+        # the base itself answered, which is the evidence behind that path.
+        stop_base_direct_ok=outcome.direct_ok,
         # stop_base_s: the FIRST half of the boundary, not the whole of it. On
         # the primary path this covers one get_observation plus one send_action
         # and nothing else; on the other two it is how long the failing call took

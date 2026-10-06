@@ -8,7 +8,10 @@
 체인용으로 옮긴 것이고, 다른 점은 셋이다:
 
 - action 폭 **16(진행도 없음)과 17(progress)을 모두** 허용하고 어느 쪽인지 찍는다
-- YAML 의 `chain.model.has_progress`·`onehot_k`·`n_action_steps` 와 대조한다
+- YAML 의 `chain.model.has_progress`·`onehot_k`·`n_action_steps` 와 대조한다.
+  `has_progress` 는 **명시 필수**다 — 폭과 키가 **둘 다** 맞아야 통과한다
+  (한쪽만이면 거부). 「폭에서 알아서 읽는다」 는 러너가 그 사실을 설정에 남기지
+  않는다는 뜻이고, 그 사실이 녹화 데이터셋의 action 칸 수(=정규화기 폭)를 정한다
 - 단계 파라미터를 **러너와 같은 로더**로 검증한다 (`chain_params`, stdlib only)
 
 **YAML 은 파싱한다 — grep 하지 않는다.** 셸 안의 `grep -E '^\\s*fps:' | head -1`
@@ -105,12 +108,19 @@ def main(argv: list[str]) -> int:
             "17(progress)만 안다. 로봇 action 폭은 16 이고, 그보다 한 칸 넓은 "
             "것만 진행도로 해석한다"
         )
+    # `has_progress` 는 **명시 필수**이고 폭과 **둘 다** 맞아야 한다. 러너의
+    # preflight 가 같은 것을 거부하지만, 여기서 먼저 막는 이유는 거부 지점이
+    # 로봇 연결·safetensors 다운로드보다 앞이기 때문이다.
     declared = model.get("has_progress")
-    if (
-        declared is not None
-        and expected_progress is not None
-        and bool(declared) != expected_progress
-    ):
+    if declared is None:
+        problems.append(
+            f"{yaml_path} 의 chain.model.has_progress 가 null(또는 없음)이다 — "
+            f"명시해야 한다. 이 체크포인트는 action={action}D 이므로 "
+            f"{'true' if expected_progress else 'false'} 다. 「폭에서 읽는다」로 "
+            "두면 녹화 데이터셋의 action 칸 수(=정규화기 폭)를 정하는 사실이 "
+            "설정에 남지 않는다"
+        )
+    elif expected_progress is not None and bool(declared) != expected_progress:
         problems.append(
             f"YAML 의 chain.model.has_progress={declared} 인데 체크포인트 "
             f"action={action}D 는 {expected_progress} 다"

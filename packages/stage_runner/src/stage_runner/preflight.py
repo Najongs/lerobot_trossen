@@ -593,6 +593,168 @@ def temporal_ensemble_problem(
     )
 
 
+def threshold_problems(chain) -> list[str]:
+    """Range-check every numeric knob of ``chain.completion`` and ``chain.reset``.
+
+    EVERY ONE OF THEM, not the four that happened to be checked before. These are
+    the numbers that decide when a stage is finished and how far the arms are
+    driven, they come out of a hand-edited YAML, and draccus coerces whatever it
+    finds to a float without an opinion about its sign. The two failure shapes
+    they produce are both SILENT:
+
+    * a threshold at or below 0 makes a test that can never pass (``stall_s: 0``
+      leaves ``_covered_window`` asking for a zero-length window -- every stage
+      then runs to its timeout and the chain "fails" on eleven stages that were
+      finished) or one that always passes (``departure_arm_rad: 0`` latches the
+      departure on tick 1, which turns the whole latch off);
+    * ``stall_track_rad < stall_arm_rad`` inverts the pair the 2026-10-06 split
+      exists to separate: the tracking allowance has to be the LOOSER of the two,
+      because a loaded arm holding still lags its command by more than it travels.
+
+    WRITTEN AS ``not (x > 0)``, NEVER AS ``x <= 0``. Every comparison with NaN is
+    False, so ``x <= 0`` PASSES for a NaN and the value goes on to be a joint
+    threshold -- the same NaN-shaped hole this session closed in the completion
+    monitor and in lerobot's clamp. The ``not (...)`` form rejects it.
+    """
+    completion = chain.completion
+    reset = chain.reset
+    problems: list[str] = []
+
+    def positive(path: str, value: float, why: str) -> None:
+        if not (float(value) > 0.0):
+            problems.append(f"`chain.{path}: {value}` must be > 0 -- {why}")
+
+    def above_one(path: str, value: float, why: str) -> None:
+        if not (float(value) > 1.0):
+            problems.append(f"`chain.{path}: {value}` must be > 1.0 -- {why}")
+
+    if not (0.0 < float(completion.p_done) <= 1.0):
+        problems.append(
+            f"`chain.completion.p_done: {completion.p_done}` must be in (0, 1]: "
+            "the progress output is a fraction of the stage."
+        )
+    positive(
+        "completion.p_hold_s",
+        completion.p_hold_s,
+        "it is the window the progress output must hold p_done over, and a "
+        "zero-length window is satisfied by the first tick that reads high",
+    )
+    positive(
+        "completion.stall_s",
+        completion.stall_s,
+        "it is the window that has to be free of motion; at 0 the window is "
+        "never COVERED (_covered_window needs a sample at or before the cutoff), "
+        "so no stage can ever complete and every one runs to its timeout",
+    )
+    positive(
+        "completion.stall_arm_rad",
+        completion.stall_arm_rad,
+        "it is the peak-to-peak travel allowed across the stall window, and at 0 "
+        "a real arm's encoder noise is read as motion forever",
+    )
+    positive(
+        "completion.stall_track_rad",
+        completion.stall_track_rad,
+        "it is how far the arm may lag its command and still count as stopped; "
+        "at 0 a loaded arm holding against gravity never counts as stopped",
+    )
+    positive(
+        "completion.stall_base",
+        completion.stall_base,
+        "it is the commanded base velocity below which the base counts as "
+        "stopped; at 0 no tick ever qualifies (the test is `>=`)",
+    )
+    if float(completion.stall_track_rad) < float(completion.stall_arm_rad):
+        problems.append(
+            f"`chain.completion.stall_track_rad: {completion.stall_track_rad}` is "
+            f"TIGHTER than `stall_arm_rad: {completion.stall_arm_rad}`. The two "
+            "were split on 2026-10-06 precisely because the tracking allowance "
+            "must be the LOOSER one: a steady-state following error of 0.06 rad "
+            "under load is a perfectly stopped arm, while 0.06 rad of travel is "
+            "not. Inverted, a stationary loaded arm is declared 'still moving' "
+            "and the stage runs to its timeout -- which is the regression the "
+            "split fixed."
+        )
+    positive(
+        "completion.departure_arm_rad",
+        completion.departure_arm_rad,
+        "it is the distance the arm must leave its starting pose by for the "
+        "departure latch to set; at 0 the latch sets on tick 1, i.e. it is OFF, "
+        "and a stage that never moves can be declared complete (the module "
+        "docstring of completion.py says what that cost)",
+    )
+    positive(
+        "completion.departure_base_rot_rad",
+        completion.departure_base_rot_rad,
+        "it is the integrated commanded rotation that latches the departure; at "
+        "0 the latch sets on tick 1 and is therefore OFF",
+    )
+    positive(
+        "completion.departure_base_fwd_m",
+        completion.departure_base_fwd_m,
+        "it is the integrated commanded travel that latches the departure; at 0 "
+        "the latch sets on tick 1 and is therefore OFF",
+    )
+    above_one(
+        "completion.timeout_factor",
+        completion.timeout_factor,
+        "it multiplies the stage's p90 length, so a factor at or below 1 times "
+        "out the slowest tenth of the demonstrations by construction",
+    )
+
+    positive(
+        "reset.t_min_s",
+        reset.t_min_s,
+        "it is the floor on the ramp duration; at 0 a tiny correction becomes a "
+        "single 21 Hz step instead of a gentle second and a half",
+    )
+    positive(
+        "reset.v_des_rad_s",
+        reset.v_des_rad_s,
+        "the ramp's duration is max_jump / v_des, so a non-positive value is a "
+        "division by zero or a negative duration",
+    )
+    positive(
+        "reset.max_jump_rad",
+        reset.max_jump_rad,
+        "it is the gap a BOUNDARY ramp is refused above, and it also sizes the "
+        "ramp duration",
+    )
+    positive(
+        "reset.initial_max_jump_rad",
+        reset.initial_max_jump_rad,
+        "it is the gap the INITIAL reset (from wherever a human left the arms) "
+        "is refused above, and a non-positive value refuses every start",
+    )
+    if float(reset.initial_max_jump_rad) > float(reset.max_jump_rad):
+        problems.append(
+            f"`chain.reset.initial_max_jump_rad: {reset.initial_max_jump_rad}` is "
+            f"larger than `max_jump_rad: {reset.max_jump_rad}`. The initial ramp "
+            "starts from a pose nothing has measured, so it must be the TIGHTER "
+            "of the two, never the looser."
+        )
+    positive(
+        "reset.tol_rad",
+        reset.tol_rad,
+        "it is the arrival radius; at 0 arrival is never declared and the reset "
+        "ends `not_reached`, which is a chain failure with no retry",
+    )
+    positive(
+        "reset.settle_s",
+        reset.settle_s,
+        "it is the window arrival is judged over; at 0 arrival is declared on "
+        "the first tick that happens to be inside tol",
+    )
+    above_one(
+        "reset.ceiling_factor",
+        reset.ceiling_factor,
+        "the ramp is tick-based, so arrival is only possible while the achieved "
+        "loop rate is at least dataset.fps / ceiling_factor -- a factor at or "
+        "below 1 makes the ceiling shorter than the ramp itself",
+    )
+    return problems
+
+
 def check_chain_definitions(
     config: StageRunnerConfig, params, policy_config=None
 ) -> None:
@@ -635,54 +797,10 @@ def check_chain_definitions(
             f"`chain.from_stage: {chain.from_stage}` / `chain.to_stage: "
             f"{chain.to_stage}`: need 1 <= from_stage <= to_stage."
         )
-    if chain.completion.timeout_factor <= 1.0:
-        problems.append(
-            f"`chain.completion.timeout_factor: {chain.completion.timeout_factor}` "
-            "must be > 1.0 -- it multiplies the stage's p90 length, so a factor "
-            "at or below 1 times out the slowest tenth of the demonstrations by "
-            "construction."
-        )
-    if not 0.0 < chain.completion.p_done <= 1.0:
-        problems.append(
-            f"`chain.completion.p_done: {chain.completion.p_done}` must be in "
-            "(0, 1]: the progress output is a fraction of the stage."
-        )
-    if chain.reset.max_jump_rad <= 0 or chain.reset.v_des_rad_s <= 0:
-        problems.append(
-            "`chain.reset.max_jump_rad` and `chain.reset.v_des_rad_s` must both "
-            "be positive -- the ramp's duration is max_jump/v_des and its "
-            "refusal threshold is max_jump."
-        )
-    if chain.reset.initial_max_jump_rad <= 0:
-        problems.append(
-            "`chain.reset.initial_max_jump_rad` must be positive -- it is the "
-            "gap the INITIAL reset (from wherever a human left the arms) is "
-            "refused above, and a non-positive value refuses every start."
-        )
-    if chain.reset.initial_max_jump_rad > chain.reset.max_jump_rad:
-        problems.append(
-            f"`chain.reset.initial_max_jump_rad: "
-            f"{chain.reset.initial_max_jump_rad}` is larger than "
-            f"`max_jump_rad: {chain.reset.max_jump_rad}`. The initial ramp "
-            "starts from a pose nothing has measured, so it must be the "
-            "TIGHTER of the two, never the looser."
-        )
-    if chain.reset.ceiling_factor <= 1.0:
-        problems.append(
-            f"`chain.reset.ceiling_factor: {chain.reset.ceiling_factor}` must "
-            "be > 1.0. The ramp is tick-based, so arrival is only possible "
-            "while the achieved loop rate is at least "
-            "dataset.fps / ceiling_factor -- a factor at or below 1 makes the "
-            "ceiling shorter than the ramp itself."
-        )
+    problems.extend(threshold_problems(chain))
     coefficient_problem = temporal_ensemble_problem(config, policy_config)
     if coefficient_problem:
         problems.append(coefficient_problem)
-    if chain.reset.tol_rad <= 0 or chain.reset.settle_s <= 0:
-        problems.append(
-            "`chain.reset.tol_rad` and `chain.reset.settle_s` must both be "
-            "positive, or arrival is either never or always true."
-        )
 
     numbers = list(range(chain.from_stage, chain.to_stage + 1))
     absent = [n for n in numbers if n not in params.stages]

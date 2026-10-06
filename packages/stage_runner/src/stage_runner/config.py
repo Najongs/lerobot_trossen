@@ -321,8 +321,18 @@ class ChainModelConfig:
     # `lerobot-record --policy.n_action_steps=` does. 30 is the exec confirmed
     # on 2026-10-02. null leaves the checkpoint's value.
     n_action_steps: int | None = None
-    # null -> derived from the checkpoint's output_features.action.shape
-    # (16 -> no progress, 17 -> progress). Set it only to assert the derivation.
+    # REQUIRED for a real checkpoint, and required for a mock one too (there is
+    # no config.json to derive it from). The checkpoint's
+    # output_features.action.shape is still THE FACT -- 16 means no progress, 17
+    # means progress -- and preflight refuses a run where the key and the width
+    # disagree. What it no longer does is accept `null` and derive it quietly:
+    # this is the single value that decides whether the recording dataset
+    # declares a 17th action feature, and therefore at what width the normalizer
+    # loads, so a config that does not state it cannot be read later to find out
+    # which of the two models ran (2026-10-06).
+    #
+    # The default stays None so draccus can tell "absent" from "false"; absent is
+    # what preflight rejects.
     has_progress: bool | None = None
 
 

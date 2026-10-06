@@ -413,13 +413,24 @@ def build_report(
             "램프는 `not_reached` 이고 그것은 체인 실패다 — 팔이 다음 단계 시작 "
             "자세에 **없다**"
         )
-    failed_stops = [t for t in transitions if t.get("stop_base_path") == "failed"]
+    # `primary` 가 아닌 **모든** 경로가 실패다. `primary+direct_failed` 는 홀드
+    # 액션은 갔는데 확인용 `base.set_cmd_vel(0,0)` 이 거부된 경계이고, 그때
+    # 베이스가 멈췄다는 증거는 **없다** — `send_action` 은 베이스 쓰기가 실패해도
+    # 예외를 내지 않는다(mobileai.py:547-558). `== "failed"` 만 보던 옛 판은
+    # 그 경계를 조용히 「전부 primary」 로 셌다.
+    failed_stops = [
+        t
+        for t in transitions
+        if (t.get("stop_base_path") or "failed") != "primary"
+    ]
     lines.append(
         f"- 경계 {len(transitions)}곳의 베이스 정지: "
         + (
-            f"**{len(failed_stops)}곳 실패 — 로봇을 확인하라**"
+            f"**{len(failed_stops)}곳이 primary 아님 "
+            f"({sorted({str(t.get('stop_base_path')) for t in failed_stops})}) — "
+            "로봇을 확인하라**"
             if failed_stops
-            else "전부 primary"
+            else "전부 primary (확인용 set_cmd_vel 까지 수락됨)"
         )
     )
     clamped = [

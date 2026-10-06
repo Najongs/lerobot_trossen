@@ -402,7 +402,8 @@ def _classify_chain_policy(
             TERMINATED_BY_TIMEOUT,
             f"{REASON_NEVER_DEPARTED}: ran to control_time_s and the stage "
             f"never left its start scene (worst arm "
-            f"{departure.arm_rad:.3f} rad from the designated start pose, base "
+            f"{departure.arm_rad:.3f} rad from the pose it started the stage at, "
+            f"base "
             f"{departure.base_rot_rad:+.3f} rad / {departure.base_fwd_m:+.3f} "
             f"m); {measured}",
             {},

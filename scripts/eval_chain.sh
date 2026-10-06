@@ -5,17 +5,26 @@
 #
 #   M1   = kiroaiseoul/NAJY_act_all11_hot_27D_120k_s1000  (16D, 진행도 없음 — 참조군)
 #   TPH  = kiroaiseoul/NAJY_act_all11_tph_27D_120k_s1000  (17D, 진행도 칸 — 본선)
-#   그 밖의 문자열은 허브 repo id 로 보고 TPH 쪽 YAML 로 돌린다 (폭은 체크포인트에서 읽는다)
+#   그 밖의 문자열은 허브 repo id 로 보고 TPH 쪽 YAML 로 돌린다.
+#     ⚠️ 그 YAML 은 `chain.model.has_progress: true`(17D) 로 **명시**돼 있고,
+#        10/06 부터 이 키는 **필수**이며 체크포인트 폭과 **둘 다** 맞아야 통과한다.
+#        16D 체크포인트를 이 경로로 주면 preflight 가 거부한다 — M1 쪽 YAML 을 쓰거나
+#        `--chain.model.has_progress=false` 를 손으로 얹어라. 「폭에서 알아서 읽는다」는
+#        더는 안 한다 (그러면 정규화기 폭을 정하는 사실이 설정에 안 남는다)
 #
 #   예)  DRY_RUN=1 scripts/eval_chain.sh M1            # 명령만 출력, 로봇 안 건드림
 #        scripts/eval_chain.sh M1 bringup4            # 실행
 #        TO_STAGE=3 scripts/eval_chain.sh TPH s1_3     # 1~3 단계만 (bring-up ⑤ 의 첫 회차)
 #        RESET_ONLY=1 scripts/eval_chain.sh M1 resets  # 리셋만: 정책을 한 단계도 돌리지 않는다 (bring-up ②·③)
 #
-# 환경변수
+# 환경변수 — **값은 `1` 만 켠다.** `DRY_RUN`·`RESET_ONLY` 는 비었거나 `0|1`,
+# 그리고 사람이 반사적으로 쓰는 `true|yes|on` 만 받고 **그 밖의 값은 exit 2** 다.
+# 옛 판은 `[[ "$DRY_RUN" == 1 ]]` 하나였고, 그러면 `DRY_RUN=true` 가 조용히
+# 「꺼짐」으로 읽혀 **명령만 보려던 사람이 로봇을 움직였다**. 검증은 `uv run`·
+# 체크포인트 다운로드보다 먼저 끝난다.
 #   DRY_RUN=1     조립한 명령만 찍고 끝낸다. 체크포인트 다운로드·폭 검사는 **한다**
 #                 (eval_najy.sh DRY_RUN 과 같은 범위: 로봇 무접촉, HF 다운로드는 함)
-#   FROM_STAGE/TO_STAGE   기본 1 / 11
+#   FROM_STAGE/TO_STAGE   기본 1 / 11. 1~11 정수이고 FROM ≤ TO 여야 한다
 #   RESET_ONLY=1  정책 단계를 **전개에서 빼고** 리셋만 연달아 돌린다
 #                 (`--chain.reset.only=true`). bring-up ②·③ 용. 「리셋이
 #                 reached 로 끝난 직후 ESC」 로 대신하지 않는 이유: 사람이
@@ -25,6 +34,16 @@
 #
 # ⚠️ 이 스크립트는 **로봇을 움직인다.** DGX_1 에서 실행하지 마라 (로봇 패키지를
 #    import 하고 카메라·팔 포트를 연다). bring-up 순서는 docs/eval_najy.md 「단계 체이닝」.
+#
+# ⚠️ **tmux 또는 nohup 아래에서 띄워라.** SSH 가 끊기면 SIGHUP 이 러너에 간다.
+#    러너는 SIGTERM·SIGHUP 을 받아 teardown(베이스 0 → disconnect)을 타지만,
+#    그건 **프로세스가 살아서 그 경로를 돌 수 있을 때**의 이야기다. 창을 닫는 것으로
+#    런을 끝내지 마라 — ESC 로 끝낸다.
+#
+# ⚠️ **정지 로그를 그대로 믿지 마라.** `stop_base commanded: ...` 는 의도이고
+#    배달 확인이 아니다. events.jsonl 의 `stop_base_path` 를 봐라:
+#    `primary` 만 정상이고, `primary+direct_failed` 는 **베이스가 아직 움직일 수 있다**
+#    (exit 3). bring-up 은 **빈손 → 가벼운 물체 → 유리 기구** 순서를 지킨다.
 #
 # 로그·CSV 는 ~/eval_logs/<회차>.* 에, 이벤트·설정 스냅샷은
 # outputs/stage_runner/<run_id>/ 에 남는다. 끝나면 scripts/eval_chain_report.py 가
@@ -40,9 +59,33 @@ TO_STAGE=${TO_STAGE:-11}
 MANUAL=${MANUAL:-1}
 RESET_ONLY=${RESET_ONLY:-0}
 
-[[ "$FROM_STAGE" =~ ^([1-9]|1[01])$ ]] || { echo "FROM_STAGE 는 1~11" >&2; exit 2; }
-[[ "$TO_STAGE" =~ ^([1-9]|1[01])$ ]] || { echo "TO_STAGE 는 1~11" >&2; exit 2; }
-(( FROM_STAGE <= TO_STAGE )) || { echo "FROM_STAGE <= TO_STAGE" >&2; exit 2; }
+# 불리언 환경변수를 0/1 로 정규화하거나 거부한다. **명령 치환으로 쓰지 마라** —
+# `$(...)` 안의 `exit 2` 는 서브셸만 죽이고 스크립트는 계속 간다. 그래서 전역
+# `NORM_FLAG` 에 담는다.
+#
+# 받는 값: 빈 문자열·`0` → 0 · `1|true|yes|on`(대소문자 무관) → 1 · 그 밖 → exit 2.
+# `false|no|off` 를 **일부러 받지 않는다**: 「끈다」의 정본은 변수를 비우거나 0 이고,
+# 받는 꺼짐 표기를 늘리면 다음 사람이 다시 「이건 왜 안 되지」를 겪는다. 거부는
+# 조용한 오독보다 싸다.
+_norm_flag() {  # _norm_flag <이름> <값>  →  NORM_FLAG
+  local name=$1 value=$2
+  case "${value,,}" in
+    '' | 0)            NORM_FLAG=0 ;;
+    1 | true | yes | on) NORM_FLAG=1 ;;
+    *)
+      echo "!! $name=$value — 받는 값은 0 또는 1 뿐이다 (true|yes|on 은 1 로 읽는다)." >&2
+      echo "   끄려면 변수를 빼거나 $name=0. 조용히 무시하면 '명령만 보려고' 준 변수가" >&2
+      echo "   실제로 로봇을 움직인다." >&2
+      exit 2 ;;
+  esac
+}
+
+_norm_flag DRY_RUN    "$DRY_RUN";    DRY_RUN=$NORM_FLAG
+_norm_flag RESET_ONLY "$RESET_ONLY"; RESET_ONLY=$NORM_FLAG
+
+[[ "$FROM_STAGE" =~ ^([1-9]|1[01])$ ]] || { echo "!! FROM_STAGE=$FROM_STAGE — 1~11 정수여야 한다" >&2; exit 2; }
+[[ "$TO_STAGE" =~ ^([1-9]|1[01])$ ]] || { echo "!! TO_STAGE=$TO_STAGE — 1~11 정수여야 한다" >&2; exit 2; }
+(( FROM_STAGE <= TO_STAGE )) || { echo "!! FROM_STAGE=$FROM_STAGE > TO_STAGE=$TO_STAGE" >&2; exit 2; }
 
 case "$MODEL" in
   M1)  REPO=kiroaiseoul/NAJY_act_all11_hot_27D_120k_s1000; YAML=configs/chain/chain_m1_all11.yaml;  SHORT=m1 ;;

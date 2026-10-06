@@ -42,10 +42,15 @@ reports a full 1->11 run and never moved.
 and it gates the 17-D path too: a progress head that reads 1.0 out of the start
 scene is the same failure with a different sensor. It is set by either
 
-* the measured arm leaving ``departure_arm_rad`` (0.10 rad, inf-norm) of the
-  stage's designated start pose -- twice the reset's own arrival tolerance
-  (``tol_rad`` 0.05), so a reset that merely landed at the edge of ``tol_rad``
-  can never latch it; or
+* the measured arm being outside ``departure_arm_rad`` (0.10 rad, inf-norm) of
+  THE POSE IT STARTED THAT STAGE AT -- the first measurement, not the file's
+  designated pose, because with ``reset.initial: false`` and ``from_stage > 1``
+  nothing has driven the arm to the designated pose and departure from a pose the
+  arm was never at is either already true on tick 1 or unreachable. 0.10 rad is
+  twice the reset's own arrival tolerance (``tol_rad`` 0.05), so a reset that
+  merely landed at the edge of ``tol_rad`` can never latch it. Required for
+  ``DEPARTURE_ARM_TICKS`` CONSECUTIVE ticks: the latch is permanent, and one
+  glitched encoder read is indistinguishable from one tick of departure; or
 * the COMMANDED base integrating past ``departure_base_rot_rad`` (0.17 rad, 10
   degrees) or ``departure_base_fwd_m`` (0.10 m). Some stages are expected to
   turn or drive with very little arm motion -- t01, t03 and t10 by their names
@@ -83,6 +88,7 @@ write one line later. The robot ignores the extra key by itself:
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -126,6 +132,37 @@ REASON_STALL_NN: str = "stall_nn"
 # -- the model never left the start scene, so nothing about the stage's own
 # difficulty was measured -- and the chain report counts it separately.
 REASON_NEVER_DEPARTED: str = "never_departed"
+
+# How many CONSECUTIVE ticks the arm must be outside `departure_arm_rad` before
+# the latch sets. ONE tick used to be enough, and one tick is also what a single
+# glitched encoder read looks like: the latch is permanent and it is the premise
+# of every completion, so a 1-tick spike handed the rest of the stage to the
+# 16-D "stalled near an end pose" rule on a stage that never moved -- which is
+# the exact failure the latch exists to prevent (module docstring). THREE at 21 Hz
+# is 143 ms, far below the 0.25-1.28 rad a real departure covers, and the
+# reset's own arrival test already tolerates up to 10% of its window being
+# outside tolerance for the same reason.
+#
+# The BASE clause is deliberately NOT streaked: it is an INTEGRAL of the
+# commanded velocity, so a one-tick spike contributes one tick's worth of
+# radians and cannot cross 0.17 rad by itself. Integration is its own filter.
+DEPARTURE_ARM_TICKS: int = 3
+
+# How many CONSECUTIVE non-finite ticks make the monitor blind. A blind monitor
+# can never declare completion, so the stage ends on its timeout or on the right
+# arrow -- which is what "no evidence" has to mean. One NaN is a glitch and is
+# simply not counted as evidence either way (the sample is marked non-finite and
+# every window containing it refuses); a run of them means the signal is gone.
+NON_FINITE_BLIND_TICKS: int = 3
+
+# How far the file's DESIGNATED start pose may sit from the stage's first
+# MEASURED arm pose before the monitor says so. It is a warning and nothing else:
+# the departure origin is always the first measurement (see
+# `_update_departure`), so a disagreement does not change any judgement -- it
+# means the arm is not where the reset was supposed to leave it, which is a thing
+# to look at in the start scene. 0.3 rad is the same number the initial reset's
+# refusal message tells the operator to get the arms within by hand.
+START_POSE_WARN_RAD: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -229,6 +266,10 @@ class Departure:
     # all, and reporting `arm_rad: 0.000` as if it had been measured sends the
     # operator to the start scene when the fault is in the monitor's input.
     blind: str = ""
+    # How far the stage's FIRST MEASURED arm pose was from the file's designated
+    # start pose, or None when the file carried no comparable pose. Reported only:
+    # the departure origin is the measurement, never the designated pose.
+    start_pose_offset_rad: float | None = None
 
     @property
     def unknown(self) -> bool:
@@ -246,6 +287,11 @@ class Departure:
             "departure_meas_arm_rad": round(self.arm_rad, 4),
             "departure_meas_base_rot_rad": round(self.base_rot_rad, 4),
             "departure_meas_base_fwd_m": round(self.base_fwd_m, 4),
+            "start_pose_offset_rad": (
+                None
+                if self.start_pose_offset_rad is None
+                else round(self.start_pose_offset_rad, 4)
+            ),
         }
 
 
@@ -260,6 +306,17 @@ class _Sample:
     progress: float | None
     # Measured positions of the 12 reset joints, in ARM_JOINT_NAMES order.
     measured: tuple[float, ...]
+    # Was EVERY number behind this tick finite -- the 12 commanded and 12 measured
+    # joints, both base velocities, and the progress slot when there is one?
+    #
+    # False means NO EVIDENCE, in either direction. Every rule that reads a window
+    # refuses outright if one sample in it is non-finite, rather than letting the
+    # value through: `max()` and `min()` both RETURN THE OTHER ARGUMENT when one is
+    # NaN, so a NaN travelled through the peak-to-peak test as 0.0 of travel and
+    # through `_inf_norm` as 0.0 of distance -- i.e. a lost signal read as "the arm
+    # is perfectly still, exactly on an end pose", which is the completion
+    # condition itself.
+    finite: bool = True
 
 
 @dataclass
@@ -270,10 +327,22 @@ class _Stage:
     samples: list[_Sample] = field(default_factory=list)
     ticks: int = 0
     result: CompletionResult | None = None
-    # The pose departure is measured FROM: the file's designated start pose when
-    # it carries every joint, else the first tick's measurement. In
-    # ARM_JOINT_NAMES order, like _Sample.measured.
+    # The pose departure is measured FROM: ALWAYS the first finite tick's
+    # measurement, never the file's designated pose. In ARM_JOINT_NAMES order,
+    # like _Sample.measured. See `_update_departure` for why.
     start_pose: tuple[float, ...] | None = None
+    # The file's designated start pose, for the one-time comparison against
+    # `start_pose` above. It is NOT the origin of the departure measurement.
+    declared_start_pose: tuple[float, ...] | None = None
+    # How far the two were apart on the first finite tick, or None if there was
+    # no designated pose to compare against. Reported, never acted on.
+    start_pose_offset_rad: float | None = None
+    # Consecutive ticks the measured arm has been outside `departure_arm_rad`.
+    # DEPARTURE_ARM_TICKS of them latch `departed`; anything less is a glitch.
+    arm_departure_ticks: int = 0
+    # Consecutive non-finite ticks. NON_FINITE_BLIND_TICKS of them blind the
+    # monitor. Reset by any finite tick -- it is a run, not a total.
+    non_finite_ticks: int = 0
     # The latch. Set once, never cleared, and a premise of every completion.
     # NOT derived from `samples`: _prune drops anything older than the longest
     # window, so by the time a stage could complete the ticks that proved it
@@ -362,18 +431,27 @@ class CompletionMonitorStep(ProcessorStep):
             params=params,
             has_progress=bool(has_progress),
             started=self.clock() if started is None else float(started),
-            start_pose=self._designated_start_pose(params),
+            # NOT `start_pose`: the origin is the first MEASURED pose and nothing
+            # else. This one is only ever compared against it.
+            declared_start_pose=self._designated_start_pose(params),
         )
         self.last_departure = None
 
     def _designated_start_pose(self, params: StageParams) -> tuple[float, ...] | None:
-        """``params.start_pose`` in arm order, or None to take the first tick.
+        """``params.start_pose`` in arm order, or None when the file lacks a joint.
 
         By NAME, never by index -- the same rule the whole chain follows. None
         when the file does not carry every joint this monitor was given, which
-        the loader already refuses; the fallback exists so a hand-built
-        StageParams in a test (or a future 6-joint rig) degrades to "departed
-        from wherever it started" instead of never latching.
+        the loader already refuses; the tolerance exists so a hand-built
+        StageParams in a test (or a future 6-joint rig) still works.
+
+        THIS IS NOT THE DEPARTURE ORIGIN. It used to be, and that was wrong for
+        every stage the arm does not actually start at: with `reset.initial:
+        false` and `from_stage > 1` -- the configuration for resuming a chain
+        mid-way -- nothing has driven the arm to this pose, so the first
+        measurement can be anywhere, and measuring departure from a pose the arm
+        was never at either latches on the first tick (the arm "has already left")
+        or never latches (it started on the far side and moved towards it).
         """
         pose = getattr(params, "start_pose", None) or {}
         if not all(name in pose for name in self.arm_joint_names):
@@ -400,6 +478,7 @@ class CompletionMonitorStep(ProcessorStep):
             base_rot_rad=stage.base_rot_rad,
             base_fwd_m=stage.base_fwd_m,
             blind=stage.blind,
+            start_pose_offset_rad=stage.start_pose_offset_rad,
         )
         if not stage.departed and stage.blind:
             logger.warning(
@@ -412,8 +491,9 @@ class CompletionMonitorStep(ProcessorStep):
             logger.warning(
                 f"stage {stage.params.number} ({stage.params.name}) NEVER "
                 f"DEPARTED: the measured arm stayed within "
-                f"{stage.worst_arm_rad:.3f} rad of the designated start pose "
-                f"(threshold {self.settings.departure_arm_rad:.3f}) and the "
+                f"{stage.worst_arm_rad:.3f} rad of the pose it STARTED THIS STAGE "
+                f"AT (threshold {self.settings.departure_arm_rad:.3f} for "
+                f"{DEPARTURE_ARM_TICKS} ticks in a row) and the "
                 f"commanded base integrated {stage.base_rot_rad:+.3f} rad / "
                 f"{stage.base_fwd_m:+.3f} m. Completion was therefore refused "
                 "for the whole stage -- the model did not leave the start scene."
@@ -493,13 +573,22 @@ class CompletionMonitorStep(ProcessorStep):
                     f"{'action' if key not in action else 'observation'}",
                 )
                 return
-            commanded.append(float(action[key]))
-            measured.append(float(observation[key]))
+            commanded.append(_as_float(action[key]))
+            measured.append(_as_float(observation[key]))
 
         now = self.clock()
         stage.ticks += 1
-        x_velocity = float(action.get(BASE_X_VELOCITY_KEY, 0.0))
-        theta_velocity = float(action.get(BASE_THETA_VELOCITY_KEY, 0.0))
+        x_velocity = _as_float(action.get(BASE_X_VELOCITY_KEY, 0.0))
+        theta_velocity = _as_float(action.get(BASE_THETA_VELOCITY_KEY, 0.0))
+
+        # Everything the departure latch and the stall rule read. Checked HERE
+        # and once, because the comparisons downstream cannot check it for
+        # themselves: `max(a, nan)` is `a` and `nan >= x` is False, so a NaN that
+        # reaches them is not an error, it is a silent vote for "nothing moved".
+        arm_base_finite = all(
+            math.isfinite(value)
+            for value in (*commanded, *measured, x_velocity, theta_velocity)
+        )
 
         # BEFORE the progress-key check, before _decide, and before _prune could
         # drop the evidence. The ORDER against the progress check is the point:
@@ -509,7 +598,21 @@ class CompletionMonitorStep(ProcessorStep):
         # measurement pointing the operator at the start scene when the real
         # cause is that the monitor could not read its signal. The arm and the
         # base ARE readable here; only the progress slot is not.
-        self._update_departure(stage, now, measured, x_velocity, theta_velocity)
+        #
+        # SKIPPED ENTIRELY on a non-finite tick: the origin must never be a NaN
+        # (it is kept for the whole stage) and the base integrals must never be
+        # poisoned by one (`nan + x` is nan forever, which would then latch the
+        # base clause on the `abs(...) >= threshold` test never being true again
+        # -- or rather, never being true at all, which is the silent direction).
+        if arm_base_finite:
+            self._update_departure(stage, now, measured, x_velocity, theta_velocity)
+        else:
+            # A glitched tick is not evidence that the arm stood still, so the
+            # consecutive-tick streak restarts rather than carrying across the gap.
+            stage.arm_departure_ticks = 0
+        # Always, finite or not: the interval spanning a skipped tick is then
+        # simply not integrated, which under-counts the base and therefore
+        # latches LATER. Refusing completion for longer is the safe direction.
         stage.last_t = now
 
         progress: float | None = None
@@ -521,17 +624,45 @@ class CompletionMonitorStep(ProcessorStep):
                     f"{PROGRESS_KEY!r} key",
                 )
                 return
-            progress = float(action[PROGRESS_KEY])
+            progress = _as_float(action[PROGRESS_KEY])
+
+        finite = arm_base_finite and (progress is None or math.isfinite(progress))
+        if finite:
+            stage.non_finite_ticks = 0
+        else:
+            stage.non_finite_ticks += 1
+            logger.warning(
+                f"stage {stage.params.number} ({stage.params.name}) tick "
+                f"{stage.ticks} carried a non-finite value "
+                f"(arm/base finite: {arm_base_finite}, progress: {progress!r}). "
+                "It counts as NO EVIDENCE: every window containing it refuses, in "
+                "both directions. "
+                f"{stage.non_finite_ticks}/{NON_FINITE_BLIND_TICKS} in a row."
+            )
+            if stage.non_finite_ticks >= NON_FINITE_BLIND_TICKS:
+                self._blind(
+                    stage,
+                    f"{stage.non_finite_ticks} consecutive ticks carried a "
+                    "non-finite value (NaN or inf) in the arm, the base command "
+                    "or the progress slot",
+                )
 
         stage.samples.append(
             _Sample(
                 t=now,
-                track_error=max(
-                    abs(c - m) for c, m in zip(commanded, measured)
+                track_error=(
+                    max(abs(c - m) for c, m in zip(commanded, measured))
+                    if arm_base_finite
+                    else float("nan")
                 ),
-                base=max(abs(x_velocity), abs(theta_velocity)),
+                base=(
+                    max(abs(x_velocity), abs(theta_velocity))
+                    if arm_base_finite
+                    else float("nan")
+                ),
                 progress=progress,
                 measured=tuple(measured),
+                finite=finite,
             )
         )
         self._prune(stage, now)
@@ -562,14 +693,52 @@ class CompletionMonitorStep(ProcessorStep):
         Called as soon as the arm and the base have been read, which is BEFORE
         the progress-key check -- so a 17-D model with a missing ``progress``
         slot still gets a real departure measurement. It is NOT called when the
-        arm itself was unreadable; then the departure is unknown and
-        ``Departure.blind`` says so, because a fabricated 0.000 rad would point
-        the operator at the start scene instead of at the monitor's input.
+        arm itself was unreadable, nor when any of the numbers was non-finite;
+        then the departure is unknown and ``Departure.blind`` says so, because a
+        fabricated 0.000 rad would point the operator at the start scene instead
+        of at the monitor's input.
+
+        THE ORIGIN IS THE FIRST MEASURED POSE, ALWAYS -- never the file's
+        designated start pose. Those two are the same thing only when a reset has
+        just driven the arm there, which is the ordinary chain and was the only
+        case the first version considered. They are NOT the same with
+        ``reset.initial: false`` and ``from_stage > 1``: nothing drove the arm
+        anywhere, the operator placed it by hand, and a departure measured from a
+        pose the arm was never at is either already satisfied on tick 1 (so a
+        stage that never moves can complete -- the failure the latch exists to
+        prevent) or unsatisfiable (the arm starts on the far side and the latch
+        reads its motion TOWARDS the designated pose as getting closer to home).
+        Measuring from where the stage actually began is the only reading that
+        means "this stage moved", which is the question the latch asks.
+
+        The designated pose is still used, for ONE warning: if the two are more
+        than ``START_POSE_WARN_RAD`` apart the arm is not where the chain expects
+        it, which is worth saying once and is not worth changing a judgement over.
         """
         if stage.start_pose is None:
-            # No designated pose: take the first tick's measurement as the
-            # origin. Then this tick is 0.0 away from it by construction.
+            # First finite tick: its measurement IS the origin, so this tick is
+            # 0.0 away from it by construction.
             stage.start_pose = tuple(measured)
+            declared = stage.declared_start_pose
+            if declared is not None:
+                offset = max(
+                    (abs(value - origin) for value, origin in zip(measured, declared)),
+                    default=0.0,
+                )
+                stage.start_pose_offset_rad = offset
+                if offset >= START_POSE_WARN_RAD:
+                    logger.warning(
+                        f"stage {stage.params.number} ({stage.params.name}) did "
+                        f"NOT start at its designated start pose: the first "
+                        f"measured arm pose is {offset:.3f} rad away from it "
+                        f"(threshold {START_POSE_WARN_RAD:.2f}). Departure is "
+                        "measured from where the stage ACTUALLY began, so this "
+                        "changes no judgement -- but the policy is rolling out "
+                        "from a pose the demonstrations do not have. Check the "
+                        "preceding reset's arrival error, or whether "
+                        "`chain.reset.initial: false` skipped the ramp that was "
+                        "supposed to put the arm there."
+                    )
 
         delta = 0.0 if stage.last_t is None else max(0.0, now - stage.last_t)
         stage.base_fwd_m += x_velocity * delta
@@ -583,9 +752,20 @@ class CompletionMonitorStep(ProcessorStep):
         if stage.departed:
             return
         settings = self.settings
-        why = ""
+        # The STREAK, not this tick alone. See DEPARTURE_ARM_TICKS: the latch is
+        # permanent and a single glitched encoder read looks exactly like one tick
+        # of departure, which then hands the whole stage to the rule the latch is
+        # there to gate.
         if worst >= settings.departure_arm_rad:
-            why = f"the arm is {worst:.3f} rad from its designated start pose"
+            stage.arm_departure_ticks += 1
+        else:
+            stage.arm_departure_ticks = 0
+        why = ""
+        if stage.arm_departure_ticks >= DEPARTURE_ARM_TICKS:
+            why = (
+                f"the arm has been {worst:.3f} rad from the pose it started this "
+                f"stage at for {stage.arm_departure_ticks} ticks in a row"
+            )
         elif abs(stage.base_rot_rad) >= settings.departure_base_rot_rad:
             why = f"the base has turned {stage.base_rot_rad:+.3f} rad"
         elif abs(stage.base_fwd_m) >= settings.departure_base_fwd_m:
@@ -698,6 +878,14 @@ class CompletionMonitorStep(ProcessorStep):
         if window is None:
             return None
         for sample in window:
+            # NO EVIDENCE is not evidence of stillness. The three tests below all
+            # read a NaN as "under the threshold": `nan >= x` is False, and
+            # `max(...) - min(...)` over a list containing a NaN is whatever the
+            # finite values gave, because both builtins return the other argument
+            # when one side is NaN. So a lost signal looked exactly like a
+            # perfectly stopped arm -- the completion condition itself.
+            if not sample.finite:
+                return None
             if sample.track_error >= settings.stall_track_rad:
                 return None
             if sample.base >= settings.stall_base:
@@ -736,13 +924,22 @@ class CompletionMonitorStep(ProcessorStep):
         return window or None
 
     def _progress_held(self, stage: _Stage, now: float) -> float | None:
-        """Length of the trailing window in which ``p >= p_done``, or None."""
+        """Length of the trailing window in which ``p >= p_done``, or None.
+
+        A non-finite sample refuses the window outright, the same way
+        :meth:`_stalled` does. ``nan < p_done`` is False, so without the check a
+        NaN progress scalar would have PASSED the "p is high enough" test.
+        """
         settings = self.settings
         window = self._covered_window(stage, now, settings.p_hold_s)
         if window is None:
             return None
         for sample in window:
-            if sample.progress is None or sample.progress < settings.p_done:
+            if not sample.finite:
+                return None
+            if sample.progress is None or not math.isfinite(sample.progress):
+                return None
+            if sample.progress < settings.p_done:
                 return None
         return now - window[0].t
 
@@ -770,12 +967,37 @@ class CompletionMonitorStep(ProcessorStep):
         return (best, best_index)
 
 
+def _as_float(value: Any) -> float:
+    """``float(value)``, or NaN for anything that is not a number.
+
+    NaN rather than a raise, because every caller already treats non-finite as
+    "no evidence" and a raise here would blind the monitor through its
+    ``except Exception`` with a traceback instead of the one-line warning that
+    names the tick. A bool is NOT a number for this purpose: ``float(True)`` is
+    1.0 radians, which nothing in this package ever legitimately means.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return float("nan")
+    return float(value)
+
+
 def _inf_norm(
     measured: Sequence[float], pose: Mapping[str, float], names: Sequence[str]
 ) -> float | None:
+    """Inf-norm distance, or None when anything involved is missing or non-finite.
+
+    None FOR A NaN, not a distance. ``max(worst, abs(value - nan))`` returns
+    ``worst``, so a NaN joint used to vanish from the norm entirely and a pose
+    with eleven matching joints and one unreadable one came out as "0.00 rad from
+    a demonstrated end pose" -- the strongest evidence the 16-D rule accepts,
+    produced by the absence of a measurement.
+    """
     worst = 0.0
     for value, name in zip(measured, names):
         if name not in pose:
             return None
-        worst = max(worst, abs(value - pose[name]))
+        difference = abs(value - pose[name])
+        if not math.isfinite(difference):
+            return None
+        worst = max(worst, difference)
     return worst

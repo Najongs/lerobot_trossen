@@ -950,8 +950,29 @@ slot is a progress scalar.
 DRY_RUN=1 scripts/eval_chain.sh M1                   # assemble and print the command only
 RESET_ONLY=1 scripts/eval_chain.sh M1 resets         # the ramps alone, no checkpoint loaded
 FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 r4  # one boundary: reset to task04, then task04
-scripts/eval_chain.sh TPH bringup5                   # the whole chain
+tmux new -s chain 'scripts/eval_chain.sh TPH bringup5'   # the whole chain -- under tmux, see below
 ```
+
+**`DRY_RUN` AND `RESET_ONLY` ARE `=1`.** `=true|yes|on` is accepted too; anything else
+(`DRY_RUN=2`, a typo) is REFUSED with exit 2, before `uv run` and before any checkpoint is
+downloaded. The old script compared `[[ "$DRY_RUN" == 1 ]]` and nothing else, so `DRY_RUN=true`
+silently meant "not a dry run" and drove the robot. To turn one off, unset it or pass `=0`.
+`FROM_STAGE`/`TO_STAGE` must be integers in 1..11 with FROM <= TO.
+
+**RUN IT UNDER `tmux` OR `nohup`.** The runner installs SIGTERM and SIGHUP handlers that turn
+both into `SystemExit`, so a dropped SSH session unwinds through the teardown (base zeroed, robot
+disconnected) instead of killing the process where it stands -- which is what used to happen, with
+the base holding its last velocity command. A SECOND SIGTERM is IGNORED: unwinding out of the
+teardown would leave the arms torqued. Closing the window is still not how to end a run; Esc is.
+SIGKILL and power loss remain uncovered (no in-process handler can reach them).
+
+**DO NOT READ THE STOP LOG AS CONFIRMATION.** `stop_base commanded: ...` is intent.
+`MobileAIRobot.send_action` does not raise when the base write fails -- a failed Modbus
+transaction is a throttled warning -- so the primary path now ALSO sends a confirming
+`base.set_cmd_vel(0.0, 0.0)` and records its bool. Read `stop_base_path` in `events.jsonl`:
+`primary` (clean, confirmed), `fallback` (the hold action failed and the base was zeroed
+directly -- stopped), `primary+direct_failed` or `failed` (**nothing confirmed the base stopped**;
+exit 3, go look at the robot).
 
 `RESET_ONLY=1` (`chain.reset.only`) drops every policy stage from the expansion, so bring-up
 steps ② and ③ move the arms with no checkpoint in the process at all. It is a MODE and not an
@@ -982,9 +1003,16 @@ Why each piece exists -- all three failures are measured, not assumed:
   the manual key matters more for it. "Stalled" reads two separate knobs: `stall_track_rad`
   (0.08, how far the arm may lag its command -- a loaded arm holding still lags it) and
   `stall_arm_rad` (0.05, how far the MEASURED arm may travel across the window).
-- **The departure latch.** Completion is refused for the whole stage until the measured arm
-  leaves 0.10 rad of its designated start pose, or the commanded base integrates past 0.17 rad of
-  net rotation or 0.10 m of travel. Without it the 16-D rule fires on a stage that never started:
+- **The departure latch.** Completion is refused for the whole stage until the measured arm is
+  outside 0.10 rad of **the pose it started that stage at** for three CONSECUTIVE ticks, or the
+  commanded base integrates past 0.17 rad of net rotation or 0.10 m of travel. The origin is the
+  stage's first MEASURED pose, not the file's designated one: with `chain.reset.initial: false` and
+  `from_stage > 1` nothing has driven the arm to the designated pose, and departure measured from a
+  pose the arm was never at is either true on tick 1 (the latch is off) or unreachable. A first
+  measurement more than 0.3 rad from the designated pose logs a WARNING and changes no judgement.
+  Three consecutive ticks because the latch is permanent and one glitched encoder read is
+  indistinguishable from one tick of departure; the base clause is not streaked because integration
+  is its own filter. Without the latch the 16-D rule fires on a stage that never started:
   in `configs/chain/stage_params.json` the designated START pose of task03, task04 and task10 is
   within 0.0008 rad of one of that same stage's END poses (measured off the file; WHY is
   [추정] -- read off the task names, and task04 is `pour_liquid_from_...`), and 20-40% of M1's
@@ -1018,6 +1046,34 @@ What the runner does NOT do:
   wrong.
 - **No gripper or base motion in a reset.** The grippers are commanded to their MEASURED position
   every tick (the arm may be carrying something) and the base to zero.
+
+Three more rules the 2026-10-06 cross-review added, all of them about a signal that is MISSING
+rather than wrong:
+
+- **A non-finite action never reaches the arms.** `FiniteActionGateStep` sits at the end of
+  `robot_action_processor`; if any value in the action is NaN or inf it substitutes a hold (every
+  joint at its measured position, base 0, progress 0) and ends the run with exit 4. lerobot's own
+  0.1 rad clamp is a min/max pair and every comparison with NaN is False, so it passes a NaN
+  through unclamped and unflagged (`robots/utils.py:99-104`), and `WidowXAIFollower`'s relative
+  target and velocity pacing fail the same way (`widowxai_follower.py:272`). The dict the DATASET
+  records is left untouched, so the frame keeps the model's NaN while the robot gets the hold. Two
+  known causes, and they need telling apart: corrupted normalizer stats, or an fp16 overflow.
+- **A NaN is NO EVIDENCE for the completion monitor, in either direction.** `max(a, nan)` returns
+  `a` and both `nan >= x` and `nan < x` are False, so a lost signal used to read as "a perfectly
+  stopped arm, 0.00 rad from a demonstrated end pose" -- the completion condition itself. Any window
+  containing a non-finite sample now refuses, the tick is excluded from the departure integral and
+  from the origin, and three consecutive ones make the monitor BLIND (the stage then ends on its
+  timeout or on the right arrow).
+- **A reset has arrived when 90% of the settle window is inside `tol_rad` AND the newest sample is.**
+  The ratio alone says nothing about NOW: 19 of 21 with the misses at the END is an arm that was
+  settled and is leaving, and `reached` is what releases it to the next stage's policy.
+
+`chain.model.has_progress` is REQUIRED in both chain configs and must agree with the checkpoint's
+action width; `null` (derive it) is refused. It is the value that decides whether the recording
+dataset declares a 17th action feature, and therefore at what width the normalizer loads, so a
+config that does not state it cannot be read later to find out which model ran. The width is still
+the fact: `policies.check_action_width` refuses a checkpoint whose action width disagrees with the
+dataset's.
 
 Reading a run:
 

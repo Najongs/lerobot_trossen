@@ -169,20 +169,30 @@ STANDALONE_AGE_WARNING_DAYS: int = 14
 # this reader keeps reading logs written by writers it has never seen, and
 # importing that module would pull lerobot into a stdlib-only file.
 #
-# THREE OUTCOMES, NOT TWO, and the difference is what the report has to carry:
-#   primary  -- one get_observation + one send_action; the only path whose
-#               stop_base_s is the cost of stopping the base
+# FOUR OUTCOMES, and the difference is what the report has to carry:
+#   primary  -- one get_observation + one send_action, plus a confirming
+#               base.set_cmd_vel(0, 0) that was accepted (or a robot with no base
+#               to confirm against). The only path whose stop_base_s is the cost
+#               of stopping the base
 #   fallback -- the hold action failed (a dead camera is the likely cause) and
 #               base.set_cmd_vel(0, 0) zeroed the base directly. THE BASE IS
 #               STOPPED, but stop_base_s here is how long the failing call took
 #   failed   -- neither path went through; the base may still be driving
+#   primary+direct_failed -- the hold action was sent and the CONFIRMING direct
+#               base command was refused. The arms were held and nothing
+#               confirmed the base, so it counts with `failed`, not with
+#               `primary`. Writers before 2026-10-06 could not emit it: they
+#               filed the same situation as `primary`, because send_action does
+#               not raise on a failed base write (mobileai.py:547-558)
 STOP_PATH_PRIMARY: str = "primary"
 STOP_PATH_FALLBACK: str = "fallback"
 STOP_PATH_FAILED: str = "failed"
+STOP_PATH_PRIMARY_DIRECT_FAILED: str = "primary+direct_failed"
 STOP_BASE_REASON_BY_PATH: dict[str, str] = {
     STOP_PATH_PRIMARY: "stop_base",
     STOP_PATH_FALLBACK: "stop_base_fallback",
     STOP_PATH_FAILED: "stop_base_failed",
+    STOP_PATH_PRIMARY_DIRECT_FAILED: "stop_base_primary_direct_failed",
 }
 
 # How far the logged `hertz` may sit from frames/elapsed_s before build_trial
