@@ -44,7 +44,7 @@
 | 날짜 | 확인된 것 | 기록 |
 |---|---|---|
 | 10/02 | 제어 루프 20.9~21.1 Hz 정상 · 원핫 패치 정상 · **M1 이 task04(붓기) 1/1 성공** · **exec 30 확정**(exec 5 는 팔이 거의 정지, 0/2) · task05 는 M1·M2 정지, 단계별 전문가 1/3 | [`eval_najy_results_1002.md`](eval_najy_results_1002.md) |
-| 10/06 | 지연 기준선(팔 2틱=학습 2틱, 베이스 회전 t63 325 ms) · task05 단계별 전문가 1/1 성공 · **M1 에 원핫 5/11 을 줬더니 task04 동작을 했다** · 팔 한 틱 이동 상한 0.1 rad 도입 · 리셋 구간 자세 안내(`pose_guide`) 도입 | [`eval_najy_results_1006.md`](eval_najy_results_1006.md) |
+| 10/06 | 지연 기준선(팔 2틱=학습 2틱, 베이스 회전 t63 325 ms) · task05 단계별 전문가 1/1 성공 · **M1 에 원핫 5/11 을 줬더니 task04 동작을 했다** · 팔 한 틱 이동 상한 0.1 rad · **task01(이동): M1 은 베이스 거의 정지(+13°/0.12 m vs 시연 +57°/1.15 m), M3 는 반대 방향 −115°** — 시작 장면·위치 의심 · 회차 뒤 자동 분석(`eval_najy_post.sh` → `report.md`) 도입 · 리셋 구간 자세 안내(`pose_guide`) 도입 | [`eval_najy_results_1006.md`](eval_najy_results_1006.md) |
 
 **10/06 의 핵심 발견** — 11단계 모델은 **원핫보다 카메라 장면과 팔 시작 자세로 단계를 정한다**
 (오프라인 교란: 카메라·팔 state 를 바꾸면 청크가 원핫 교환의 약 3배 변한다). task05 의 시작은 task04 의 끝과 장면·자세가 거의 같아서
@@ -55,7 +55,8 @@ task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 **D(이
 
 ## 4. 다음 (순서)
 
-1. **실기 D — 이동 단계**: `scripts/eval_najy.sh M1 3 30 3` (task03 제자리 회전) → task01·06·10. 리셋 중 `POSE task03` 줄로 자세를 맞춘다.
+1. **실기 D — 이동 단계**: task01 은 끝(M1 정지 · M3 반대로 돎, 둘 다 실패). 다음 `scripts/eval_najy.sh M1 3 30 3` (task03 제자리 회전) → task06·10.
+   **시작 장면(로봇 위치·방향·물체 위치)을 시연 첫 프레임과 맞추는 것**이 핵심 — task01 두 회차 모두 장면 차이가 의심된다. 리셋 중 `POSE task03` 줄로 팔 자세를 맞춘다.
    ⚠️ 학습 데이터의 회전량(task03 −57°)은 fps 표기 30 기준이다 — 실제 녹화가 21 Hz 면 −81°. 어느 쪽인지 미확인 (eval_najy_results_1006 「다음」)
 2. **학습 쪽 대책 (DGX)** — 원핫이 단계를 실제로 고르게 만들기. 후보: 비슷한 장면의 단계(task04↔05)를 원핫만으로 가르도록 데이터·조건을 바꾸기.
    아직 설계 전이다 — 1호기와 나눠 정한다
@@ -68,7 +69,7 @@ task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 **D(이
 |---|---|
 | 배포 체크포인트 M1·M2·M3 | 허브 `kiroaiseoul/NAJY_act_all11_hot_27D_120k_s{1000,2000}` · `kiroaiseoul/NAJY_act_move4_hot_20D_60k_s1000` (public) |
 | 기준선 B* (구세대 단계별 전문가) | 허브 `kiroaiseoul/act_task0N_*` — 대응표: [`eval_najy_session_guide.md`](eval_najy_session_guide.md) §6 |
-| 실기 원자료 | Trossen PC1 `~/eval_logs/` (로컬), 측정 원출력 사본은 [`run_logs/2026-10-06_eval_najy/`](run_logs/2026-10-06_eval_najy/) |
+| 실기 원자료 | Trossen PC1 `~/eval_logs/` (로컬), 측정 원출력 사본은 [`run_logs/2026-10-06_eval_najy/`](run_logs/2026-10-06_eval_najy/) — 회차마다 `<회차>.report.md` 한 장(원핫·루프·지연·시작 자세·팔·베이스 명령/실측·사람 판정) + summary/motion/latency/base |
 | 학습 기록 정본 | sim 레포 `docs/mobile_base_investigation.md` · 실기 배경 `docs/real_robot_eval.md` |
 | 2호기 판정 원문 | sim 레포 `docs/results_2ho/` (J1~J8·JSV·T9 표), 재현 `scripts/judge_mae.py`·`scripts/eval_pool.py` |
 | 2호기 체크포인트 (T7 이동4 단일 · T8 11단계 · T9 조작 단계별 · SmolVLA 4단계/11단계, 59개) | 2호기 로컬에만 있다 — 허브에 안 올렸다. 배포 판정은 1호기 런이 정본이라 옮기지 않기로 했다(§86). 필요하면 문서로 요청 |
