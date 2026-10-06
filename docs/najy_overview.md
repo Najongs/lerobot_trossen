@@ -85,4 +85,5 @@ task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 **D(이
 | [`data_layout_traps.md`](data_layout_traps.md) | 16D/14D/27D 차원·베이스 칸 함정 |
 | [`offline_eval_findings_act.md`](offline_eval_findings_act.md) | 오프라인 판정 요약 (ACT) |
 | [`offline_eval_2026-09-22.md`](offline_eval_2026-09-22.md) · `smolvla_*.md` | SmolVLA 쪽 기록 (현재 주력 아님) |
+| [`HANDOFF_najy_1006.md`](HANDOFF_najy_1006.md) | DGX_1 에서 이 레포를 열 때 — DGX 경로·오프라인 도구·DGX 가 맡을 일(원핫이 단계를 고르게 하는 학습 대책)·주의 |
 | 이 문서 | 위 전부를 잇는 한 장 |
