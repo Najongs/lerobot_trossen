@@ -551,6 +551,100 @@ class ChainEndToEndTest(unittest.TestCase):
             # ValueError as a backstop for a caller that skips preflight.
             self.assertEqual(cli.main(argv), cli.EXIT_PREFLIGHT)
 
+    def test_a_threshold_out_of_range_exits_two(self) -> None:
+        """[중요]8, through the gate the runner actually runs.
+
+        ``stall_s: 0`` leaves ``_covered_window`` asking for a zero-length window,
+        which is never COVERED, so no stage could complete and all eleven would run
+        to their timeouts -- a chain that "fails" on eleven stages that finished.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            for override in (
+                "--chain.completion.stall_s=0",
+                "--chain.completion.departure_arm_rad=0",
+                "--chain.completion.timeout_factor=1.0",
+                "--chain.reset.tol_rad=0",
+                "--chain.reset.ceiling_factor=1.0",
+                "--chain.completion.stall_track_rad=0.01",
+            ):
+                with self.subTest(override):
+                    argv = [
+                        "--config_path",
+                        str(CHAIN_CONFIG),
+                        f"--chain.params_path={MOCK_PARAMS}",
+                        override,
+                        f"--dataset.root={temporary / 'dataset'}",
+                        f"--output.root={temporary / 'outputs'}",
+                    ]
+                    self.assertEqual(
+                        cli.main(argv),
+                        cli.EXIT_PREFLIGHT,
+                        "an out-of-range threshold must be refused before the "
+                        "robot is energised, not silently turn a rule off",
+                    )
+
+    def test_a_non_finite_action_sends_a_hold_and_breaks_the_chain(self) -> None:
+        """[중요]4, end to end: the gate is the last thing before the arms.
+
+        ``mock://nan`` runs stage 1 normally for four ticks and then puts a NaN in
+        one arm joint. What must be true afterwards: the chain STOPPED, the exit
+        code is 4 and not 1 (the gate sets the same flags Esc does, and "a human
+        stopped this" is the bucket a batch script treats as nobody's fault), and
+        NOT ONE action that reached the robot carried a non-finite number.
+        """
+        import math
+
+        sent: list[dict] = []
+        original_make_robot = record_adapter.make_robot
+
+        def capturing_make_robot(robot_config):
+            robot = original_make_robot(robot_config)
+            inner = robot.send_action
+
+            def send_action(action):
+                sent.append(dict(action))
+                return inner(action)
+
+            robot.send_action = send_action
+            return robot
+
+        record_adapter.make_robot = capturing_make_robot
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                run = run_chain(Path(directory), policy_path="mock://nan", to_stage=2)
+        finally:
+            record_adapter.make_robot = original_make_robot
+
+        self.assertEqual(
+            run.exit_code,
+            cli.EXIT_CHAIN_FAILED,
+            "4 (the chain broke), not 1 (a human stopped it): the gate stops the "
+            "run through the same flags Esc sets, so cli has to tell them apart",
+        )
+        self.assertTrue(sent, "the capture must have seen the run's actions")
+        offenders = [
+            (index, key, value)
+            for index, action in enumerate(sent)
+            for key, value in action.items()
+            if isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and not math.isfinite(float(value))
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "lerobot's clamp would have passed the NaN through to "
+            "set_all_positions (robots/utils.py:99-104, "
+            "widowxai_follower.py:272); the gate is what stops it",
+        )
+        # And the chain did not merely refuse to start: stage 1 ran first.
+        ends = run.of("stage_end")
+        self.assertEqual([event["stage_id"] for event in ends], ["reset_pre_01", "t01"])
+        self.assertGreater(
+            ends[1]["frames"], 0, "the stage was running when the NaN arrived"
+        )
+
     def test_the_version_one_smoke_config_still_parses(self) -> None:
         """Version 1 is read unchanged; it is the regression test for the rest."""
         parsed = config.parse_config(

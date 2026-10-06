@@ -88,9 +88,13 @@ chain:
     onehot_k: 11
     # 10/02 에 확정된 exec. 체크포인트 chunk(30) 이하여야 한다.
     n_action_steps: 30
-    # null: 체크포인트의 action 폭에서 읽는다(17 → progress 있음). 값을 넣으면
-    # 그 단정이 체크포인트와 다를 때 거부한다.
-    has_progress: null
+    # **필수**다 (10/06). 체크포인트 action 폭이 사실이고(17 → progress 있음)
+    # 이 키와 다르면 preflight 가 거부한다. null 로 두면 거부한다 — 옛 판은
+    # null 을 「체크포인트에서 읽어라」로 받았고, 그러면 **녹화 데이터셋이 17번째
+    # action 칸을 선언하는지**, 따라서 정규화기가 어느 폭으로 로드되는지를
+    # 결정하는 단 하나의 사실이 설정 파일에 안 남는다. 어느 모델로 돌린 회차인지
+    # 나중에 YAML 로 알 수 없게 된다.
+    has_progress: true
 
   completion:
     # 완료 = **출발했음**(아래 departure_*) ∧ p 가 p_hold_s 동안 p_done 이상 ∧

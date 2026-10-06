@@ -33,6 +33,15 @@ BASE_VELOCITY_KEYS: frozenset[str] = frozenset({"x.vel", "theta.vel"})
 STOP_PATH_PRIMARY: str = "primary"
 STOP_PATH_FALLBACK: str = "fallback"
 STOP_PATH_FAILED: str = "failed"
+# The primary hold action went through AND the confirming direct base command
+# did not. Added 2026-10-06 (codex 교차검토 [중요]3): until then the primary path
+# returned success on the strength of send_action not raising, and
+# MobileAIRobot.send_action DOES NOT RAISE when the base write fails -- a failed
+# Modbus transaction is a throttled warning (mobileai.py:547-558) and the echo
+# carries the sanitized COMMANDED velocities either way. So every boundary where
+# the base silently refused the stop was filed as `primary`, i.e. as clean.
+# This path means: the arms were held, and NOTHING confirmed the base stopped.
+STOP_PATH_PRIMARY_DIRECT_FAILED: str = "primary+direct_failed"
 
 # The `reason` string that goes on the transition event, derived from the path
 # in ONE place. Two independently written strings for the same fact drift, and
@@ -41,7 +50,16 @@ REASON_BY_STOP_PATH: dict[str, str] = {
     STOP_PATH_PRIMARY: "stop_base",
     STOP_PATH_FALLBACK: "stop_base_fallback",
     STOP_PATH_FAILED: "stop_base_failed",
+    STOP_PATH_PRIMARY_DIRECT_FAILED: "stop_base_primary_direct_failed",
 }
+
+# The message :func:`zero_base_directly` returns when the robot has no base at
+# all. It is NOT a failure to stop the base -- our mock has no base and neither
+# would a single-arm rig -- so the confirming call on the primary path must be
+# able to tell "the command was refused" from "there is nothing to command".
+NO_BASE_REASON: str = (
+    "robot exposes no .base, so there is no base command to fall back on"
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,13 @@ class StopBaseOutcome:
     path: str
     action: dict[str, float] | None = None
     error: str = ""
+    # What the CONFIRMING ``base.set_cmd_vel(0.0, 0.0)`` returned on the primary
+    # path. True = the base transaction was accepted, which is the only delivery
+    # ack anywhere in this module. False = it was refused or it raised. None =
+    # not applicable, either because the robot has no base (the mock, a
+    # single-arm rig) or because the primary path never ran and the fallback's
+    # own result is already in ``path``.
+    direct_ok: bool | None = None
 
     @property
     def reason(self) -> str:
@@ -63,7 +88,15 @@ class StopBaseOutcome:
 
     @property
     def base_is_stopped(self) -> bool:
-        """True when SOMETHING zeroed the base. False means it may still drive."""
+        """True when SOMETHING zeroed the base. False means it may still drive.
+
+        ``primary+direct_failed`` counts as NOT stopped, and that is the whole
+        point of the path: the hold action is intent and the direct command is
+        the only confirmation, so a refused direct command leaves us with no
+        evidence the base stopped. cli.main turns this into exit code 3 ("go look
+        at the robot"), which over-reports a base that did in fact stop and
+        under-reports nothing. The other direction was the defect.
+        """
         return self.path in (STOP_PATH_PRIMARY, STOP_PATH_FALLBACK)
 
 
@@ -149,7 +182,7 @@ def zero_base_directly(robot: Robot) -> str:
     """
     base = getattr(robot, "base", None)
     if base is None:
-        return "robot exposes no .base, so there is no base command to fall back on"
+        return NO_BASE_REASON
     set_cmd_vel = getattr(base, "set_cmd_vel", None)
     if not callable(set_cmd_vel):
         return f"{type(base).__name__}.set_cmd_vel is not callable"
@@ -163,6 +196,18 @@ def zero_base_directly(robot: Robot) -> str:
     if accepted is False:
         return "base.set_cmd_vel(0.0, 0.0) returned False (base transaction failed)"
     return ""
+
+
+def base_command_is_available(robot: Robot) -> bool:
+    """Whether ``robot.base.set_cmd_vel`` exists to be called at all.
+
+    Separate from :func:`zero_base_directly` so the primary path can distinguish
+    "the base refused the command" from "this robot has no base". Our MockRobot
+    ships without ``.base``, so without this distinction every boundary of every
+    off-robot test would be filed as a failed stop and the smoke suite would exit
+    3 for a robot that has nothing to stop.
+    """
+    return callable(getattr(getattr(robot, "base", None), "set_cmd_vel", None))
 
 
 def stop_base(robot: Robot, *, reraise_interrupt: bool = True) -> StopBaseOutcome:
@@ -203,15 +248,42 @@ def stop_base(robot: Robot, *, reraise_interrupt: bool = True) -> StopBaseOutcom
     the follower clamps the goal positions it accepted -- a disagreement there is
     real information. Both are logged, named, so a post-hoc reader of a run where
     the base kept drifting has the commanded dict, the accepted echo and the
-    base-write warning on the same timeline instead of only the first. The durable
-    fix is a delivery signal out of MobileAIRobot.send_action, which is the sibling
-    package's call to make. The FALLBACK path does have one (set_cmd_vel's bool).
+    base-write warning on the same timeline instead of only the first.
+
+    SO THE PRIMARY PATH ALSO CONFIRMS (2026-10-06, codex 교차검토 [중요]3). After
+    a hold action that did not raise, :func:`zero_base_directly` is called
+    UNCONDITIONALLY and its return IS the delivery signal
+    (``TrossenSlate.set_cmd_vel`` returns False on a failed Modbus transaction).
+    Three outcomes:
+
+    * accepted -> ``primary``, ``direct_ok=True``. The ordinary clean boundary,
+      and now it means "the base was commanded to zero AND the base said yes"
+      instead of "nothing raised".
+    * refused or raised -> ``primary+direct_failed``, ``direct_ok=False``,
+      ``base_is_stopped=False``, an ERROR line and exit code 3. The arms were
+      held; nothing confirmed the base.
+    * no ``.base`` at all (the mock, a single-arm rig) -> ``primary``,
+      ``direct_ok=None``. Not applicable is not a failure.
+
+    The second command is free of the risk that kept it out before: it is the
+    SAME command the fallback sends and the same one
+    ``MobileAIRobot.disconnect()`` sends first (mobileai.py:568-569), it needs no
+    observation, and commanding zero twice cannot move anything. What it is NOT is
+    a fix for ``send_action``'s missing delivery signal -- that is still the
+    sibling package's call to make, and the arm half of the hold action remains
+    unconfirmed either way.
     """
     try:
         action = build_hold_action(robot)
         echo = robot.send_action(action)
     except BaseException as primary_error:
+        applicable = base_command_is_available(robot)
         fallback_error = zero_base_directly(robot)
+        # None when there was no base command to try at all: `failed` already
+        # says the base was not stopped, and claiming a refused transaction on a
+        # robot that has no transaction to refuse would send a reader of the
+        # JSONL looking for a Modbus fault that never happened.
+        direct_ok = None if not applicable else not fallback_error
         if fallback_error:
             path = STOP_PATH_FAILED
             detail = (
@@ -236,8 +308,38 @@ def stop_base(robot: Robot, *, reraise_interrupt: bool = True) -> StopBaseOutcom
         # re-raising; give me the true path instead" -- see the docstring.
         if reraise_interrupt and not isinstance(primary_error, Exception):
             raise
-        return StopBaseOutcome(path=path, action=None, error=detail)
+        return StopBaseOutcome(
+            path=path, action=None, error=detail, direct_ok=direct_ok
+        )
 
     logger.info(f"stop_base commanded: {action}")
     logger.info(f"stop_base echo (accepted by the robot, not a delivery ack): {echo}")
-    return StopBaseOutcome(path=STOP_PATH_PRIMARY, action=action)
+
+    # THE CONFIRMATION. Unconditional, because the only way a base write can be
+    # known to have landed is this call's bool, and `send_action` above has none.
+    if not base_command_is_available(robot):
+        logger.info(
+            "stop_base: this robot exposes no .base, so there is no direct base "
+            "command to confirm the stop with. Reported as direct_ok=None, which "
+            "is NOT a failed stop -- there is nothing to stop."
+        )
+        return StopBaseOutcome(
+            path=STOP_PATH_PRIMARY, action=action, direct_ok=None
+        )
+    direct_error = zero_base_directly(robot)
+    if direct_error:
+        detail = (
+            f"the hold action was sent and did not raise, but the confirming "
+            f"base.set_cmd_vel(0.0, 0.0) did not go through: {direct_error}. "
+            f"send_action's echo cannot prove the base write landed "
+            f"(mobileai.py:547-566), so NOTHING confirms the base stopped."
+        )
+        logger.error(f"stop_base: THE BASE MAY STILL BE MOVING -- {detail}")
+        return StopBaseOutcome(
+            path=STOP_PATH_PRIMARY_DIRECT_FAILED,
+            action=action,
+            error=detail,
+            direct_ok=False,
+        )
+    logger.info("stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted")
+    return StopBaseOutcome(path=STOP_PATH_PRIMARY, action=action, direct_ok=True)

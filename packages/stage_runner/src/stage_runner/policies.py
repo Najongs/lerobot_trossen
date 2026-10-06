@@ -221,6 +221,17 @@ def load_chain_bundles(
     never reach that import -- it is the rule that keeps this package testable
     off the robot (CLAUDE.md 실기 안전).
     """
+    # READ BEFORE make_policy, which overwrites output_features from ds_meta and
+    # destroys the checkpoint's own recorded width (the same ordering cli.py's
+    # step 7 depends on). After load_bundle this number is unrecoverable, so
+    # comparing it against the dataset afterwards -- which is what the gate below
+    # does -- is only possible if it is captured here.
+    checkpoint_action_dim = (
+        None
+        if policy_config is None
+        else _feature_dimension(getattr(policy_config, "output_features", None), ACTION)
+    )
+
     if n_action_steps is not None and policy_config is not None:
         previous = getattr(policy_config, "n_action_steps", None)
         policy_config.n_action_steps = int(n_action_steps)
@@ -271,6 +282,11 @@ def load_chain_bundles(
             policy_config=policy_config,
             dataset_meta=dataset_meta,
         )
+        check_action_width(
+            bundle,
+            dataset_meta=dataset_meta,
+            checkpoint_action_dim=checkpoint_action_dim,
+        )
         bundle = replace(bundle, warmed_up=warm_up_bundle(bundle))
 
     onehot = None
@@ -293,6 +309,76 @@ def load_chain_bundles(
         if stage.policy_path
     }
     return bundles, onehot
+
+
+def check_action_width(
+    bundle: PolicyBundle,
+    *,
+    dataset_meta: LeRobotDatasetMetadata,
+    checkpoint_action_dim: int | None,
+) -> None:
+    """Refuse a chain whose recording dataset is not as wide as the checkpoint.
+
+    TWO COMPARISONS, and only the first has teeth:
+
+    1. ``checkpoint_action_dim`` (read off config.json BEFORE ``make_policy``)
+       against the dataset's declared action width. These are independent facts:
+       the first comes from the trained weights, the second from
+       ``record_adapter.build_dataset_features`` plus whatever
+       ``preflight.extra_action_names`` decided about ``progress``. A mismatch
+       means the 17th slot was added when it should not have been, or not added
+       when it should -- which is the one error this gate exists for, because the
+       symptom is a normalizer loaded at the wrong width and joint commands that
+       are wrong without being absurd.
+    2. the LOADED policy's ``output_features[ACTION]`` against the same number.
+       This one is nearly tautological today -- ``make_policy`` assigns
+       output_features FROM ds_meta, so the two agree by construction -- and it is
+       here anyway, cheaply, because "nearly" is doing the work: the day upstream
+       stops overwriting (or overwrites from somewhere else) the tautology becomes
+       a real check, and until then it costs one dict lookup per run.
+
+    Nothing is checked for a MOCK bundle or a reset-only chain: there is no
+    config.json to read a checkpoint width from, which is exactly why
+    ``chain.model.has_progress`` is required rather than derived in those cases.
+    """
+    declared = dataset_meta.features.get(ACTION) or {}
+    names = declared.get("names") or ()
+    dataset_action_dim = len(names) or None
+    shape = declared.get("shape") or ()
+    if dataset_action_dim is None and shape:
+        dataset_action_dim = int(shape[0])
+
+    if checkpoint_action_dim is not None and dataset_action_dim is not None:
+        if checkpoint_action_dim != dataset_action_dim:
+            raise ValueError(
+                f"the checkpoint's action is {checkpoint_action_dim}-D but the "
+                f"recording dataset declares {dataset_action_dim} action feature(s) "
+                f"{list(names)}. The chain only knows 16 (no progress) and 17 "
+                f"(progress); the dataset's width is decided by "
+                f"`chain.model.has_progress` and the robot's own action features, "
+                f"so set `chain.model.has_progress` to match the checkpoint "
+                f"({'true' if checkpoint_action_dim == 17 else 'false'}) or point "
+                f"at the other checkpoint. Running on would load the normalizer at "
+                f"the wrong width."
+            )
+
+    loaded = _feature_dimension(
+        getattr(bundle.config, "output_features", None), ACTION
+    )
+    if loaded is not None and dataset_action_dim is not None:
+        if loaded != dataset_action_dim:
+            raise ValueError(
+                f"after make_policy the loaded config's action width is {loaded} "
+                f"but the recording dataset declares {dataset_action_dim}. "
+                f"make_policy is supposed to assign output_features FROM the "
+                f"dataset metadata, so these cannot disagree -- if they do, the "
+                f"assumption this package builds the 17th `progress` slot on no "
+                f"longer holds and the width has to be re-derived before a run."
+            )
+    logger.info(
+        f"chain: action width {dataset_action_dim} "
+        f"(checkpoint {checkpoint_action_dim}, loaded config {loaded})"
+    )
 
 
 def warm_up_bundle(bundle: PolicyBundle) -> bool:

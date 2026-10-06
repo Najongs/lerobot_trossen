@@ -59,18 +59,31 @@ MOCK_POLICY_SINE: str = "sine"
 # AND no departure. Its timeout reason names the second.
 MOCK_POLICY_PROGRESS: str = "progress"
 MOCK_POLICY_STUCK: str = "stuck"
+# `nan` behaves exactly like `progress` for _NAN_AFTER_TICKS ticks and then puts a
+# NaN in one arm joint, forever. It exists for ONE path: the finite-action gate
+# (finite_gate.py), which is the last thing between a policy's output and the
+# arms. There is no other way to exercise it end to end -- a NaN is produced by a
+# corrupted normalizer or an fp16 overflow, and neither is something a test can
+# arrange in a real checkpoint. The delay matters: the stage has to have started
+# normally, so that what the run shows is a chain BROKEN mid-stage rather than one
+# that never began.
+MOCK_POLICY_NAN: str = "nan"
 MOCK_POLICY_NAMES: tuple[str, ...] = (
     MOCK_POLICY_HOLD,
     MOCK_POLICY_SINE,
     MOCK_POLICY_PROGRESS,
     MOCK_POLICY_STUCK,
+    MOCK_POLICY_NAN,
 )
+# How many ticks `nan` runs cleanly before it emits one.
+_NAN_AFTER_TICKS: int = 4
 # Modes that write the progress slot. A dataset whose action does not declare
 # `progress` makes these indistinguishable from `hold`, which is why
 # make_mock_bundle says so out loud.
 MOCK_POLICY_PROGRESS_MODES: tuple[str, ...] = (
     MOCK_POLICY_PROGRESS,
     MOCK_POLICY_STUCK,
+    MOCK_POLICY_NAN,
 )
 
 # How long `progress` takes to ramp p from 0 to 1. Shorter than any stage's p10
@@ -203,7 +216,10 @@ class MockPolicy:
             values[self._sweep_index] = (
                 self._sweep_anchor + _SINE_AMPLITUDE_RAD * math.sin(phase)
             )
-        if self._mode == MOCK_POLICY_PROGRESS and self._sweep_index is not None:
+        if (
+            self._mode in (MOCK_POLICY_PROGRESS, MOCK_POLICY_NAN)
+            and self._sweep_index is not None
+        ):
             # DEPART, then hold. Anchored on the first frame after reset, like
             # the sine sweep and for the same reason: an offset added to the
             # current observation every frame integrates into an unbounded ramp,
@@ -214,8 +230,17 @@ class MockPolicy:
             values[self._sweep_index] = (
                 self._depart_anchor + _DEPART_RAD * fraction
             )
+        if (
+            self._mode == MOCK_POLICY_NAN
+            and self._sweep_index is not None
+            and self._step >= _NAN_AFTER_TICKS
+        ):
+            # The fault, after the stage has started normally. ONE joint, because
+            # that is what a single bad normalizer statistic produces, and it is
+            # the hardest case for a gate that only looked at the first value.
+            values[self._sweep_index] = float("nan")
         if self._progress_index is not None:
-            if self._mode == MOCK_POLICY_PROGRESS:
+            if self._mode in (MOCK_POLICY_PROGRESS, MOCK_POLICY_NAN):
                 # Tick-based, like the reset ramp: the loop's real rate is
                 # whatever the machine gives it, and a wall-clock ramp would
                 # make the test's timing depend on it.

@@ -7,7 +7,10 @@ sequence; nothing before step 12 (``robot.connect()``) can move the robot.
 """
 
 import logging
+import signal
+import threading
 from collections.abc import Sequence
+from typing import Any
 
 from lerobot.utils.constants import ACTION, OBS_STATE
 from lerobot.utils.control_utils import is_headless
@@ -37,15 +40,23 @@ from stage_runner.results import ABORTING_TERMINATORS, TrialOutcome
 # Re-check when an asset that DOES annotate units (a different robot, a
 # different acquisition) is mixed into the same chain.
 #
-# ACCEPTED RISK 2 (2026-09-08, decided) -- a hard kill leaves the base moving.
-# SIGKILL or a power cut skips the finally block in main(), and the base holds
-# its last velocity command indefinitely because it is velocity-controlled (the
-# arms are position-controlled, so "last command held" already means stopped
-# there). The prescription that would cover it is a command timeout in the base
-# firmware, which is not a layer this runner can add. P1's safety net is a
-# person standing beside the robot with the e-stop, and in P1 that person is the
-# operator running this command. Re-check when trials run unattended: repeated
-# trials with nobody present, or a remote demo.
+# ACCEPTED RISK 2 (2026-09-08, decided; NARROWED 2026-10-06) -- a hard kill
+# leaves the base moving. SIGKILL or a power cut skips the finally block in
+# main(), and the base holds its last velocity command indefinitely because it is
+# velocity-controlled (the arms are position-controlled, so "last command held"
+# already means stopped there). The prescription that would cover it is a command
+# timeout in the base firmware, which is not a layer this runner can add. P1's
+# safety net is a person standing beside the robot with the e-stop, and in P1
+# that person is the operator running this command. Re-check when trials run
+# unattended: repeated trials with nobody present, or a remote demo.
+#
+# NARROWED: SIGTERM and SIGHUP are no longer in it. They used to be -- Python
+# installs no handler for either, so the default disposition terminated the
+# interpreter without unwinding, the finally below never ran, and a dropped SSH
+# connection (SIGHUP) or an ordinary `kill` left the base driving on its last
+# policy velocity. :class:`SignalLatch` turns both into SystemExit so they take
+# the same teardown path as an exception. What remains accepted is SIGKILL,
+# SIGSTOP and power loss, none of which any in-process handler can reach.
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +79,219 @@ EXIT_BASE_STOP_FAILED: int = 3
 # columns.
 EXIT_CHAIN_FAILED: int = 4
 
+# The two signals that are an ORDERLY request to stop and that Python leaves on
+# their default, process-terminating disposition: SIGHUP (the SSH connection
+# dropped, or the terminal was closed) and SIGTERM (`kill`, a systemd stop, an
+# OOM-adjacent supervisor). Neither unwinds the stack, so without a handler the
+# `finally` in the trial body never runs and the base keeps its last velocity
+# command. SIGINT is deliberately NOT here: Python already maps it to
+# KeyboardInterrupt, which unwinds, and transitions.stop_base has a dedicated
+# path for it.
+_TRAPPED_SIGNALS: tuple[int, ...] = tuple(
+    number
+    for number in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None))
+    if number is not None
+)
+
+
+class SignalLatch:
+    """Turn SIGTERM/SIGHUP into ``SystemExit`` once, and flag the record loop.
+
+    TWO mechanisms, deliberately, because they cover different instants:
+
+    * ``events["stop_recording"] = events["exit_early"] = True`` -- the flags
+      ``record_loop`` reads at the top of its next iteration
+      (lerobot_record.py:343-344). This is the GRACEFUL path: the loop finishes
+      the tick it is in, returns, and the ordinary boundary (``stop_base``, the
+      stage_end emit) runs. The flags are set even for the second and later
+      deliveries, because they cost nothing and the loop may not have looked yet.
+    * ``raise SystemExit(128 + signum)`` -- for the instants where no record_loop
+      is running to read a flag: a cold HF download, ``robot.connect()``,
+      ``save_episode``'s video flush, the dataset creation. There the only way to
+      reach the teardown is to unwind, and SystemExit does that through
+      ``run_trial``'s ``except BaseException`` and ``cli``'s ``finally``.
+
+    RAISED ONLY ON THE FIRST DELIVERY. A second SIGTERM arriving while the
+    ``finally`` is zeroing the base and disconnecting would unwind OUT of the
+    teardown and leave the arms torqued -- which is the opposite of what the
+    operator asked for. After the first one the handler only re-sets the flags and
+    logs, so an impatient second `kill` cannot undo the first one's teardown. The
+    operator who needs the process gone NOW still has SIGKILL, and that is
+    ACCEPTED RISK 2 above.
+
+    MAIN-THREAD ONLY. ``signal.signal`` raises ``ValueError`` off the main thread,
+    which is where a test runner or an embedding caller may land, so
+    :meth:`install` reports False instead of killing the run; a run with no latch
+    is exactly the behaviour that existed before this class.
+    """
+
+    def __init__(self) -> None:
+        # The signal number of the FIRST delivery, or None. Also the "have I
+        # already raised" flag -- the two are the same fact.
+        self.signum: int | None = None
+        self.events: dict[str, bool] | None = None
+        self.installed: bool = False
+        # Set at the top of the teardown. After it the handler never raises --
+        # see :meth:`enter_teardown`.
+        self.tearing_down: bool = False
+        self._previous: dict[int, Any] = {}
+
+    @property
+    def tripped(self) -> bool:
+        return self.signum is not None
+
+    def bind_events(self, events: dict[str, bool]) -> None:
+        """Hand over the keyboard events dict once it exists.
+
+        It is created at step 11d, long after :meth:`install` runs -- the latch
+        has to be armed BEFORE the first byte of a checkpoint is downloaded, and
+        the dict does not exist then. Until this call the handler has only the
+        SystemExit half, which is the half that matters at that point anyway.
+        """
+        self.events = events
+        if self.signum is not None:
+            # A signal that arrived before the dict existed still has to stop the
+            # loop that is about to start.
+            self._set_flags()
+
+    def _set_flags(self) -> None:
+        if self.events is None:
+            return
+        # stop_recording, not just exit_early: exit_early alone is "this stage is
+        # done, go on to the next one", which would walk the robot through the
+        # remaining ten stages one tick at a time. stop_recording is what
+        # classify_termination turns into an ABORTING terminator so the runner
+        # breaks out of the stage loop.
+        self.events["stop_recording"] = True
+        self.events["exit_early"] = True
+
+    def enter_teardown(self) -> None:
+        """From here the handler only sets flags; it never raises.
+
+        Called at the TOP of the teardown. Without it the first delivery raises
+        wherever it lands, and that can be inside the teardown itself: cli's
+        ``finally`` wraps ``robot.disconnect()`` in ``except Exception``, which a
+        SystemExit is NOT, so a SIGTERM arriving between the ``try`` and the
+        base-zeroing inside ``disconnect()`` would escape and skip the rest of the
+        block -- the keyboard listener and the log close, and, worse, any later
+        hardware call. That is the failure this class exists to prevent, arriving
+        through this class.
+
+        Idempotent, and it does NOT stop the flags being set: a record_loop cannot
+        be running at this point, but the flags are what a wrapper around
+        ``run_trial`` would read.
+        """
+        self.tearing_down = True
+
+    def handle(self, signum: int, frame: Any) -> None:
+        first = self.signum is None and not self.tearing_down
+        if self.signum is None:
+            self.signum = int(signum)
+        self._set_flags()
+        name = signal.Signals(signum).name if hasattr(signal, "Signals") else signum
+        if not first:
+            logger.error(
+                f"{name} -- IGNORED as an exit request. The teardown "
+                "(base stop, disconnect) is already running or has already been "
+                "asked for, and unwinding out of it would leave the arms torqued. "
+                "SIGKILL if you must, and then check the base by hand."
+            )
+            return
+        logger.error(
+            f"{name} received: stopping the trial. The base will be zeroed and the "
+            "robot disconnected on the way out. If this was a dropped SSH "
+            "session, run under tmux or nohup next time."
+        )
+        raise SystemExit(128 + int(signum))
+
+    def install(self) -> bool:
+        """Trap the signals, EXCEPT any the parent process already set to SIG_IGN.
+
+        The exception is what makes ``nohup`` work. ``nohup`` starts the child with
+        SIGHUP set to ``SIG_IGN``, an ignored disposition survives ``exec``, and
+        the whole point is that the run SURVIVES the terminal going away. Taking
+        that over with a handler would make a dropped SSH session under nohup tear
+        the run down -- the opposite of what nohup was asked for, and of what this
+        repo's docs promise. Leaving an inherited SIG_IGN alone is the standard
+        convention for exactly this reason.
+
+        Under tmux there is no SIG_IGN to inherit and the handler installs
+        normally; tmux keeps the session alive by other means.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            return False
+        for number in _TRAPPED_SIGNALS:
+            try:
+                previous = signal.getsignal(number)
+                if previous is signal.SIG_IGN:
+                    logger.info(
+                        f"{signal.Signals(number).name} is already ignored by the "
+                        "parent process (this is what `nohup` does), so it is left "
+                        "that way -- the run is meant to survive it."
+                    )
+                    continue
+                self._previous[number] = previous
+                signal.signal(number, self.handle)
+            except (OSError, ValueError, RuntimeError):
+                self._previous.pop(number, None)
+                continue
+        self.installed = bool(self._previous)
+        # True for "this ran on the main thread", NOT for "something was
+        # trapped": an inherited SIG_IGN is a deliberate skip, and reporting it as
+        # a failure would make main() print the off-main-thread warning at every
+        # nohup start.
+        return True
+
+    def restore(self) -> None:
+        """Put the previous dispositions back. Called from ``main``'s finally.
+
+        Not cosmetic: ``cli.main`` is called repeatedly in-process by the e2e
+        tests and by any batch wrapper, and a handler left pointing at a dead
+        latch would raise SystemExit for a signal the NEXT run has not seen.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for number, previous in self._previous.items():
+            if previous is None:
+                continue
+            try:
+                signal.signal(number, previous)
+            except (OSError, ValueError, RuntimeError):
+                continue
+        self._previous.clear()
+        self.installed = False
+
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Install the signal latch, run one trial, and restore the handlers.
+
+    Thin on purpose: everything that was ``main`` is :func:`run_trial_process`,
+    and this wrapper exists so the latch is armed BEFORE the first statement that
+    can block for a long time (a cold ``snapshot_download``) and restored on every
+    path out, including the SystemExit the latch itself raises.
+
+    ⚠️ RUN THIS UNDER tmux OR nohup. The latch makes a dropped SSH session
+    (SIGHUP) reach the teardown instead of killing the process where it stands,
+    but reaching the teardown still takes a second or two of base-zeroing and
+    disconnecting, and a session that dies mid-stage is not a clean end of run.
+    The way to end a run is Esc at the keyboard.
+    """
+    latch = SignalLatch()
+    if not latch.install():
+        logger.warning(
+            "SIGTERM/SIGHUP handlers were NOT installed: signal.signal() only "
+            "works on the main thread, and this is not it. A `kill` will skip the "
+            "teardown and may leave the base driving on its last command."
+        )
+    try:
+        return run_trial_process(argv, latch)
+    finally:
+        latch.restore()
+
+
+def run_trial_process(
+    argv: Sequence[str] | None = None, latch: "SignalLatch | None" = None
+) -> int:
     """Run one trial and return a process exit code.
 
     0 on a clean run, 1 when a stage terminated in an aborting way (operator
@@ -222,13 +444,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 preflight.checkpoint_action_dimension(chain_policy_config),
                 preflight.robot_action_dimension(robot),
             )
+            # BOTH must say so, and they must agree (2026-10-06, codex 교차검토
+            # [경미]10). `null` used to mean "derive it from the checkpoint", and
+            # the derivation is correct -- but it made the YAML silent about the
+            # single fact that decides whether the recording dataset gets a 17th
+            # action feature, which in turn decides at what width the normalizer
+            # loads. A config file that does not say which model it is cannot be
+            # read later to find out which model ran, and the resolved snapshot
+            # records the derived value without recording that it was derived.
+            # So: the key is REQUIRED, the width is still the fact, and a
+            # disagreement is a refusal rather than a quiet win for either side.
             declared = cfg.chain.model.has_progress
-            if declared is not None and declared != bool(extra_action_names):
+            if declared is None:
+                raise PreflightError(
+                    "`chain.model.has_progress` is null. It must be stated "
+                    f"explicitly: this checkpoint's action width says "
+                    f"{bool(extra_action_names)} "
+                    f"({'17-D, progress' if extra_action_names else '16-D, no progress'}), "
+                    "so set it to that. The key is what makes the YAML say which "
+                    "of the two models a run was -- deriving it silently left the "
+                    "one fact that sizes the normalizer out of the config."
+                )
+            if bool(declared) != bool(extra_action_names):
                 raise PreflightError(
                     f"`chain.model.has_progress: {declared}` but the checkpoint's "
                     f"action width says {bool(extra_action_names)}. The width is "
-                    "the fact; set the key to null to take it from the checkpoint, "
-                    "or point at the other checkpoint."
+                    "the fact; fix the key, or point at the other checkpoint."
                 )
             logger.info(
                 f"chain: checkpoint action is "
@@ -304,6 +545,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         #    no listener of our own, so the terminator classifier reads the
         #    flags core leaves behind.
         listener, keyboard_events = record_adapter.make_keyboard_events()
+        # The signal latch's graceful half. From here a SIGTERM/SIGHUP sets the
+        # same flags Esc does, so a record_loop that is running breaks out at the
+        # top of its next iteration and the ordinary boundary (stop_base, the
+        # stage_end emit) runs -- instead of the stack unwinding mid-stage.
+        if latch is not None:
+            latch.bind_events(keyboard_events)
 
         # e (chain only). The monitor needs the keyboard events dict, which is
         #   created HERE and not with the processors in (a) -- that ordering is
@@ -311,6 +558,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         #   installed after both exist. Installing it into robot_action (not
         #   teleop_action) matters: teleop_action is the pipeline the dataset's
         #   ACTION features were derived from in (b).
+        #
+        # f. THE FINITE GATE, appended AFTER the monitor so the monitor still sees
+        #    what the model produced (a NaN in the action is exactly the thing it
+        #    must go blind on rather than judge) while the robot receives the hold.
+        #    ONE installation covers the POLICY stages and the RESET ramps both:
+        #    all three executors drive record_loop with this same
+        #    `context.processors`, including `chain.reset.only`.
+        #
+        #    NOT installed for a version 1 (non-chain) run, deliberately: version 1
+        #    is the smoke path, its one production use is a single hand-driven
+        #    stage, and `tripped` is wired to EXIT_CHAIN_FAILED, which means
+        #    nothing there. If a version 1 config is ever used on the robot again,
+        #    this is the line to move out of the `if`.
+        finite_gate = None
         chain_runtime = None
         if cfg.chain.enabled:
             from stage_runner.completion import CompletionMonitorStep
@@ -332,6 +593,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 onehot=onehot_step,
                 onehot_k=cfg.chain.model.onehot_k,
                 allow_manual_complete=cfg.chain.completion.allow_manual_complete,
+            )
+            from stage_runner.finite_gate import FiniteActionGateStep
+
+            finite_gate = FiniteActionGateStep(keyboard_events)
+            record_adapter.install_action_monitor(processors, finite_gate)
+            logger.info(
+                "chain: finite-action gate installed at the end of "
+                "robot_action_processor. A non-finite action is replaced by a hold "
+                "and ends the run -- lerobot's clamp lets NaN through, because "
+                "every comparison with NaN is False."
             )
 
         # Upstream record() calls this before its record_loop; we do not go
@@ -407,6 +678,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             # afterwards (a camera teardown on a camera that never opened) is
             # swallowed here, because it arrives strictly after the base is
             # zeroed.
+            # FIRST STATEMENT of the teardown, before anything touches hardware:
+            # from here a SIGTERM/SIGHUP only sets flags. Raising SystemExit into
+            # this block would escape the `except Exception` below (SystemExit is
+            # not an Exception) and skip the rest of it -- including, if the signal
+            # landed between the `try` and disconnect()'s own
+            # base.set_cmd_vel(0.0, 0.0), the call that stops the base.
+            if latch is not None:
+                latch.enter_teardown()
             try:
                 robot.disconnect()
             except Exception:
@@ -434,6 +713,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     # bucket a batch script retries.
     if not outcome.base_is_stopped:
         return EXIT_BASE_STOP_FAILED
+    if finite_gate is not None and finite_gate.tripped:
+        # BEFORE the abort check, and this is the only reason the gate exposes
+        # `tripped` at all. The gate stops the run by setting the SAME flags Esc
+        # sets, so without this line every NaN would be reported as exit 1 -- the
+        # bucket an operator reads as "I pressed Esc" and a batch script reads as
+        # "not a measurement, nobody's fault". It is a chain failure: the model
+        # emitted a number that cannot be sent to a robot.
+        logger.error(
+            f"the chain was stopped by the finite-action gate: "
+            f"{finite_gate.trips} non-finite action(s), first at "
+            f"{list(finite_gate.tripped_keys)}. The robot was sent a hold, not the "
+            "NaN. Check the checkpoint's normalizer stats and whether anything is "
+            "running in fp16 (README:359) before the next run."
+        )
+        return EXIT_CHAIN_FAILED
     if any(result.terminated_by in ABORTING_TERMINATORS for result in outcome.results):
         return EXIT_ABORTED
     if outcome.chain_failed:

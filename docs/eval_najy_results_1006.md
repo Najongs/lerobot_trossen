@@ -393,6 +393,14 @@ DGX 세션이 10/06 저녁에 한 것(배경·근거는 sim 레포 `docs/mobile_
 - 추종 오차(`stall_track_rad` 0.08)와 움직임(`stall_arm_rad` 0.05) 노브 분리 · 리셋 도달은 창 90% 비율 · 리셋 중 `→` 는 `manual_interrupt` 로 기록(체인은 실패) · 리셋 상한 3× · 앙상블 계수 게이트가 러너 안에도 있음(그래도 **`scripts/eval_chain.sh` 로만 띄운다**).
 - bring-up ② 는 `max_jump_rad` 기본 1.5 그대로. ②·③ 을 건너뛰고 ⑤ 로 가지 않는다 — 경계 리셋은 어떤 시연에도 없는 관절공간 직선이다.
 
+### codex 교차 검토 반영 (10/06 밤 2차, 머지) — 로봇 PC 가 알아야 할 것
+- **환경변수는 `=1` 만** (`true/yes/on` 도 1 로 받지만 그 밖의 값은 exit 2). 고치기 전엔 `DRY_RUN=true` 가 꺼진 것으로 처리돼 실제 로봇이 돌았다.
+- **tmux/nohup 아래에서 띄운다** — SIGTERM/SIGHUP(SSH 끊김)을 받으면 루프를 정상 경계로 빠져나와 stop_base → disconnect 까지 간다(핸들러 추가). nohup 의 SIGHUP 무시는 존중한다.
+- **정지 로그를 믿지 말 것**: 경계마다 `stop_base` 가 베이스 0 을 한 번 더 직접 보내고 결과를 `stop_base_direct_ok` 로 남긴다. **베이스가 눈에 보이게 멈춰 있는데 `false` 가 뜨면** 확인 호출이 시리얼과 경합하는 것[추정] — 멈추고 보고(모든 회차가 exit 3 으로 끝나게 됨).
+- 팔 action 에 NaN/Inf 가 나오면 그 틱은 hold(현재 자세·베이스 0)로 대체하고 체인을 끊는다(exit 4). events 에는 사람 중단과 같은 `stop_recording` 으로 보이니 **종료 코드로 구분**.
+- 출발 래치는 연속 3틱, 도달은 창 90% + 마지막 틱 tol 안, 완료 판정은 NaN 을 증거로 안 씀, 임계값은 preflight 가 범위 검사. `has_progress` 는 YAML 에 **명시 필수**(TPH true · M1 false) — 16D 허브 id 를 `*/*` 로 주면 TPH YAML 이 거부한다.
+- 상세: `docs/eval_najy.md` G절 「띄우기 전에 — 10/06 교차검토로 바뀐 네 가지」, `README.md` Stage Chaining, `configs/chain/README.md`.
+
 ### 바뀐 것·주의
 - `pose_guide` 의 `POSE task0N` 목표: `TARGETS_DEG`(쌍봉 분포의 중앙값, t02·03·04·05·10 은 시연에 없는 자세)는 **체인 러너에서는 쓰지 않고** `stage_params.json` 의 지정 자세를 쓴다. `eval_najy.sh`(lerobot-record) 회차에서도 같은 목표를 쓰게 하는 변경은 다음 커밋(DGX).
 - task06 단계 파라미터(p10/p50/p90 31.5/36.7/47.2 s, 시작 자세)는 **새 데이터셋의 전체 과제 에피소드(task_index 0)** 기준. 체인에서 단계 6 은 「잡기→이동」 전체다.

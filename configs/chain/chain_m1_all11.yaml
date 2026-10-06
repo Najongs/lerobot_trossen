@@ -94,9 +94,9 @@ chain:
     onehot_k: 11
     # 10/02 에 확정된 exec. 체크포인트 chunk(30) 이하여야 한다.
     n_action_steps: 30
-    # false 로 **명시**한다. null 로 두면 체크포인트에서 16 을 읽어 같은 결론에
-    # 이르지만, 참조군이 16D 라는 것은 설정이 말해야 하는 사실이다 -- 어긋나면
-    # preflight 가 거부한다.
+    # false 로 **명시**한다. 명시가 **필수**다 (10/06) — null 은 거부된다.
+    # 체크포인트에서 16 을 읽어 같은 결론에 이르더라도, 참조군이 16D 라는 것은
+    # 설정이 말해야 하는 사실이고 어긋나면 preflight 가 거부한다.
     has_progress: false
 
   completion:

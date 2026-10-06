@@ -614,6 +614,16 @@ class ResetPolicy:
         MEASURED: the window must be FULL (``settle_ticks`` answers present)
         before arrival can be declared, so this never shortens the settle time,
         it only tolerates up to 10% of it being outside tol.
+
+        AND THE LAST SAMPLE MUST BE INSIDE TOL (added 2026-10-06, codex 교차검토
+        [중요]6). The ratio alone is a statement about the window and says nothing
+        about NOW: 19 of 21 inside tol with the two misses at the END is an arm
+        that was settled and has just started to drift, and `reached` is the
+        signal that releases the arm to the next stage's policy. The order the
+        ratio throws away is exactly the part that distinguishes "it has settled"
+        from "it is leaving". It costs nothing in the case the ratio exists for --
+        a glitch in the middle of the window still arrives on the same tick -- and
+        delays arrival by at most one tick when the newest sample is the bad one.
         """
         if self.tick < self.plan.ticks:
             # Still ramping. Arrival is only meaningful once the trajectory has
@@ -632,14 +642,19 @@ class ResetPolicy:
             return
         inside = sum(1 for value in window if value)
         needed = math.ceil(ARRIVAL_WINDOW_RATIO * len(window))
-        if inside >= needed and not self.reached:
+        # window[-1] is the tick just appended, i.e. `worst < tol_rad` for THIS
+        # tick. Named through the window rather than re-tested so there is one
+        # definition of "inside tol" in this method.
+        latest_inside = bool(window[-1])
+        if inside >= needed and latest_inside and not self.reached:
             self.reached = True
             self.events["exit_early"] = True
             logger.info(
                 f"reset before stage {self.plan.stage_number} reached: worst joint "
                 f"error {worst:.4f} rad, {inside}/{len(window)} of the last "
                 f"{self.plan.settle_ticks} ticks within tol "
-                f"{self.settings.tol_rad:.3f} (needed {needed}); "
+                f"{self.settings.tol_rad:.3f} (needed {needed}) AND the newest "
+                f"sample inside it; "
                 f"{self.tick} ticks total, T={self.plan.duration_s:.2f}s"
             )
 
