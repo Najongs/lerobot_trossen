@@ -186,7 +186,7 @@ def load_bundles(
 
 def load_chain_bundles(
     stages: Sequence[StageConfig],
-    policy_config: PreTrainedConfig,
+    policy_config: PreTrainedConfig | None,
     dataset_meta: LeRobotDatasetMetadata,
     *,
     onehot_k: int | None,
@@ -221,7 +221,7 @@ def load_chain_bundles(
     never reach that import -- it is the rule that keeps this package testable
     off the robot (CLAUDE.md 실기 안전).
     """
-    if n_action_steps is not None:
+    if n_action_steps is not None and policy_config is not None:
         previous = getattr(policy_config, "n_action_steps", None)
         policy_config.n_action_steps = int(n_action_steps)
         logger.info(
@@ -237,11 +237,31 @@ def load_chain_bundles(
         )
     policy_path = next(iter(policy_paths), "")
 
-    bundle = load_bundle(
-        stage_id="chain", policy_path=policy_path, policy_config=policy_config,
-        dataset_meta=dataset_meta,
-    )
-    bundle = replace(bundle, warmed_up=warm_up_bundle(bundle))
+    if policy_path.startswith(MOCK_POLICY_SCHEME):
+        # The hardware-free chain. No checkpoint exists, so there is nothing to
+        # load, nothing to warm and -- crucially -- no config.json whose
+        # observation.state width the one-hot step could be validated against,
+        # which is why onehot_k is refused for a mock path (preflight says the
+        # same thing with an actionable message).
+        from stage_runner.mock_policy import make_mock_bundle
+
+        if onehot_k:
+            raise ValueError(
+                f"chain.model.policy_path {policy_path!r} is a mock and "
+                f"chain.model.onehot_k is {onehot_k}. The one-hot step asserts "
+                "the checkpoint declares a 16+K state, and a mock declares "
+                "whatever the dataset does -- so installing it would assert "
+                "nothing. Set onehot_k: null for a mock chain."
+            )
+        bundle = make_mock_bundle("chain", policy_path, dataset_meta)
+    else:
+        bundle = load_bundle(
+            stage_id="chain",
+            policy_path=policy_path,
+            policy_config=policy_config,
+            dataset_meta=dataset_meta,
+        )
+        bundle = replace(bundle, warmed_up=warm_up_bundle(bundle))
 
     onehot = None
     if onehot_k:

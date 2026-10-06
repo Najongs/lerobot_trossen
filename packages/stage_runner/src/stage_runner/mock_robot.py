@@ -34,6 +34,32 @@ MOCK_ROBOT_TYPE: str = "stage_runner_mock_robot"
 # it, which is a different module's business.
 _JOINT_SEED_STEP_RAD: float = 0.1
 
+# The 14 names MobileAIRobot emits, in its order: each arm is 6 joints plus the
+# gripper carriage, prefixed by side (BiWidowXAIFollowerRobot.observation_features
+# builds `f"left_{key}"` / `f"right_{key}"` over
+# WidowXAIFollowerConfig.joint_names, whose last entry is "left_carriage_joint"
+# for BOTH arms -- hence "right_left_carriage_joint", which looks like a typo and
+# is not).
+#
+# The 12 the chain resets are the `_joint_` ones; the two carriages are the
+# grippers and are held, not interpolated.
+REALISTIC_JOINT_NAMES: tuple[str, ...] = (
+    "left_joint_0",
+    "left_joint_1",
+    "left_joint_2",
+    "left_joint_3",
+    "left_joint_4",
+    "left_joint_5",
+    "left_left_carriage_joint",
+    "right_joint_0",
+    "right_joint_1",
+    "right_joint_2",
+    "right_joint_3",
+    "right_joint_4",
+    "right_joint_5",
+    "right_left_carriage_joint",
+)
+
 
 @RobotConfig.register_subclass(MOCK_ROBOT_TYPE)
 @dataclass
@@ -41,6 +67,21 @@ class MockRobotConfig(RobotConfig):
     # 14 = the two 7-joint WidowXAI arms of the Mobile AI kit, so the smoke
     # path's state/action dimensions match the real asset without hardware.
     joint_count: int = 14
+    # Use the REAL Mobile AI joint names instead of joint_0..joint_N-1.
+    #
+    # The chain needs them. Its reset targets, its completion monitor and its
+    # stage_params.json are all keyed by NAME -- deliberately, because index
+    # assumptions are the documented data-layout hazard on this rig (16-D real
+    # recordings are [left7, right7, x.vel, theta.vel] while the MuJoCo teleop
+    # layout puts the base first, and mixing them matches the dimension and is
+    # quietly wrong). A flat joint_0..13 mock therefore cannot exercise any of
+    # it: every name lookup would miss.
+    #
+    # Off by default so the inherited version 1 smoke config keeps the names its
+    # frozen assertions were written against. Only honoured at joint_count 14,
+    # because the real arm pair IS 14 and there is no sensible 8-joint subset of
+    # a name list that means "left arm plus right arm".
+    realistic_joint_names: bool = False
     # Same meaning as MobileAIRobotConfig.include_base_in_state: dropping the
     # base from the observation shortens observation.state but NOT the action.
     # Reproduced here because that asymmetry is what preflight's separate state
@@ -84,8 +125,11 @@ class MockRobot(Robot):
     @property
     def _joint_names(self) -> list[str]:
         # Flat joint_0..joint_N-1 rather than the real left_/right_ prefixes:
-        # nothing in the runner parses arm membership, only the ".pos" suffix
-        # and the dimension count, and a flat list keeps joint_count honest.
+        # nothing in the version 1 runner parses arm membership, only the ".pos"
+        # suffix and the dimension count, and a flat list keeps joint_count
+        # honest.
+        if self.config.realistic_joint_names and self.config.joint_count == 14:
+            return list(REALISTIC_JOINT_NAMES)
         return [f"joint_{index}" for index in range(self.config.joint_count)]
 
     @property

@@ -157,7 +157,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Step 7. Fetches config.json only. It has to happen before
         # make_policy, which overwrites output_features from ds_meta and
         # destroys the checkpoint's own recorded dimensions.
-        if cfg.chain.enabled:
+        if cfg.chain.enabled and cfg.chain.model.policy_path.startswith(
+            policies.MOCK_POLICY_SCHEME
+        ):
+            # The hardware-free chain: no config.json exists anywhere, so the
+            # dimension gate has nothing to compare and the action width cannot
+            # be read from a checkpoint. `chain.model.has_progress` therefore
+            # becomes REQUIRED rather than optional -- defaulting it would make a
+            # mock chain silently 16-D, and the progress mock would degrade to
+            # `hold` with nothing in the log pointing at the config.
+            policy_configs = {}
+            if cfg.chain.model.has_progress is None:
+                raise PreflightError(
+                    f"`chain.model.policy_path: {cfg.chain.model.policy_path}` is a "
+                    "mock, so there is no checkpoint to read the action width "
+                    "from. Set `chain.model.has_progress` explicitly (true for a "
+                    "17-D chain, false for a 16-D one)."
+                )
+            preflight.check_chain_definitions(cfg, chain_params)
+        elif cfg.chain.enabled:
             # ONE config object for the one checkpoint, shared by every policy
             # stage. load_policy_configs deliberately gives two stages sharing a
             # path two OBJECTS, because make_policy mutates in place -- but that
@@ -180,7 +198,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Step 8. Dimensions, manual-terminator reachability, dataset name.
         preflight.run_preflight(cfg, robot, policy_configs)
 
-        if cfg.chain.enabled:
+        if cfg.chain.enabled and chain_policy_config is None:
+            # Mock chain: the YAML is the only source, and it was required above.
+            extra_action_names = (
+                (preflight.PROGRESS_ACTION_NAME,)
+                if cfg.chain.model.has_progress
+                else ()
+            )
+        elif cfg.chain.enabled:
             # STRICTLY BEFORE make_policy: it overwrites output_features from
             # the dataset, after which the checkpoint's own action width is
             # unrecoverable. The answer decides whether the recording dataset

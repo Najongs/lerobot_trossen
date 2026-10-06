@@ -51,6 +51,28 @@ EXECUTORS_WITHOUT_CHECKPOINT: frozenset[str] = frozenset({EXECUTOR_CHAIN_RESET})
 # check that decides whether to declare it.
 PROGRESS_ACTION_NAME: str = "progress"
 
+# Matches policies.MOCK_POLICY_SCHEME. Duplicated rather than imported for the
+# reason the whole module is: `policies` pulls lerobot.policies.factory and so
+# torch into the gate that has to run before anything heavy loads.
+_MOCK_POLICY_SCHEME: str = "mock://"
+
+
+def runs_only_mock_policies(config: StageRunnerConfig) -> bool:
+    """True when no stage loads a real checkpoint.
+
+    Several gates mean something different on this path -- there is no
+    checkpoint to compare dimensions against, nothing is energised, and nothing
+    can run away -- so it is named once here instead of being re-derived at each
+    one. `check_dataset_name` already had its own copy of this question and
+    keeps it, because it needs the policy_configs mapping rather than the config.
+    """
+    paths = [stage.policy_path for stage in config.stages if stage.policy_path]
+    if config.chain.enabled and config.chain.model.policy_path:
+        paths.append(config.chain.model.policy_path)
+    return bool(paths) and all(
+        path.startswith(_MOCK_POLICY_SCHEME) for path in paths
+    )
+
 
 class PreflightError(RuntimeError):
     """A startup check refused the run. cli.main turns this into exit code 2."""
@@ -506,6 +528,16 @@ def check_chain_definitions(config: StageRunnerConfig, params) -> None:
             "`chain.model.policy_path` is empty. One checkpoint runs all 11 "
             "stages; there is no per-stage path."
         )
+    elif chain.model.policy_path.startswith(_MOCK_POLICY_SCHEME) and chain.model.onehot_k:
+        problems.append(
+            f"`chain.model.policy_path: {chain.model.policy_path}` is a mock and "
+            f"`chain.model.onehot_k: {chain.model.onehot_k}`. The one-hot step "
+            "asserts that the CHECKPOINT declares a 16+K observation.state, and "
+            "a mock declares whatever the dataset does -- so installing it would "
+            "assert nothing while looking like it had. Set `onehot_k: null` for a "
+            "mock chain; the one-hot wiring is covered by the unit test against "
+            "task_onehot_patch.py."
+        )
     if not 1 <= chain.from_stage <= chain.to_stage:
         problems.append(
             f"`chain.from_stage: {chain.from_stage}` / `chain.to_stage: "
@@ -631,6 +663,17 @@ def check_manual_terminator_is_reachable(config: StageRunnerConfig) -> None:
         "Run from a session where the arrow keys reach the listener, or give the "
         "stage `terminator: {type: timeout, timeout_s: <seconds>}`."
     )
+    if config.chain.enabled and runs_only_mock_policies(config):
+        # A mock chain has no robot: nothing is energised, nothing can run away,
+        # and an unreachable keyboard costs a test run rather than an
+        # unsupervised rollout. Skipping the gate here is what lets the
+        # end-to-end chain test run over ssh on a machine with no display --
+        # which is the only environment this package is developed in.
+        logger.info(
+            "every stage runs a mock policy, so the keyboard-reachability gate "
+            "is skipped: there is no robot to stop"
+        )
+        return
     if config.chain.enabled:
         # UNCONDITIONAL for a chain, whatever the terminators say. Esc is the
         # ONLY human input a chain has: there is no inter-episode teleop reset

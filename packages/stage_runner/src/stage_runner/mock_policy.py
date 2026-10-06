@@ -23,6 +23,8 @@ import torch
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.utils.constants import ACTION, OBS_STATE
 
+from stage_runner.completion import PROGRESS_KEY
+
 if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 
@@ -32,7 +34,36 @@ logger = logging.getLogger(__name__)
 
 MOCK_POLICY_HOLD: str = "hold"
 MOCK_POLICY_SINE: str = "sine"
-MOCK_POLICY_NAMES: tuple[str, ...] = (MOCK_POLICY_HOLD, MOCK_POLICY_SINE)
+# The two chain modes. Both HOLD the arms -- a chain's motion comes from the
+# resets, and a mock that also swept a joint could not satisfy the completion
+# monitor's stall window, so the two failures would be inseparable.
+#
+# `progress` ramps the 17th action slot 0 -> 1 and holds 1: the monitor's
+# positive path (p held AND stalled AND past p10).
+# `stuck`    leaves it at 0.0 forever: the monitor NEVER fires, the stage runs
+#            to p90 x timeout_factor, and the chain fails. This is the only way
+#            to exercise the failure path without a real policy that refuses to
+#            finish -- which, per §93, M1 actually does on t04.
+MOCK_POLICY_PROGRESS: str = "progress"
+MOCK_POLICY_STUCK: str = "stuck"
+MOCK_POLICY_NAMES: tuple[str, ...] = (
+    MOCK_POLICY_HOLD,
+    MOCK_POLICY_SINE,
+    MOCK_POLICY_PROGRESS,
+    MOCK_POLICY_STUCK,
+)
+# Modes that write the progress slot. A dataset whose action does not declare
+# `progress` makes these indistinguishable from `hold`, which is why
+# make_mock_bundle says so out loud.
+MOCK_POLICY_PROGRESS_MODES: tuple[str, ...] = (
+    MOCK_POLICY_PROGRESS,
+    MOCK_POLICY_STUCK,
+)
+
+# How long `progress` takes to ramp p from 0 to 1. Shorter than any stage's p10
+# in tests/data/stage_params_mock.json, so the ramp is never what the completion
+# is waiting for -- the stall window and the p10 floor are.
+_PROGRESS_RAMP_S: float = 0.2
 
 # Small and slow on purpose: the smoke stages are one second long, and a sweep
 # large enough to be visible per frame would look like a runaway command in the
@@ -104,6 +135,15 @@ class MockPolicy:
             (index for index, name in enumerate(action_names) if name.endswith(".pos")),
             None,
         )
+        # The 17th slot, when the dataset declares it. None means the action is
+        # 16-D, and then `progress` / `stuck` behave exactly like `hold` --
+        # make_mock_bundle warns, because a chain test that silently lost its
+        # progress signal would look like a monitor bug.
+        self._progress_index: int | None = (
+            list(action_names).index(PROGRESS_KEY)
+            if PROGRESS_KEY in action_names
+            else None
+        )
         self._step = 0
         self._sweep_anchor: float | None = None
 
@@ -132,6 +172,15 @@ class MockPolicy:
             values[self._sweep_index] = (
                 self._sweep_anchor + _SINE_AMPLITUDE_RAD * math.sin(phase)
             )
+        if self._progress_index is not None:
+            if self._mode == MOCK_POLICY_PROGRESS:
+                # Tick-based, like the reset ramp: the loop's real rate is
+                # whatever the machine gives it, and a wall-clock ramp would
+                # make the test's timing depend on it.
+                ramp_ticks = max(1, round(_PROGRESS_RAMP_S * self._fps))
+                values[self._progress_index] = min(1.0, self._step / ramp_ticks)
+            elif self._mode == MOCK_POLICY_STUCK:
+                values[self._progress_index] = 0.0
         self._step += 1
         # [1, action_dim]: make_robot_action squeezes the batch dimension back
         # off and zips what is left against ds_features[ACTION]["names"].
@@ -191,6 +240,14 @@ def make_mock_bundle(
         mode=mode,
         fps=dataset_meta.fps,
     )
+    if mode in MOCK_POLICY_PROGRESS_MODES and PROGRESS_KEY not in action_names:
+        logger.warning(
+            f"Stage '{stage_id}' asks for mock policy '{mode}', but the dataset's "
+            f"action does not declare '{PROGRESS_KEY}' ({len(action_names)}-D). "
+            f"The mode degrades to '{MOCK_POLICY_HOLD}' and no progress signal is "
+            "produced -- set chain.model.has_progress: true so "
+            "record_adapter.build_dataset_features declares the 17th feature."
+        )
     logger.info(
         f"Stage '{stage_id}' uses mock policy '{mode}' "
         f"({len(state_names)}-dim state -> {len(action_names)}-dim action)"
