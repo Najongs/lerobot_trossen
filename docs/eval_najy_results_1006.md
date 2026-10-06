@@ -212,6 +212,33 @@ M1 에 관측을 직접 넣고(27D state = 팔 14 + 0 0 + 원핫, 패치와 같�
 - 요약 파일에 `팔 한 틱 상한에 잘린 틱` 수가 찍힌다 (로그의 `had to be clamped` 경고 수).
 - 팀 명령에 있던 `temporal_ensemble_coeff=0.05`·`n_action_steps=1` 은 넣지 않았다 — exec 30 확정(10/02), 「앙상블 필수」 는 철회된 규칙(CLAUDE.md 「낡은 것」).
 
+## DGX_1 → Trossen PC1 요청 (10/06 저녁, DGX 세션)
+
+위 「1호기로 넘기는 것」 을 받았다. 1번(원핫이 약한 이유)은 DGX 에서 답했다 — sim 레포 `docs/mobile_base_investigation.md` **§89**:
+인접 단계 경계 10곳 중 9곳에서 원핫은 단계를 고르지 않는다(M1·M2 두 시드, 유일한 예외는 이동→조작 t01→t02).
+대책은 task04/05 전용이 아니라 일반적이어야 하고, 2호기에 후속 셋(T8 증강 대조·fps 데이터 단서·장면 유사도 행렬)을 넘겼다.
+2·3번은 로봇 PC 쪽 자료가 있어야 한다. 아래 셋을 부탁한다 — **①이 가장 급하다.** 전부 로봇을 움직이지 않는 일이다.
+
+### ① 1006 회차 원자료 전송 (사람, `eval_najy.md` 「결과 넘기기」 명령 그대로)
+- 데이터셋 4개: `~/.cache/huggingface/lerobot/kiroaiseoul/eval_najy_1006_{1038_base_t05_e100, 1054_m1_t05_e30, 1126_m1_t01_e30, 1156_m3_t01_e30}`
+  → DGX `/raid/kiro-ai/eval/real/datasets/`. 허브에는 1002 회차 8개만 있고 1006 회차는 없다(DGX 에서 확인, `push_to_hub=false`).
+- 로그: `~/eval_logs/1006_*` (전체 로그·basevel.csv·results.csv) → `/raid/kiro-ai/eval/real/`
+- scp 가 안 되면 대안: 로봇 PC 에서 허브로 올리고 DGX 가 받는다 (private 로).
+  `uv run python -c "from lerobot.datasets.lerobot_dataset import LeRobotDataset as D; D('kiroaiseoul/eval_najy_1006_1126_m1_t01_e30').push_to_hub(private=True)"`
+  (lerobot 0.4.4 시그니처 `push_to_hub(branch, tags, license, tag_version, push_videos, private, …)` — DGX 의 0.4.4 소스에서 확인, 로봇 PC 에서 실행은 안 해 봤다)
+- DGX 가 이걸로 할 것: (a) 1126 ep0 프레임을 M1 에 넣어 11단계 시연 중 어느 쪽 팔 동작을 내는지(`stage_nearness` 를 11단계로) — 「장면을 다른 단계로 읽었다」 [추정] 의 확인,
+  (b) 1126·1156 cam_high 시작 프레임을 학습 task01 시작 프레임 100개와 비교해 장면 차이를 정량화(랙 위치·방향), (c) 1054 t05 프레임에 원핫 11개를 전부 바꿔 넣어 §89 와 같은 둔감함이 실기 프레임에서도 나오는지.
+
+### ② 녹화 주기 — 표기 30 fps 인가 실제 약 21 Hz 인가 (로그 찾기)
+- 학습 데이터 task01~11 을 녹화한 PC 의 로그에 `Control loop rate over last … (phase=teleop …) mean=… Hz` 줄이 남아 있으면 **데이터셋별 mean 하나씩** 보내 달라.
+  로그가 없으면: 녹화 명령의 `--dataset.fps` 값, 녹화 당시 `LEROBOT_LOOP_HZ_LOG` 가 켜져 있었는지, 수집자의 기억(루프가 30 을 냈는지).
+- 왜: 이동 단계 기준치(task03 −57° vs −81°, task01 1.15 m vs 1.64 m)가 1.43배 갈린다. 2호기가 데이터 자체(timestamp 합성 여부·mp4 fps)로 같은 것을 재지만 녹화 로그가 더 결정적이다.
+
+### ③ 사람 관찰을 글로 (results.csv 또는 이 문서)
+- task01 두 회차(1126·1156): 시작할 때 **랙이 로봇의 어느 쪽·대략 몇 m** 였나, 로봇이 **실제로 어느 쪽으로 돌았나**(위에서 봤을 때 시계/반시계), 시연 수집 때 시작 위치 규약이 있었나(고정 위치였나).
+- **θ 부호 규약**: 시연의 「+57°」 가 위에서 봤을 때 어느 쪽 회전인지(수집자). M3 의 −115° 가 「반대 방향으로 돌았다」 인지 「같은 방향인데 기록 부호가 반대」 인지 이걸로 갈린다 — 후자면 측정 코드 문제다.
+- task03 이후 회차는 ①에 포함돼 오면 되므로 따로 필요한 것 없다. 회차가 끝날 때마다 commit·push 해 두면 DGX 가 바로 받는다.
+
 ## 다음
 
 사람 결정(10/06): 원핫(임베딩)으로 단계를 고르는 것이 목표였으므로, 시작 자세로 단계를 맞추는 방식은 채택하지 않는다 —
@@ -222,3 +249,4 @@ task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 C-3 은
    task01 두 회차가 모두 장면 의심이므로, 가능하면 시연 영상의 첫 프레임(`~/.cache/huggingface/lerobot/kiroaiseoul/task03_turn_to_face_beaker/videos/…/cam_high`)을 한 장 보고 로봇을 놓는다.
    그 뒤 task06(전진 0.39 m)·task10(전진 0.95 m)
 3. 보류: C-3 (M2 task05). 학습 쪽 대책(원핫 강화 / 경계 겹치는 단계 전문가 분리)은 DGX 에서 — 위 「1호기로 넘기는 것」
+4. **DGX 분석 요청: 1006 회차 4개(1038·1054·1126·1156) 전송 + 녹화 로그의 teleop 루프 Hz + task01 관찰(랙 위치·회전 방향·θ 부호)** — 위 「DGX_1 → Trossen PC1 요청」. DGX 쪽 진단 결과는 sim 레포 §89
