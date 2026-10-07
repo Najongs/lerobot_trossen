@@ -1127,6 +1127,18 @@ stage with rerun running, so a chain rate measured with the viewer on is not com
 
 ## Upstream flags (not fork changes)
 
+### Teleop window before the first stage (2026-10-07)
+
+`scripts/eval_chain.sh` passes the leader arms (`--teleop.*`, `TELEOP=1` by default) and the runner then
+runs one leader-arm `record_loop` (no policy, nothing recorded) right after `robot.connect()` and before the
+initial reset -- the same thing `lerobot-record` does in its "Reset the environment" phase. The operator
+grasps objects / poses the arms, then RIGHT ARROW starts the chain; LEFT ARROW restarts the window; ESC
+aborts before any stage moves. `teleop_time_s` (300 s, `TELEOP_S`) is the ceiling and hitting it ABORTS
+(no ramp starts without a human's arrow). The leader's `x.vel`/`theta.vel` are zeroed during the window by
+default (they echo the measured base velocity back into a torqued base; `TELEOP_BASE=1` /
+`teleop_base_from_leader: true` sends them through as `lerobot-record` does), and the base is stopped when
+the window ends (`teleop_end.stop_base_path`). `TELEOP=0` restores the previous behaviour.
+
 ### Optional Observation Features
 
 By default, Mobile AI followers only observe joint positions (`<joint>.pos`).

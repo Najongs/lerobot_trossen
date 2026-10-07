@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -688,5 +689,146 @@ class ChainEndToEndTest(unittest.TestCase):
             self.assertEqual(stage.required_terminator, [])
 
 
+def _events_with_timers(*presses: tuple[float, dict[str, bool]]):
+    """A make_keyboard_events stand-in: core's three flags, flipped by timers.
+
+    Each press is (delay_s, flags) -- the dict is updated in place, which is
+    exactly what core's pynput callback does (control_utils.py:135-160).
+    """
+
+    def keyboard_events():
+        events = {"exit_early": False, "rerecord_episode": False, "stop_recording": False}
+        for delay, flags in presses:
+            threading.Timer(delay, lambda f=flags: events.update(f)).start()
+        return None, events
+
+    return keyboard_events
+
+
+TELEOP_ARGV = ("--teleop.type=stage_runner_mock_teleop", "--teleop_time_s=10")
+
+
+class TeleopPhaseTests(unittest.TestCase):
+    """The leader-arm window before the first stage (runner._run_teleop_phase)."""
+
+    def tearDown(self) -> None:  # noqa: N802
+        leaked = [name for name in FORBIDDEN_MODULES if name in sys.modules]
+        self.assertEqual(leaked, [], "the teleop window must not pull in the robot SDK")
+
+    def test_no_teleop_config_means_no_teleop_events(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(Path(directory), to_stage=1)
+        self.assertEqual(run.of("teleop_start"), [])
+        self.assertEqual(run.of("teleop_end"), [])
+
+    def test_right_arrow_ends_the_phase_and_the_chain_runs_unrecorded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=2,
+                extra_argv=TELEOP_ARGV,
+                patch_events=_events_with_timers((0.6, {"exit_early": True})),
+            )
+        starts, ends = run.of("teleop_start"), run.of("teleop_end")
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(len(ends), 1)
+        self.assertEqual(ends[0]["ended_by"], "arrow", ends[0])
+        self.assertLess(ends[0]["elapsed_s"], 5.0, "the arrow, not the 10 s ceiling, ended it")
+        self.assertEqual(ends[0]["stop_base_path"], "primary")
+        # Nothing of the teleop window went into the episode buffer.
+        self.assertEqual(starts[0]["frame_idx"], 0)
+        self.assertEqual(ends[0]["frame_idx"], 0)
+        first_stage = run.of("stage_start")[0]
+        self.assertEqual(first_stage["frame_idx"], 0)
+        self.assertEqual(first_stage["stage_id"], "reset_pre_01")
+        self.assertTrue(run.trial_end["completed"], run.trial_end)
+        self.assertEqual(run.exit_code, 0)
+
+    def test_left_arrow_restarts_the_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=1,
+                extra_argv=TELEOP_ARGV,
+                patch_events=_events_with_timers(
+                    (0.4, {"rerecord_episode": True, "exit_early": True}),
+                    (1.0, {"exit_early": True}),
+                ),
+            )
+        ends = run.of("teleop_end")
+        self.assertEqual([e["ended_by"] for e in ends], ["left_arrow_restart", "arrow"], ends)
+        self.assertEqual([e["attempt"] for e in ends], [1, 2])
+        self.assertTrue(run.trial_end["completed"], run.trial_end)
+
+    def test_timeout_ends_the_phase_without_a_keypress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=1,
+                extra_argv=("--teleop.type=stage_runner_mock_teleop", "--teleop_time_s=0.7"),
+                patch_events=_events_with_timers(),
+            )
+        ends = run.of("teleop_end")
+        self.assertEqual(len(ends), 1)
+        self.assertEqual(ends[0]["ended_by"], "timeout", ends[0])
+        # The ceiling is an abort, never a start: no stage may have moved.
+        self.assertFalse(run.trial_end["completed"], run.trial_end)
+        self.assertEqual(run.of("stage_end")[0]["frames"], 0)
+
+    def test_esc_in_the_phase_aborts_before_any_stage_moves(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=2,
+                extra_argv=TELEOP_ARGV,
+                patch_events=_events_with_timers((0.4, {"stop_recording": True, "exit_early": True})),
+            )
+        ends = run.of("teleop_end")
+        self.assertEqual(len(ends), 1)
+        self.assertEqual(ends[0]["ended_by"], "esc", ends[0])
+        self.assertLess(ends[0]["elapsed_s"], 5.0, "ESC must end the window at once, not at the ceiling")
+        self.assertFalse(run.trial_end["completed"], run.trial_end)
+        # The abort lands on the first stage before it ran a single tick.
+        stage_ends = run.of("stage_end")
+        self.assertTrue(stage_ends, "the first stage must still emit its (aborted) stage_end")
+        self.assertEqual(stage_ends[0]["frames"], 0, stage_ends[0])
+        self.assertNotEqual(run.exit_code, 0)
+
+    def test_esc_pressed_before_the_window_skips_it_entirely(self) -> None:
+        # ESC (or SIGHUP through the latch) during connect: the window must not run
+        # at all -- a leader dragging the followers for the whole ceiling, then a
+        # tidy `esc`, is the case the review found.
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=2,
+                extra_argv=("--teleop.type=stage_runner_mock_teleop", "--teleop_time_s=3"),
+                patch_events=_events_with_timers((0.0, {"stop_recording": True, "exit_early": True})),
+            )
+        self.assertEqual(run.of("teleop_start"), [], "no loop may have been entered")
+        ends = run.of("teleop_end")
+        self.assertEqual(len(ends), 1)
+        self.assertEqual(ends[0]["ended_by"], "esc_before_start", ends[0])
+        self.assertEqual(ends[0]["elapsed_s"], 0.0)
+        self.assertFalse(run.trial_end["completed"], run.trial_end)
+        self.assertEqual(run.of("stage_end")[0]["frames"], 0)
+
+    def test_base_velocity_from_the_leader_is_zeroed_by_default(self) -> None:
+        from lerobot.processor.core import TransitionKey
+
+        from stage_runner.record_adapter import TeleopBaseZeroStep
+
+        step = TeleopBaseZeroStep()
+        transition = {TransitionKey.ACTION: {"left_joint_0.pos": 0.2, "x.vel": 0.3, "theta.vel": -0.1}}
+        out = step(transition)
+        self.assertEqual(out[TransitionKey.ACTION]["x.vel"], 0.0)
+        self.assertEqual(out[TransitionKey.ACTION]["theta.vel"], 0.0)
+        self.assertEqual(out[TransitionKey.ACTION]["left_joint_0.pos"], 0.2)
+        self.assertEqual(transition[TransitionKey.ACTION]["x.vel"], 0.3, "the input is not mutated")
+        self.assertIs(step({TransitionKey.ACTION: {"a.pos": 1.0}})[TransitionKey.ACTION].get("x.vel"), None)
+        self.assertEqual(step.transform_features({"k": 1}), {"k": 1})
+
+
 if __name__ == "__main__":
     unittest.main()
+

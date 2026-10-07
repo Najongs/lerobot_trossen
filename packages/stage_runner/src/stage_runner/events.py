@@ -35,12 +35,18 @@ EVENT_STAGE_START: str = "stage_start"
 EVENT_STAGE_END: str = "stage_end"
 EVENT_TRANSITION: str = "transition"
 EVENT_TRIAL_END: str = "trial_end"
+# The leader-arm teleop window before the first stage (runner._run_teleop_phase).
+# Not a stage: no stage_start/stage_end pair, nothing recorded into the dataset.
+EVENT_TELEOP_START: str = "teleop_start"
+EVENT_TELEOP_END: str = "teleop_end"
 EVENT_NAMES: tuple[str, ...] = (
     EVENT_TRIAL_START,
     EVENT_STAGE_START,
     EVENT_STAGE_END,
     EVENT_TRANSITION,
     EVENT_TRIAL_END,
+    EVENT_TELEOP_START,
+    EVENT_TELEOP_END,
 )
 
 # Present on every line whatever the event is. Per-event fields are additive on

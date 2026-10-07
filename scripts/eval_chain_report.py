@@ -232,6 +232,17 @@ def build_report(
         f"{trial_end.get('buffered_frames', '?')} 프레임 · "
         f"{fmt(trial_end.get('elapsed_s'), '.1f')} s"
     )
+    teleop_ends = [e for e in events if e.get("event") == "teleop_end"]
+    if teleop_ends:
+        lines.append(
+            "- 텔레옵(리더암) 구간: "
+            + " · ".join(
+                f"{fmt(t.get('elapsed_s'), '.1f')} s → {t.get('ended_by', '?')}"
+                f" (stop_base {t.get('stop_base_path', '?')})"
+                for t in teleop_ends
+            )
+            + " -- 녹화 안 함"
+        )
     if trial_end.get("chain_failed"):
         lines.append(
             f"- **체인이 끊긴 단계: `{trial_end.get('chain_failed_stage_id')}`** "

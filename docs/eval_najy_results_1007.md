@@ -84,6 +84,24 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 - 앞선 시도 3회(`1007_1539`·`1540`·`1542` `chain_hup`)는 **무효** — 세션이 준 pgrep 패턴이 `.venv/bin/python` 이었는데 `uv run` 의 자식은 `.venv/bin/python3` 이라 PID 를 못 찾았다(`kill: usage`). 러너엔 신호가 안 갔고 셋 다 리셋 2개를 정상 완주했다(② 조건의 정상 회차로 센다).
   G절·eval_chain.sh 의 안내에는 **`pgrep -f '[.]venv/bin/python3 -m stage_runner'`** 로 적어야 한다.
 
+## 로봇 PC 가 러너를 바꿨다 (10/07 오후) — 리더암 텔레옵 구간
+
+**왜**: bring-up ③·④·⑤ 는 전부 「물체를 쥔 채」 시작해야 하는데, 러너는 연결 즉시 자기 리셋을 시작해 사람이 리더암으로 튜브를 쥐게 할 틈이 없었다
+(lerobot-record 회차에서는 `←` 로 리셋 구간에 들어가 리더암으로 잡았다). 사용자 지시: 「이전 Eval 실행 코드처럼 리셋·저장·텔레옵이 되게」.
+
+**무엇** (`packages/stage_runner/`, `scripts/eval_chain.sh`, 테스트 239건 통과 — 절차는 `eval_najy.md` G절 「텔레옵 구간」):
+- `StageRunnerConfig.teleop`(lerobot `TeleoperatorConfig`)·`teleop_time_s`(300)·`teleop_base_from_leader`(false). `eval_chain.sh` 가 `TELEOP=1` 기본으로 리더(.3/.2)를 넘긴다.
+- `runner._run_teleop_phase`: trial_start 직후·첫 리셋 전에 `record_loop(policy=None, dataset=None, teleop=리더)` 한 번. `→` 끝 · `←` 다시 · ESC 중단 · **타임아웃도 중단**.
+  연결 중 눌린 ESC/`←` 는 구간을 돌지 않는다. 끝마다 `transitions.stop_base`(실패면 exit 3). events `teleop_start`/`teleop_end`(`ended_by`, `stop_base_path`, `t_mono`), 보고서 한 줄.
+- **베이스는 구간 동안 0 으로 덮는다**(`TeleopBaseZeroStep`, teleop_action 파이프라인에 구간 동안만 설치) — 리더 action 의 x.vel/theta.vel 은 `get_latest_base_velocity()`, 즉 같은 틱의
+  베이스 실측이라 토크 켜진 베이스에 되먹임되는 구조다(basevel.csv teleop 행 cmd==meas). eval_najy 리셋 구간도 같은 구조였다 — **DGX 확인 요청**: 의도된 설계인가.
+- `cli`: 리더 connect 는 `robot.connect()` 뒤, disconnect 는 `robot.disconnect()` 의 finally 에서. `mock_teleop.py`(테스트용).
+- 단계 **사이**의 텔레옵(정책이 못 집은 물체를 사람이 쥐여 주고 이어 가기)은 넣지 않았다 — `←` 의 의미(체인 중단)를 바꾸는 일이라 DGX 와 설계할 것.
+
+**읽기 전용 리뷰(Claude, 10/07) 반영**: 수용 ① 구간 전 ESC/`←` 가 켜져 있으면 루프에 안 들어감(치명 — 리더가 300 s 팔을 끌 뻔) ② 정상 경로 `stop_base` + `base_is_stopped` 합산 ③ 베이스 0 덮기(설정으로 끔)
+④ ESC 테스트에 경과 단언·「구간 전 ESC」 테스트 ⑤ 타임아웃 = 중단 ⑥ 테스트 클래스를 `__main__` 앞으로·SDK 누출 tearDown ⑦ `teleop.disconnect` 를 finally 로 ⑧ 구간 중 예외도 `teleop_end` 로 기록, `t_mono`.
+기각 없음. 보류: 단계 사이 텔레옵(위). codex 교차 검토는 이 머신에서 안 한다(host 규칙) — **DGX 에서 한 번 돌려 달라**(로봇을 움직이는 코드).
+
 ## 읽은 것
 
 - bring-up ①·② **통과**. 리셋 궤적(관절공간 직선, 시연에 없는 경로)은 빈손에서 전 경계 도달·상한 안·클램프 0 이었다. 큰 전이 다섯 곳의 Δmax 는 사전 계산(stage_params)과 일치한다.
@@ -95,6 +113,7 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 1. **②의 세 관문**: `stop_base_direct_ok` 11/11 `primary` · `clamped` 0 · 도달 오차 ≤0.0019. ③(그리퍼)·④'(시그널)는 아직.
 2. ~~**리셋 구간 루프 12.5 Hz**~~ → **닫힘(②', 21.0 Hz · state_only · calls=frames)**. 원래 요청: (`other` 55 ms, mock 20.9 Hz) — 러너의 실로봇 리셋 경로에서 틱당 ~30 ms 가 어디서 드는지. 후보(미확인):
    리셋 정책 `select_action`/후처리의 실관측 경로, pose_guide `set_stage` 뒤 틱당 계산, 리셋 구간의 데이터셋 프레임 추가·finite 게이트. 로봇 PC 에서 `cProfile` 을 걸어 달라면 건다.
+2a. **러너 변경(텔레옵 구간)을 받아 달라** — 위 「로봇 PC 가 러너를 바꿨다」. 베이스 되먹임 구조(리더 x.vel/θ.vel = 실측)가 의도인지 확인 + codex 교차 검토.
 2b. **④' 결과**: 시그널 래치는 실기에서 동작(위 절). 요청 하나 — events/보고서에서 시그널 종료를 `error/exception` 이 아니라 따로 표기해 주면 집계에서 크래시와 갈린다.
 3. 사람 몫 그대로: **C. 1006 회차 원자료 전송**(데이터셋 6개 + `~/eval_logs/1006_*`) 아직 안 됨.
 

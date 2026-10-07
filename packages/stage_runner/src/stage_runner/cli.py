@@ -613,6 +613,9 @@ def run_trial_process(
         if cfg.display_data:
             init_rerun(session_name="stage_runner")
 
+        # 리더암 텔레옵 장치 (10/07). 만들기만 한다 -- 연결은 robot.connect() 뒤, 해제는 그 앞.
+        teleop = record_adapter.make_teleop(cfg.teleop) if cfg.teleop is not None else None
+
         try:
             # Step 12. The first statement that can move the robot. It is inside
             # the try so that a connect that fails half way still reaches the
@@ -624,6 +627,13 @@ def run_trial_process(
             # (:341-345). A RealSense that fails to enumerate therefore leaves a
             # robot that is energised and NOT is_connected.
             robot.connect()
+            if teleop is not None:
+                teleop.connect()
+                logger.info(
+                    f"teleop connected ({getattr(teleop, 'name', type(teleop).__name__)}): "
+                    f"a leader-arm phase of up to {cfg.teleop_time_s:.0f} s runs before the "
+                    "first stage (RIGHT ARROW ends it, LEFT ARROW restarts it, ESC aborts)"
+                )
 
             # Step 13.
             context = StageContext(
@@ -636,6 +646,7 @@ def run_trial_process(
                 log=log,
                 run_directory=run_directory,
                 chain=chain_runtime,
+                teleop=teleop,
             )
 
             # Steps 14-18. VideoEncodingManager.__exit__ flushes the encoders,
@@ -687,12 +698,21 @@ def run_trial_process(
             if latch is not None:
                 latch.enter_teardown()
             try:
-                robot.disconnect()
-            except Exception:
-                logger.exception(
-                    "robot.disconnect() failed -- CHECK THE BASE IS STOPPED "
-                    "before leaving the robot"
-                )
+                try:
+                    robot.disconnect()
+                except Exception:
+                    logger.exception(
+                        "robot.disconnect() failed -- CHECK THE BASE IS STOPPED "
+                        "before leaving the robot"
+                    )
+            finally:
+                # 리더는 robot.disconnect() 가 KeyboardInterrupt 로 빠져나가도 반드시 푼다(리뷰 10/07).
+                if teleop is not None:
+                    try:
+                        teleop.disconnect()
+                    except Exception:
+                        logger.exception("teleop.disconnect() failed")
+
             if listener is not None and not is_headless():
                 try:
                     listener.stop()

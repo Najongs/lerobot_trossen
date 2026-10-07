@@ -3,6 +3,8 @@
 import logging
 import time
 
+from lerobot.utils.control_utils import is_headless
+
 # Module scope, not the call-time import this used to be: the old form was
 # there because the package __init__ imported this module eagerly, so
 # __version__ did not exist yet while runner was loading. __init__ is lazy now
@@ -13,11 +15,13 @@ from stage_runner.context import StageContext
 from stage_runner.events import (
     EVENT_STAGE_END,
     EVENT_STAGE_START,
+    EVENT_TELEOP_END,
+    EVENT_TELEOP_START,
     EVENT_TRANSITION,
     EVENT_TRIAL_END,
     EVENT_TRIAL_START,
 )
-from stage_runner.executors import EXECUTORS
+from stage_runner.executors import EXECUTORS, _set_pose_guide
 from stage_runner.policies import bundle_descriptor
 from stage_runner.preflight import (
     check_lerobot_version,
@@ -66,6 +70,166 @@ def _stop_base_never_raises(robot) -> StopBaseOutcome:
         return StopBaseOutcome(
             path=transitions.STOP_PATH_FAILED, action=None, error=repr(error)
         )
+
+
+TELEOP_ENDED_BY_ARROW: str = "arrow"
+TELEOP_ENDED_BY_RESTART: str = "left_arrow_restart"
+TELEOP_ENDED_BY_ESC: str = "esc"
+TELEOP_ENDED_BY_TIMEOUT: str = "timeout"
+TELEOP_ENDED_BY_ESC_BEFORE_START: str = "esc_before_start"
+TELEOP_ENDED_BY_LEFT_BEFORE_START: str = "left_arrow_before_start"
+TELEOP_ENDED_BY_EXCEPTION: str = "exception"
+
+
+def _run_teleop_phase(context: StageContext, stages) -> bool:
+    """리더암 텔레옵 구간 -- 첫 단계(최초 리셋) 전에, lerobot-record 의 리셋 구간처럼.
+
+    ``context.teleop`` 이 None 이면 아무것도 하지 않는다(옛 동작). 있으면:
+    사람이 리더암으로 팔을 끌어 물체를 쥐게 하고 시작 자세를 잡는다. ``POSE`` 줄은 첫
+    단계의 지정 자세를 목표로 1초마다 찍힌다(pose_guide, phase=teleop).
+    ``→`` 로 끝내면 최초 리셋으로 넘어가고, ``←`` 는 구간을 처음부터 다시 돌며(타이머
+    리셋), ESC 는 플래그를 남겨 첫 단계가 「시작 전 중단」 으로 끝나게 한다. **타임아웃도
+    중단이다** -- 사람 확인 없이 램프가 시작되지 않게(리뷰 10/07).
+    구간은 녹화되지 않는다. 끝날 때마다 ``transitions.stop_base`` 로 베이스를 세운다 --
+    리더 action 에 x.vel/theta.vel 이 실려 오므로(기본은 0 으로 덮지만, 설정으로 켤 수 있다).
+    루프에 들어가기 **전에** 이미 켜진 ESC/``←`` 는 구간을 돌지 않고 그대로 첫 단계의 「시작 전
+    중단」 으로 넘긴다 -- connect 중에 누른 ESC 로 리더가 300 s 동안 팔을 끄는 일이 없게.
+
+    Returns whether every base stop in the window reported the base stopped (the
+    trial-level ``base_is_stopped`` folds it in, so a failed stop here is exit 3 too).
+    """
+    teleop = context.teleop
+    if teleop is None:
+        return True
+    config = context.config
+    events = context.events
+    log = context.log
+    first = stages[0] if stages else None
+    if first is not None and context.chain is not None:
+        _set_pose_guide(first.stage_number, context.chain)
+    control_time_s = float(config.teleop_time_s)
+    margin = record_adapter.manual_detection_margin_s(config.dataset.fps)
+    task = (first.instruction or first.name) if first is not None else "teleop"
+    first_id = first.id if first is not None else None
+    if is_headless():
+        logger.warning(
+            "teleop phase: headless environment -- no keyboard, so the phase can only "
+            f"end by its {control_time_s:.0f} s ceiling (which ABORTS the trial)"
+        )
+
+    def _pre_set() -> str | None:
+        if events.get("stop_recording"):
+            return TELEOP_ENDED_BY_ESC_BEFORE_START
+        if events.get("rerecord_episode"):
+            return TELEOP_ENDED_BY_LEFT_BEFORE_START
+        return None
+
+    steps_before = list(context.processors.teleop_action.steps)
+    if not config.teleop_base_from_leader:
+        context.processors.teleop_action.steps = steps_before + [record_adapter.TeleopBaseZeroStep()]
+    base_is_stopped = True
+    attempt = 0
+    try:
+        while True:
+            attempt += 1
+            pre = _pre_set()
+            if pre is not None:
+                # Not cleared: the first stage's executor turns it into an abort before it moves.
+                log.emit(
+                    EVENT_TELEOP_END,
+                    frame_idx=context.buffered_frame_count(),
+                    t_mono=time.perf_counter(),
+                    attempt=attempt,
+                    elapsed_s=0.0,
+                    ended_by=pre,
+                    stop_base_path=None,
+                    stop_base_direct_ok=None,
+                )
+                logger.warning(
+                    f"teleop phase skipped: {pre} (a flag set before the window, e.g. during "
+                    "connect) -- the first stage will end as an abort without moving"
+                )
+                return True
+            # A stale right-arrow from before the loop must not end the phase on its first tick.
+            events["exit_early"] = False
+            log.emit(
+                EVENT_TELEOP_START,
+                frame_idx=context.buffered_frame_count(),
+                t_mono=time.perf_counter(),
+                attempt=attempt,
+                control_time_s=control_time_s,
+                teleop_type=getattr(teleop, "name", type(teleop).__name__),
+                first_stage_id=first_id,
+                base_from_leader=bool(config.teleop_base_from_leader),
+            )
+            logger.info(
+                f"teleop phase (attempt {attempt}): leader arms drive the followers for up to "
+                f"{control_time_s:.0f} s. Grasp / pose for {first_id or '?'}, then RIGHT ARROW to "
+                "start; LEFT ARROW restarts this phase; ESC aborts; the ceiling aborts too."
+            )
+            started = time.perf_counter()
+            try:
+                record_adapter.call_teleop_loop(
+                    robot=context.robot,
+                    teleop=teleop,
+                    events=events,
+                    fps=config.dataset.fps,
+                    processors=context.processors,
+                    control_time_s=control_time_s,
+                    single_task=task,
+                    display_data=config.display_data,
+                )
+            except BaseException as error:
+                # Recorded here, then re-raised: run_trial's except BaseException stops the
+                # base and writes trial_end; without this line the window would vanish
+                # from events.jsonl.
+                log.emit(
+                    EVENT_TELEOP_END,
+                    frame_idx=context.buffered_frame_count(),
+                    t_mono=time.perf_counter(),
+                    attempt=attempt,
+                    elapsed_s=time.perf_counter() - started,
+                    ended_by=TELEOP_ENDED_BY_EXCEPTION,
+                    error=repr(error),
+                    stop_base_path=None,
+                    stop_base_direct_ok=None,
+                )
+                raise
+            elapsed = time.perf_counter() - started
+            if events.get("stop_recording"):
+                ended_by = TELEOP_ENDED_BY_ESC
+            elif events.get("rerecord_episode"):
+                events["rerecord_episode"] = False
+                events["exit_early"] = False
+                ended_by = TELEOP_ENDED_BY_RESTART
+            elif elapsed < control_time_s - margin:
+                ended_by = TELEOP_ENDED_BY_ARROW
+            else:
+                ended_by = TELEOP_ENDED_BY_TIMEOUT
+                events["stop_recording"] = True  # the ceiling is an abort, not a start
+            # Normal-path stop_base: a Ctrl+C here is re-raised like at any boundary, and
+            # the outcome counts toward the trial's base_is_stopped (exit 3 on failure).
+            outcome = transitions.stop_base(context.robot)
+            base_is_stopped = base_is_stopped and outcome.base_is_stopped
+            log.emit(
+                EVENT_TELEOP_END,
+                frame_idx=context.buffered_frame_count(),
+                t_mono=time.perf_counter(),
+                attempt=attempt,
+                elapsed_s=elapsed,
+                ended_by=ended_by,
+                stop_base_path=outcome.path,
+                stop_base_direct_ok=getattr(outcome, "direct_ok", None),
+            )
+            logger.info(
+                f"teleop phase (attempt {attempt}) ended by {ended_by} after {elapsed:.1f} s; "
+                f"stop_base {outcome.path}"
+            )
+            if ended_by == TELEOP_ENDED_BY_RESTART:
+                continue
+            return base_is_stopped
+    finally:
+        context.processors.teleop_action.steps = steps_before
 
 
 def run_trial(context: StageContext) -> TrialOutcome:
@@ -169,6 +333,7 @@ def run_trial(context: StageContext) -> TrialOutcome:
             policies=[bundle_descriptor(bundle) for bundle in context.bundles.values()],
         )
         logger.info(f"trial started: {len(stages)} stages -> {config.dataset.repo_id}")
+        base_is_stopped = _run_teleop_phase(context, stages) and base_is_stopped
 
         # NOTHING CLEARS events["stop_recording"] / ["rerecord_episode"], here or
         # in the executor, and that is the fix for the abort this runner used to

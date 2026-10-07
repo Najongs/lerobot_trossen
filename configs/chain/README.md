@@ -226,6 +226,16 @@ t02·03·04·05·10 은 시연 시작 자세가 **쌍봉**이라 관절별 평�
 
 ---
 
+## 텔레옵 구간 키 (StageRunnerConfig 최상위, 10/07)
+
+| 키 | 기본 | 뜻 |
+|---|---|---|
+| `teleop` | 없음 | lerobot `TeleoperatorConfig`(draccus choice, `--teleop.type=mobileai_leader_teleop …`). 주면 첫 단계 전에 리더암 텔레옵 구간을 한 번 돈다. 없으면 옛 동작 |
+| `teleop_time_s` | 300 | 그 구간 한 번의 상한(초). `→` 가 먼저 오면 거기서 끝. 넘기면 **중단**(첫 단계가 시작 전 중단) |
+| `teleop_base_from_leader` | false | 리더 action 의 x.vel/theta.vel 을 베이스에 그대로 보낼지. 기본은 0 으로 덮는다(되먹임 구조, 리뷰 10/07) |
+
+두 체인 YAML 은 키를 두지 않는다 — `scripts/eval_chain.sh` 가 CLI 로 얹는다(`TELEOP=0` 으로 끔). 테스트는 `stage_runner_mock_teleop`(`mock_teleop.py`).
+
 ## 테스트용 가짜 파일
 
 `packages/stage_runner/tests/data/stage_params_mock.json` 은 **합성 파일**이다.

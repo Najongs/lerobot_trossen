@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
+from lerobot.processor.pipeline import ProcessorStep
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.pipeline_features import (
     aggregate_pipeline_dataset_features,
@@ -687,3 +688,89 @@ def classify_termination(
     if elapsed_s < threshold_s:
         return TERMINATED_BY_MANUAL, f"elapsed_s < threshold_s; {measured}"
     return TERMINATED_BY_TIMEOUT, f"elapsed_s >= threshold_s; {measured}"
+
+
+def make_teleop(teleop_config: Any) -> Any:
+    """lerobot's factory, imported late: the teleoperator plugin is registered by
+    ``register_plugins`` and resolving the config type before that fails inside
+    draccus, not with a message about a missing plugin."""
+    from lerobot.teleoperators.utils import make_teleoperator_from_config
+
+    # The hardware-free teleop is resolved here, not by lerobot's factory: that
+    # factory finds the device class by NAMING CONVENTION (``MockTeleopConfig``
+    # -> module ``stage_runner.mockteleop``), which this package does not follow.
+    from stage_runner.mock_teleop import MockTeleop, MockTeleopConfig
+
+    if isinstance(teleop_config, MockTeleopConfig):
+        return MockTeleop(teleop_config)
+    return make_teleoperator_from_config(teleop_config)
+
+
+def call_teleop_loop(
+    *,
+    robot: Robot,
+    teleop: Any,
+    events: dict[str, bool],
+    fps: int,
+    processors: RecordProcessors,
+    control_time_s: float,
+    single_task: str,
+    display_data: bool = False,
+) -> None:
+    """lerobot-record 의 「Reset the environment」 구간과 같은 호출.
+
+    policy 없음·dataset 없음(녹화 안 함), 리더암(``teleop``)이 팔을 끈다. 끝나는 길은
+    셋: ``→`` (exit_early), ``←`` (rerecord_episode + exit_early), ESC (stop_recording +
+    exit_early), 또는 ``control_time_s`` 타임아웃. 플래그 해석은 호출자
+    (``runner._run_teleop_phase``)가 한다 -- record_loop 는 exit_early 만 스스로 지운다.
+    ``robot_action_processor`` 는 그대로 타므로 팔 한 틱 상한(max_relative_target)과
+    NaN 게이트는 텔레옵 action 에도 걸린다; 완료 감시자는 begin_stage 전이라 꺼져 있다.
+    """
+    lerobot_record.record_loop(
+        robot=robot,
+        events=events,
+        fps=fps,
+        teleop_action_processor=processors.teleop_action,
+        robot_action_processor=processors.robot_action,
+        robot_observation_processor=processors.robot_observation,
+        dataset=None,
+        teleop=teleop,
+        policy=None,
+        preprocessor=None,
+        postprocessor=None,
+        control_time_s=control_time_s,
+        single_task=single_task,
+        display_data=display_data,
+    )
+
+
+from stage_runner.completion import BASE_VELOCITY_KEYS  # noqa: E402
+
+
+class TeleopBaseZeroStep(ProcessorStep):
+    """``teleop_action`` 파이프라인용: 리더 action 의 베이스 속도 두 키를 0 으로 덮는다.
+
+    텔레옵 구간 동안만 설치된다(``runner._run_teleop_phase`` 가 넣고 빼므로 정책·리셋 단계와
+    ``build_dataset_features`` 에는 보이지 않는다). 키를 더하거나 빼지 않으므로
+    ``transform_features`` 는 항등이다.
+    """
+
+    def __call__(self, transition):
+        from lerobot.processor.core import TransitionKey
+
+        action = transition.get(TransitionKey.ACTION)
+        if not isinstance(action, Mapping) or not any(k in action for k in BASE_VELOCITY_KEYS):
+            return transition
+        zeroed = dict(action)
+        for key in BASE_VELOCITY_KEYS:
+            if key in zeroed:
+                zeroed[key] = 0.0
+        patched = dict(transition)
+        patched[TransitionKey.ACTION] = zeroed
+        return patched
+
+    def transform_features(self, features):
+        return features
+
+    def get_config(self) -> dict[str, Any]:
+        return {"base_velocity_keys": sorted(BASE_VELOCITY_KEYS)}

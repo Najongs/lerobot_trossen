@@ -30,6 +30,14 @@
 #                 reached 로 끝난 직후 ESC」 로 대신하지 않는 이유: 사람이
 #                 반응하기 전에 정책이 이미 몇 틱을 보낸다
 #   MANUAL=0      `→` 수동 완료를 끈다 (기본 켬: 사용자 결정 10/06, 두 모델 공통)
+#   TELEOP=0      연결 직후의 **리더암 텔레옵 구간**을 끈다 (기본 켬, 10/07 로봇 PC).
+#                 켜져 있으면 lerobot-record 의 「Reset the environment」 처럼 리더암으로
+#                 팔을 끌어 물체를 쥐게 하고 시작 자세를 잡은 뒤 `→` 로 첫 리셋에 넘긴다.
+#                 `←` 는 구간을 다시(타이머 리셋), ESC 는 중단. 녹화되지 않는다.
+#   TELEOP_S=300  텔레옵 구간 한 번의 상한(초). 넘기면 **중단**이다(램프가 혼자 시작되지 않게)
+#   TELEOP_BASE=1 텔레옵 구간에서 리더의 x.vel/theta.vel 을 베이스에 그대로 보낸다(lerobot-record
+#                 리셋 구간과 같음). 기본 0 = 0 으로 덮는다 -- 리더의 두 값은 같은 틱에 잰 베이스
+#                 속도라 토크 켜진 베이스에 되먹임된다(리뷰 10/07). 베이스 위치는 띄우기 전에 손으로
 #   LOOP_HZ_WINDOW  루프 주기 요약 간격(프레임). 기본 30 — 바꾸면 10/02 기준선과 비교 불가
 #
 # ⚠️ 이 스크립트는 **로봇을 움직인다.** DGX_1 에서 실행하지 마라 (로봇 패키지를
@@ -58,6 +66,9 @@ FROM_STAGE=${FROM_STAGE:-1}
 TO_STAGE=${TO_STAGE:-11}
 MANUAL=${MANUAL:-1}
 RESET_ONLY=${RESET_ONLY:-0}
+TELEOP=${TELEOP:-1}
+TELEOP_S=${TELEOP_S:-300}
+TELEOP_BASE=${TELEOP_BASE:-0}
 
 # 불리언 환경변수를 0/1 로 정규화하거나 거부한다. **명령 치환으로 쓰지 마라** —
 # `$(...)` 안의 `exit 2` 는 서브셸만 죽이고 스크립트는 계속 간다. 그래서 전역
@@ -82,6 +93,10 @@ _norm_flag() {  # _norm_flag <이름> <값>  →  NORM_FLAG
 
 _norm_flag DRY_RUN    "$DRY_RUN";    DRY_RUN=$NORM_FLAG
 _norm_flag RESET_ONLY "$RESET_ONLY"; RESET_ONLY=$NORM_FLAG
+_norm_flag TELEOP     "$TELEOP";     TELEOP=$NORM_FLAG
+_norm_flag TELEOP_BASE "$TELEOP_BASE"; TELEOP_BASE=$NORM_FLAG
+[[ "$TELEOP_S" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v v="$TELEOP_S" 'BEGIN{exit !(v+0 > 0)}' \
+  || { echo "!! TELEOP_S=$TELEOP_S — 양수(초)여야 한다" >&2; exit 2; }
 
 [[ "$FROM_STAGE" =~ ^([1-9]|1[01])$ ]] || { echo "!! FROM_STAGE=$FROM_STAGE — 1~11 정수여야 한다" >&2; exit 2; }
 [[ "$TO_STAGE" =~ ^([1-9]|1[01])$ ]] || { echo "!! TO_STAGE=$TO_STAGE — 1~11 정수여야 한다" >&2; exit 2; }
@@ -150,6 +165,18 @@ ARGS=(uv run python -m stage_runner
   "--dataset.repo_id=kiroaiseoul/eval_${RUN}"
   "--output.run_id=$RUN")
 [[ "$MANUAL" == 1 ]] || ARGS+=("--chain.completion.allow_manual_complete=false")
+# 리더암 텔레옵 구간 -- eval_najy.sh 의 리더 설정과 같다. 러너가 연결 직후 한 번 돈다
+# (runner._run_teleop_phase). RESET_ONLY 회차에서도 돈다: bring-up ③ 이 바로 「물체를 쥔 채」 다.
+if [[ "$TELEOP" == 1 ]]; then
+  ARGS+=(--teleop.type=mobileai_leader_teleop
+    --teleop.left_arm_ip_address=192.168.1.3
+    --teleop.right_arm_ip_address=192.168.1.2
+    --teleop.id=leader
+    "--teleop_time_s=$TELEOP_S")
+  [[ "$TELEOP_BASE" == 1 ]] && ARGS+=(--teleop_base_from_leader=true)
+  echo "   텔레옵 구간: 연결 직후 리더암으로 팔을 끈다(최대 ${TELEOP_S}s, 넘기면 중단) -- 물체를 쥐게 하고 자세를 잡은 뒤 →. ← 는 다시, ESC 는 중단. 끄려면 TELEOP=0"
+  [[ "$TELEOP_BASE" == 1 ]] && echo "   ⚠️ TELEOP_BASE=1: 리더의 베이스 속도를 그대로 보낸다 -- 베이스가 손에 따라 움직인다" || echo "   베이스는 텔레옵 구간 동안 0 (위치는 띄우기 전에 손으로 맞춘다; TELEOP_BASE=1 로 바꿀 수 있다)"
+fi
 
 # env: eval_najy.sh:155-162 와 같은 묶음. 베이스 명령·실측 CSV 는 순수 기록이라
 # 항상 켠다 -- 체인 보고서가 단계별 ∫θ·∫x 를 이 CSV 에서 뽑는다(t_mono 로 범위를
@@ -187,6 +214,7 @@ fi
 
 echo "== 로그 $LOGDIR/$RUN.log"
 echo "   사람이 할 것: ESC = 중단(e-stop 과 **함께**) · → = 이 단계 완료, 다음으로"
+[[ "$TELEOP" == 1 ]] && echo "   먼저 텔레옵 구간: 리더암으로 물체·자세를 잡고 → (POSE 줄 = 첫 단계 지정 자세까지의 거리)"
 echo "   ⚠️ 베이스 e-stop 은 팔(별도 이더넷)을 멈추지 않는다 [추정] — ESC 와 e-stop 을 함께."
 # `| tee` 금지: --display_data 가 띄운 rerun 뷰어가 파이프를 물려받아 창을 닫기
 # 전엔 tee 가 끝나지 않는다 (10/06 C-1). 파일로 쓰고 tail 로 보여 준다.

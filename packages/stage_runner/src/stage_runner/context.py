@@ -96,6 +96,8 @@ class StageContext:
     # without touching any existing construction -- the docstring above promised
     # that and this is the first field to use it. None in a version 1 run.
     chain: ChainRuntime | None = None
+    # 리더암 텔레옵 장치 (lerobot Teleoperator). None 이면 텔레옵 구간이 없다.
+    teleop: Any | None = None
 
     def buffered_frame_count(self) -> int:
         """Frames written into the current episode buffer so far.

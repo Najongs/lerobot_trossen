@@ -17,6 +17,7 @@ from pathlib import Path
 import draccus
 
 from lerobot.robots.config import RobotConfig
+from lerobot.teleoperators.config import TeleoperatorConfig
 
 # results is stdlib-only, so the import direction stays config -> results and
 # never the reverse: aggregate.py imports results on a machine with no draccus
@@ -368,6 +369,20 @@ class StageRunnerConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     display_data: bool = False
     chain: ChainConfig = field(default_factory=ChainConfig)
+    # 리더암 텔레옵 구간 (10/07, 로봇 PC). 주면 trial 의 첫 단계(최초 리셋) 전에
+    # lerobot-record 의 「Reset the environment」 와 같은 텔레옵 루프를 돈다 -- 사람이
+    # 리더암으로 물체를 쥐게 하고 자세를 잡은 뒤 `→` 로 넘긴다. `←` 는 그 구간을
+    # 처음부터 다시(타이머 리셋), ESC 는 중단. 녹화되지 않는다(dataset=None).
+    # None 이면 구간이 없다 -- 옛 동작 그대로. CLI: --teleop.type=… --teleop.id=…
+    teleop: TeleoperatorConfig | None = None
+    # 텔레옵 구간 한 번의 상한(초). `→` 가 먼저 오면 거기서 끝난다. 상한을 넘기면 **중단**이다
+    # (사람 확인 없이 첫 리셋 램프가 시작되지 않게; 리뷰 10/07).
+    teleop_time_s: float = 300.0
+    # 텔레옵 구간에서 리더 action 의 x.vel/theta.vel 을 베이스에 그대로 보낼지. 기본 False =
+    # 0 으로 덮는다: 리더의 두 값은 「같은 틱에 잰 베이스 속도」(get_latest_base_velocity) 라
+    # 토크가 켜진 베이스에 되먹임되는 구조다(리뷰 10/07, basevel.csv 의 teleop 행 cmd==meas).
+    # True 는 lerobot-record 의 리셋 구간과 같은 동작(손으로 민 베이스를 따라감).
+    teleop_base_from_leader: bool = False
 
 
 def parse_config(argv: Sequence[str] | None = None) -> StageRunnerConfig:
@@ -388,6 +403,7 @@ def parse_config(argv: Sequence[str] | None = None) -> StageRunnerConfig:
     # this module needs it, and the smoke path must not depend on some other
     # module having been imported first.
     from stage_runner import mock_robot  # noqa: F401
+    from stage_runner import mock_teleop  # noqa: F401
 
     return draccus.parse(config_class=StageRunnerConfig, args=argv)
 
