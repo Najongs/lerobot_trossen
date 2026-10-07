@@ -1,0 +1,274 @@
+# RECORD ONLY -- this snapshot is NOT re-parseable (draccus.dump writes
+# python/object tags its own loader rejects). Re-run from
+# config.source.yaml beside it, which is a verbatim copy of the
+# input, and repeat any CLI override you see below.
+chain:
+  completion:
+    allow_manual_complete: true
+    departure_arm_rad: 0.1
+    departure_base_fwd_m: 0.1
+    departure_base_rot_rad: 0.17
+    p_done: 0.95
+    p_hold_s: 1.0
+    stall_arm_rad: 0.05
+    stall_base: 0.05
+    stall_s: 3.0
+    stall_track_rad: 0.08
+    timeout_factor: 1.3
+  enabled: true
+  from_stage: 1
+  model:
+    has_progress: false
+    n_action_steps: 30
+    onehot_k: 11
+    policy_path: /home/trossen-ai/.cache/huggingface/hub/models--kiroaiseoul--NAJY_act_all11_hot_27D_120k_s1000/snapshots/63240d9394b352856227b6b096ae24cebc58106a
+  params_path: configs/chain/stage_params.json
+  reset:
+    ceiling_factor: 3.0
+    initial: true
+    initial_max_jump_rad: 0.6
+    max_jump_rad: 1.5
+    only: true
+    settle_check_gap_s: 0.1
+    settle_check_tol_rad: 0.02
+    settle_check_tries: 3
+    settle_s: 1.0
+    t_min_s: 1.5
+    tol_rad: 0.05
+    v_des_rad_s: 0.524
+  to_stage: 11
+dataset:
+  fps: 21
+  num_image_writer_processes: 0
+  num_image_writer_threads_per_camera: 4
+  repo_id: kiroaiseoul/eval_1007_1045_chain_resets_e30
+  root: null
+  video: true
+defaults:
+  executor: chain_policy
+  manual_ceiling_s: 300.0
+display_data: false
+output:
+  root: outputs/stage_runner
+  run_id: 1007_1045_chain_resets_e30
+robot:
+  calibration_dir: null
+  cameras:
+    cam_high:
+      color_mode: !!python/object/apply:lerobot.cameras.configs.ColorMode
+      - rgb
+      fps: 30
+      height: 480
+      rotation: !!python/object/apply:lerobot.cameras.configs.Cv2Rotation
+      - 0
+      serial_number_or_name: '230422273501'
+      type: intelrealsense
+      use_depth: false
+      warmup_s: 1
+      width: 640
+    cam_left_wrist:
+      color_mode: !!python/object/apply:lerobot.cameras.configs.ColorMode
+      - rgb
+      fps: 30
+      height: 480
+      rotation: !!python/object/apply:lerobot.cameras.configs.Cv2Rotation
+      - 0
+      serial_number_or_name: '230422271234'
+      type: intelrealsense
+      use_depth: false
+      warmup_s: 1
+      width: 640
+    cam_right_wrist:
+      color_mode: !!python/object/apply:lerobot.cameras.configs.ColorMode
+      - rgb
+      fps: 30
+      height: 480
+      rotation: !!python/object/apply:lerobot.cameras.configs.Cv2Rotation
+      - 0
+      serial_number_or_name: '230322274369'
+      type: intelrealsense
+      use_depth: false
+      warmup_s: 1
+      width: 640
+  enable_base_motor_torque: true
+  estop_check: true
+  id: follower
+  include_base_in_state: false
+  include_effort: false
+  include_external_effort: false
+  include_velocity: false
+  left_arm_ip_address: 192.168.1.5
+  left_arm_max_relative_target: 0.1
+  loop_rate: 30
+  min_time_to_move_multiplier: 3.0
+  right_arm_ip_address: 192.168.1.4
+  right_arm_max_relative_target: 0.1
+  type: mobileai_robot
+  velocity_safety_factor: 0.4
+stages:
+- executor: chain_reset
+  id: reset_pre_01
+  initial_reset: true
+  instruction: reset:01
+  kind: reset
+  name: reset to task01
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 1
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_02
+  initial_reset: false
+  instruction: reset:02
+  kind: reset
+  name: reset to task02
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 2
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_03
+  initial_reset: false
+  instruction: reset:03
+  kind: reset
+  name: reset to task03
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 3
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_04
+  initial_reset: false
+  instruction: reset:04
+  kind: reset
+  name: reset to task04
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 4
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_05
+  initial_reset: false
+  instruction: reset:05
+  kind: reset
+  name: reset to task05
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 5
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_06
+  initial_reset: false
+  instruction: reset:06
+  kind: reset
+  name: reset to task06
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 6
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_07
+  initial_reset: false
+  instruction: reset:07
+  kind: reset
+  name: reset to task07
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 7
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_08
+  initial_reset: false
+  instruction: reset:08
+  kind: reset
+  name: reset to task08
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 8
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_09
+  initial_reset: false
+  instruction: reset:09
+  kind: reset
+  name: reset to task09
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 9
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_10
+  initial_reset: false
+  instruction: reset:10
+  kind: reset
+  name: reset to task10
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 10
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+- executor: chain_reset
+  id: reset_to_11
+  initial_reset: false
+  instruction: reset:11
+  kind: reset
+  name: reset to task11
+  onehot_index: null
+  policy_path: ''
+  precondition: null
+  required_terminator:
+  - reached
+  stage_number: 11
+  terminator:
+    timeout_s: 11.587786259541986
+    type: reached
+version: 2
