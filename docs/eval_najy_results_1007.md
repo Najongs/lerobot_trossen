@@ -106,6 +106,21 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 ④ ESC 테스트에 경과 단언·「구간 전 ESC」 테스트 ⑤ 타임아웃 = 중단 ⑥ 테스트 클래스를 `__main__` 앞으로·SDK 누출 tearDown ⑦ `teleop.disconnect` 를 finally 로 ⑧ 구간 중 예외도 `teleop_end` 로 기록, `t_mono`.
 기각 없음. 보류: 단계 사이 텔레옵(위). codex 교차 검토는 이 머신에서 안 한다(host 규칙) — **DGX 에서 한 번 돌려 달라**(로봇을 움직이는 코드).
 
+## ③ 물체 든 채 리셋 — 진행 (10/07 저녁)
+
+| 회차 | 러너 | 텔레옵 구간 | 그 뒤 | 판정 |
+|---|---|---|---|---|
+| `1007_1626_chain_resets_tube_e30` (FROM 1) | `d4bc8f8` | 32.4 s · 튜브 집음 · `→` · stop_base primary | 최초 리셋 거부 — 관절 최대 간격 **0.874 rad > 0.6** (task01 지정 자세 = 빈손 대기 자세). 아무것도 안 움직임, exit 4 | 무효 (시작 단계 잘못) |
+| `1007_1630_chain_resets_tube_e30` (FROM 3 TO 5) | `d4bc8f8` | 36.2 s · 튜브 집음 · `→` · primary | 최초 리셋 거부 — **0.807 rad > 0.6** (task03 지정 자세까지 손목·팔꿈치가 멂). 아무것도 안 움직임 | 무효 (자세 미달 — 사람이 로그 숫자로 맞추기 어려움) |
+| `1007_1723_chain_resets_tube_e30` (FROM 3 TO 5) | `f6083df`(→ 준비 표시) | 진행 중 | — | (돌고 있음, 끝나면 아래에) |
+
+원출력: [`1626.chain.md`](run_logs/2026-10-07_eval_najy/1007_1626_chain_resets_tube_e30.chain.md) · [`1630.chain.md`](run_logs/2026-10-07_eval_najy/1007_1630_chain_resets_tube_e30.chain.md) (+ events).
+
+- 텔레옵 구간은 두 회차 모두 설계대로 돌았다(리더가 팔로워를 끌고, `→` 로 끝, 베이스 정지 확인, 녹화 없음). 거부는 **러너의 최초 리셋 상한(0.6 rad, 관절별)** 이 그대로 작동한 것이다 — 올리지 않았다.
+- 사람 피드백: 「로그 보면서 맞추는 게 쉽지 않다」 → `f6083df`: `→` 는 상한 안일 때만 받고(멀면 `arrow_not_ready` 로 적고 창 계속), `POSE` 줄 앞에 `[→ 가능 ✔]`/`[아직 ✘ R j3 50° > 34°]` + 가능해지는 순간 터미널 벨. 1723 회차가 이 판의 첫 실기.
+- DGX `9393512` 받음(시그널 분리·`nan_gate`·`emergency_stop_base_*`·`check_teleop_window`·mock 리더 베이스 노브). 로봇 PC 테스트는 1723 회차가 끝난 뒤 돌린다(제어 루프와 CPU 경합 회피). 리뷰 결론 ①~⑦ 성립 확인, 감사.
+- DGX 의 [추정] 「텔레옵으로 쥔 조임이 창이 끝나는 순간 실측 위치 재명령으로 풀릴 수 있다」 — 1723 에서 첫 리셋 진입 순간의 그리퍼를 본다. 풀리면 후보: 리셋·hold 의 그리퍼 재명령을 **실측이 아니라 창의 마지막 명령값**(리더 그리퍼 값)으로.
+
 ## 읽은 것
 
 - bring-up ①·② **통과**. 리셋 궤적(관절공간 직선, 시연에 없는 경로)은 빈손에서 전 경계 도달·상한 안·클램프 0 이었다. 큰 전이 다섯 곳의 Δmax 는 사전 계산(stage_params)과 일치한다.
@@ -157,7 +172,7 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 0. **(10/07 저녁) 위 「DGX_1 → Trossen PC1 (10/07 저녁)」 표 1→9 순.** 1(②' Hz 역검증)이 먼저다 — 아래 1~3 은 그 표의 2·3·4 와 같다.
 0. ~~②' Hz 역검증~~ ✅ 통과(10/07 15:32, 위 절). 1호기 목록의 1번 닫힘.
 1. ~~④' 시그널 실증~~ ✅ 통과(10/07 15:51, 위 절). HUP → `SIGHUP received` → stop_base primary → disconnect. 자식 프로세스 이름은 `.venv/bin/python3` — pgrep 패턴 주의.
-2. **③ 물체 든 채 리셋** — 가벼운 플라스틱 튜브 먼저(`RESET_ONLY=1 scripts/eval_chain.sh M1 resets_tube`), 그다음 비커. 그리퍼가 놓치거나 더 쥐면 멈추고 보고.
+2. **③ 물체 든 채 리셋** — 튜브는 `RESET_ONLY=1 FROM_STAGE=3 TO_STAGE=5 scripts/eval_chain.sh M1 resets_tube`, 비커는 `FROM_STAGE=6 TO_STAGE=11 … resets_beaker` (물체를 드는 단계부터). 1626·1630 은 최초 리셋 거부로 무효, 1723 진행 중(위 ③ 절).
 3. **④ M1 + 러너로 단계 1개** — `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` (task04 장면 세팅). policy 구간 Hz·rearm·clamped·FIRED 를 10/06 1350 과 비교.
 4. B1~B3(지정 자세 출발 task05/02 · M2 task04 끝 정지 · task03/01 재시험) → `eval_najy_results_1006.md` 「다음」.
 5. C. 전송(사람).
