@@ -378,6 +378,10 @@ DGX 세션이 10/06 저녁에 한 것(배경·근거는 sim 레포 `docs/mobile_
 - **재학습 2런 투입**(10:11 UTC, ~12 h): `exp_all11_tph_s{1000,2000}` — M1 설정 그대로에 데이터 쪽 변경 셋 `trim_idle`(시연 앞 정지 구간 제거)·`pad_hold`(끝을 넘는 청크를 「머물기」 로 감독 — M1 이 끝 장면에서 안 멈추는 원인 §93.2)·`progress`(action 17번째 칸 = 진행도 0→1, 전환 신호). **task06 은 새 데이터셋** `kiroaiseoul/task06_task06-2_…_14D_new_2`(237ep, 두 행동 — §94.1). 오프라인 채점 5종을 M1 과 비교해 통과하면 허브에 `kiroaiseoul/NAJY_act_all11_tph_27D_120k_s1000` 으로 올린다 — **아직 없음**.
 - **체인 러너**(`packages/stage_runner/`, 팀원 #47 브랜치 트리를 이식해 확장): 11단계를 사람 개입 없이 1→11 — 단계마다 정책 → 완료 판정(진행도 ∧ 출력 정지 3초 ∧ 경과≥p10; `→` 키 = 수동 완료, ESC = 중단) → 팔 12관절을 다음 단계 **지정 시작 자세**로 최소저크 리셋(그리퍼 유지·베이스 0) → 원핫 전환. 설정 `configs/chain/{chain_m1_all11,chain_tph_all11}.yaml`, 단계 파라미터 `configs/chain/stage_params.json`(sim 레포 `export_chain_params.py` 산출), 회차 조립 `scripts/eval_chain.sh`, 보고서 `scripts/eval_chain_report.py`. 절차는 **`eval_najy.md` G절**(bring-up ①~⑤). 리뷰(Claude·codex) 뒤 fork main 에 올린다 — 이 절이 main 에 있으면 올라간 것.
 
+### 10/07 아침 갱신 (DGX)
+- 1라운드 TPH 120K 채점(sim §94.9): **출발(P2)은 두 시드 모두 해결**(시작 정지 예측 ≤4%, M1 은 단계별 20~98%), 추종은 3단계(task07·10·11) 문턱 초과로 나빠짐, **끝 정지·진행도·원핫은 미달**(장면이 겹치는 경계에서 다음 단계 첫 동작이 나옴). 사용자 결정: **허브 업로드는 2라운드(env 단계 토큰, `exp_all11_tph_env_*`, 10/07 11:00 UTC 종료 예정) 결과를 보고** → 그때까지 로봇 PC 는 **M1 로 bring-up ①~④** 를 진행하면 된다(러너·리셋·시그널·환경변수 검증은 모델과 무관).
+- `scripts/eval_chain.sh` 의 `TPH`/`ENV` 모델 이름은 허브에 올라간 뒤에만 유효(지금은 다운로드 실패로 멈춘다 — 정상).
+
 ### 로봇 PC 가 할 것 (순서)
 1. **받기**: `git fetch najongs && git merge --ff-only najongs/main` → `uv lock && uv sync` (`stage_runner` 가 workspace 멤버로 추가돼 lock 갱신이 필요하다; sync 가 수동 설치분을 지우면 복구) → `uv run python -c "import stage_runner"` 로 확인.
 2. **bring-up ①~③ 은 M1 로, 새 모델 없이 지금 할 수 있다** — `DRY_RUN=1 scripts/eval_chain.sh M1` → `RESET_ONLY=1 … resets`(빈손 10경계; 큰 전이 5곳 t02→03·03→04·04→05·07→08·10→11 은 특히 눈으로) → 물체 든 채. 통과 기준은 G절 표. **처음은 에피소드 1개, ESC 와 베이스 e-stop 을 함께 둔다**(e-stop 은 팔을 멈추지 않는다 [추정]). ③ 의 「그리퍼가 쥐는 힘을 유지하나」 가 미확인 관문이다.
