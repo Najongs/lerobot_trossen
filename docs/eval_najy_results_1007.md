@@ -113,6 +113,7 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 | `1007_1626_chain_resets_tube_e30` (FROM 1) | `d4bc8f8` | 32.4 s · 튜브 집음 · `→` · stop_base primary | 최초 리셋 거부 — 관절 최대 간격 **0.874 rad > 0.6** (task01 지정 자세 = 빈손 대기 자세). 아무것도 안 움직임, exit 4 | 무효 (시작 단계 잘못) |
 | `1007_1630_chain_resets_tube_e30` (FROM 3 TO 5) | `d4bc8f8` | 36.2 s · 튜브 집음 · `→` · primary | 최초 리셋 거부 — **0.807 rad > 0.6** (task03 지정 자세까지 손목·팔꿈치가 멂). 아무것도 안 움직임 | 무효 (자세 미달 — 사람이 로그 숫자로 맞추기 어려움) |
 | `1007_1723_chain_resets_tube_e30` (FROM 3 TO 5) | `f6083df` | — | 왼팔 192.168.1.5 `No route to host` 로 connect 실패(21 s), 프로세스 종료. 로봇 미구동 | 무효 (네트워크 일시 장애, 재시도로 해결) |
+| **`1007_1731_chain_resets_beaker_e30`** (FROM 6 TO 11) | `f6083df` | **23.2 s** · `[아직 ✘]` 8줄 뒤 `[→ 가능 ✔]` · `→` 1회 수락 · stop_base primary | **리셋 6개(최초 Δ0.37 · t06→07 · t07→08 · t08→09 Δ0.98 · t09→10 · t10→11 Δ1.05) 전부 reached**, 오차 ≤0.0015, clamped 0, stop_base 6곳 primary, 21 Hz, 베이스 ∫ ≈0, 저장 331프레임 | **✅ ③ 비커 통과** — 사람: 「비커 안 떨어진다」 |
 | **`1007_1725_chain_resets_tube_e30`** (FROM 3 TO 5) | `f6083df`(→ 준비 표시) | **76.6 s** · `[아직 ✘ R j0 36°…]` → 리더로 맞춤 → `→` 1회에 수락(`arrow_not_ready` 0회) · stop_base primary | **최초 리셋(Δmax 0.542 < 0.6) · t03→04 · t04→05 전부 reached**(오차 ≤0.0011, clamped 0, stop_base 3곳 primary), 21 Hz, 에피소드 저장 156프레임 | **✅ ③ 튜브 통과** — 사람: 「튜브 든 상태로 성공적으로 동작」 |
 
 원출력: [`1626.chain.md`](run_logs/2026-10-07_eval_najy/1007_1626_chain_resets_tube_e30.chain.md) · [`1630.chain.md`](run_logs/2026-10-07_eval_najy/1007_1630_chain_resets_tube_e30.chain.md) (+ events).
@@ -124,7 +125,8 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
   튜브는 플라스틱이라 조임 손실이 있어도 안 보일 수 있다 — 비커(무거움·유리)에서 다시 본다. 풀리면 후보: 리셋·hold 의 그리퍼 재명령을 실측이 아니라 창의 마지막 명령값으로.
 - 준비 표시(`[아직 ✘ R j0 36° > 34°]` → 리더로 맞춤 → `→`)로 사람이 로그 숫자를 읽지 않고 들어갔다. `→` 무시(`arrow_not_ready`)는 이번엔 0회.
 - 1723 은 왼팔 컨트롤러 TCP `No route to host`(21 s 재시도 뒤 CRITICAL) — 재시도(1725)에서 정상. 러너는 connect 전이라 아무것도 안 움직였고 events 에 trial_end 가 없어 보고서가 「프로세스가 먼저 죽었다」 로 표시(정상).
-- 다음: **비커** `RESET_ONLY=1 FROM_STAGE=6 TO_STAGE=11 scripts/eval_chain.sh M1 resets_beaker` (t07→08·t10→11 포함).
+- **비커(1731)도 통과** — 가장 큰 전이 둘(t08→09 0.98 rad, t10→11 1.05 rad)을 비커를 든 채 지났다. 그리퍼 명령 = 실측(331프레임 내내, 차 0). → **③ 관문 닫힘**: 「매 틱 관측값 재명령」 으로 파지가 유지된다 [튜브 1회·비커 1회].
+- 다음: **④ M1 + 러너 단계 1개(task04)** `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4`.
 
 ## 읽은 것
 
@@ -177,7 +179,7 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 0. **(10/07 저녁) 위 「DGX_1 → Trossen PC1 (10/07 저녁)」 표 1→9 순.** 1(②' Hz 역검증)이 먼저다 — 아래 1~3 은 그 표의 2·3·4 와 같다.
 0. ~~②' Hz 역검증~~ ✅ 통과(10/07 15:32, 위 절). 1호기 목록의 1번 닫힘.
 1. ~~④' 시그널 실증~~ ✅ 통과(10/07 15:51, 위 절). HUP → `SIGHUP received` → stop_base primary → disconnect. 자식 프로세스 이름은 `.venv/bin/python3` — pgrep 패턴 주의.
-2. **③ 물체 든 채 리셋** — 튜브는 `RESET_ONLY=1 FROM_STAGE=3 TO_STAGE=5 scripts/eval_chain.sh M1 resets_tube`, 비커는 `FROM_STAGE=6 TO_STAGE=11 … resets_beaker` (물체를 드는 단계부터). **튜브 ✅ 통과(1725)**, 비커는 다음(위 ③ 절).
-3. **④ M1 + 러너로 단계 1개** — `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` (task04 장면 세팅). policy 구간 Hz·rearm·clamped·FIRED 를 10/06 1350 과 비교.
+2. **③ 물체 든 채 리셋** — 튜브는 `RESET_ONLY=1 FROM_STAGE=3 TO_STAGE=5 scripts/eval_chain.sh M1 resets_tube`, 비커는 `FROM_STAGE=6 TO_STAGE=11 … resets_beaker` (물체를 드는 단계부터). **튜브 ✅(1725) · 비커 ✅(1731) — ③ 닫힘**(위 ③ 절).
+3. **④ M1 + 러너로 단계 1개** — `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` (텔레옵 창에서 튜브 집고 비커 앞 task04 지정 자세로 → ). policy 구간 Hz·rearm·clamped·FIRED 를 10/06 1350 과 비교. ← **지금 여기**
 4. B1~B3(지정 자세 출발 task05/02 · M2 task04 끝 정지 · task03/01 재시험) → `eval_najy_results_1006.md` 「다음」.
 5. C. 전송(사람).
