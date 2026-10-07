@@ -18,6 +18,7 @@ members = [
     "lerobot-robot-trossen",
     "lerobot-teleoperator-trossen",
     "lerobot-trossen",
+    "stage-runner",
 ]
 overrides = [{ name = "transformers", git = "https://github.com/huggingface/transformers.git?branch=fix%2Flerobot_openpi" }]
 
@@ -852,6 +853,7 @@ dependencies = [
     { name = "lerobot-robot-trossen" },
     { name = "lerobot-teleoperator-trossen" },
     { name = "num2words" },
+    { name = "stage-runner" },
     { name = "torch" },
     { name = "torchcodec" },
     { name = "torchvision" },
@@ -873,6 +875,7 @@ requires-dist = [
     { name = "lerobot-teleoperator-trossen", editable = "packages/lerobot_teleoperator_trossen" },
     { name = "num2words", specifier = ">=0.5.14" },
     { name = "scipy", marker = "extra == 'pi0'", specifier = ">=1.10.1,<1.15" },
+    { name = "stage-runner", editable = "packages/stage_runner" },
     { name = "torch", specifier = ">=2.8,<2.11", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchcodec", specifier = ">=0.10,<0.11" },
     { name = "torchvision", specifier = ">=0.23,<0.26", index = "https://download.pytorch.org/whl/cu128" },
@@ -2023,6 +2026,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/44/cd/a040c4b3119bbe532e5b0732286f805445375489fceaec1f48306068ee3b/smmap-5.0.2.tar.gz", hash = "sha256:26ea65a03958fa0c8a1c7e8c7a58fdc77221b8910f6be2131affade476898ad5", size = 22329, upload-time = "2025-01-02T07:14:40.909Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/be/d09147ad1ec7934636ad912901c5fd7667e1c858e19d355237db0d0cd5e4/smmap-5.0.2-py3-none-any.whl", hash = "sha256:b30115f0def7d7531d22a0fb6502488d879e75b260a9db4d0819cfb25403af5e", size = 24303, upload-time = "2025-01-02T07:14:38.724Z" },
+]
+
+[[package]]
+name = "stage-runner"
+version = "0.1.0"
+source = { editable = "packages/stage_runner" }
+dependencies = [
+    { name = "draccus" },
+    { name = "lerobot", extra = ["intelrealsense"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "draccus", specifier = ">=0.10,<0.11" },
+    { name = "lerobot", extras = ["intelrealsense"], specifier = ">=0.4.4,<0.5" },
 ]
 
 [[package]]
