@@ -1,0 +1,11 @@
+15:52:07 xecutors.py:579 stage 'reset_pre_01' ended: reached (52 frames in 2.48s, {'reset_T': 1.5, 'reset_dmax': 0.0454, 'reset_ticks': 32, 'reset_max_step_rad': 0.0027, 'reset_settle_ticks': 21, 'res
+15:52:07 nsitions.py:315 stop_base commanded: {'left_joint_0.pos': -0.002861066721379757, 'left_joint_1.pos': 1.045433759689331, 'left_joint_2.pos': 0.5197604298591614, 'left_joint_3.pos': 0.606736838
+15:52:07 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+15:52:08 nner/cli.py:200 SIGHUP received: stopping the trial. The base will be zeroed and the robot disconnected on the way out. If this was a dropped SSH session, run under tmux or nohup next time.
+15:52:08 nsitions.py:315 stop_base commanded: {'left_joint_0.pos': 0.010490577667951584, 'left_joint_1.pos': 1.0297932624816895, 'left_joint_2.pos': 0.5140383243560791, 'left_joint_3.pos': 0.541123092
+15:52:08 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+15:52:12 follower.py:328 None WidowXAIFollower disconnected.
+15:52:16 follower.py:328 None WidowXAIFollower disconnected.
+15:52:16 ealsense.py:639 RealSenseCamera(230422273501) disconnected.
+15:52:17 ealsense.py:639 RealSenseCamera(230422271234) disconnected.
+15:52:17 ealsense.py:639 RealSenseCamera(230322274369) disconnected.

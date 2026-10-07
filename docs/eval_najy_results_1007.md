@@ -66,6 +66,24 @@ pose_guide 의 지정 자세. 지시는 `eval_najy_results_1006.md` 「DGX_1 →
 - ② 의 다른 관문은 그대로 통과: 11/11 reached · 도달 오차 ≤0.0015 · clamped 0 · `stop_base_path` 11곳 `primary` · Δmax 동일(최대 1.048) · 베이스 명령 최대 0.0000 / 실측 적분 +0.0002 m · -0.08° (30 s).
 - 경고·에러 줄 없음, 팔·카메라 disconnect 정상. **수정이 실기 경로에서 먹었다.** 리셋 구간 Hz 기준선은 이 값(21.0)으로 바꾼다.
 
+## ④' 시그널 실증 — `1007_1551_chain_hup2_e30` ([chain.md](run_logs/2026-10-07_eval_najy/1007_1551_chain_hup2_e30.chain.md) · [events](run_logs/2026-10-07_eval_najy/1007_1551_chain_hup2_e30.events.jsonl) · [로그 발췌](run_logs/2026-10-07_eval_najy/1007_1551_chain_hup2_e30.signal_path.txt))
+
+`RESET_ONLY=1 scripts/eval_chain.sh M1 hup2`(빈손, 10경계)를 띄우고 두 번째 터미널에서 `kill -HUP $(pgrep -f '[.]venv/bin/python3 -m stage_runner')`.
+HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베이스는 리셋 전용이라 정지 상태.
+
+| 기대 (G절·codex 치명 지적) | 로그·events | 판정 |
+|---|---|---|
+| 러너가 HUP 을 받아 teardown 으로 간다 | `ERROR … SIGHUP received: stopping the trial. The base will be zeroed and the robot disconnected on the way out.` (cli.py:200) | ✅ |
+| stop_base → 확인 | `stop_base commanded` → `stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted`, events `stop_base_path: primary`, `direct_ok: true` | ✅ |
+| disconnect 까지 | 팔 2대 `disconnected` → 카메라 3대 `disconnected` (4~9 s 뒤) | ✅ |
+| 베이스 제자리 | basevel 68행·3.4 s: 명령 최대 0.0000, 실측 적분 +0.0001 m · +0.06° | ✅ |
+| 팔 제자리(토크 유지) | 사람 확인 요청 — 로그상 마지막 stop_base 의 팔 action 은 그 순간의 자세(hold) | (사람) |
+
+- events: `reset_to_02` terminator **`error` — `SystemExit(129)`**, trial_end reason **`exception`**, completed False, 에피소드 저장 안 됨. 보고서 집계는 `{'error': 1} (중단·오류)`.
+  → **시그널 종료가 events 에서 예외·크래시와 구분되지 않는다** — NaN 게이트와 ESC 가 같은 `stop_recording` 인 것과 같은 꼴의 집계 구멍. 로그의 `SIGHUP received` 줄만 둘을 가른다. DGX 에 알린다(결함이라기보다 표기 요청).
+- 앞선 시도 3회(`1007_1539`·`1540`·`1542` `chain_hup`)는 **무효** — 세션이 준 pgrep 패턴이 `.venv/bin/python` 이었는데 `uv run` 의 자식은 `.venv/bin/python3` 이라 PID 를 못 찾았다(`kill: usage`). 러너엔 신호가 안 갔고 셋 다 리셋 2개를 정상 완주했다(② 조건의 정상 회차로 센다).
+  G절·eval_chain.sh 의 안내에는 **`pgrep -f '[.]venv/bin/python3 -m stage_runner'`** 로 적어야 한다.
+
 ## 읽은 것
 
 - bring-up ①·② **통과**. 리셋 궤적(관절공간 직선, 시연에 없는 경로)은 빈손에서 전 경계 도달·상한 안·클램프 0 이었다. 큰 전이 다섯 곳의 Δmax 는 사전 계산(stage_params)과 일치한다.
@@ -77,6 +95,7 @@ pose_guide 의 지정 자세. 지시는 `eval_najy_results_1006.md` 「DGX_1 →
 1. **②의 세 관문**: `stop_base_direct_ok` 11/11 `primary` · `clamped` 0 · 도달 오차 ≤0.0019. ③(그리퍼)·④'(시그널)는 아직.
 2. ~~**리셋 구간 루프 12.5 Hz**~~ → **닫힘(②', 21.0 Hz · state_only · calls=frames)**. 원래 요청: (`other` 55 ms, mock 20.9 Hz) — 러너의 실로봇 리셋 경로에서 틱당 ~30 ms 가 어디서 드는지. 후보(미확인):
    리셋 정책 `select_action`/후처리의 실관측 경로, pose_guide `set_stage` 뒤 틱당 계산, 리셋 구간의 데이터셋 프레임 추가·finite 게이트. 로봇 PC 에서 `cProfile` 을 걸어 달라면 건다.
+2b. **④' 결과**: 시그널 래치는 실기에서 동작(위 절). 요청 하나 — events/보고서에서 시그널 종료를 `error/exception` 이 아니라 따로 표기해 주면 집계에서 크래시와 갈린다.
 3. 사람 몫 그대로: **C. 1006 회차 원자료 전송**(데이터셋 6개 + `~/eval_logs/1006_*`) 아직 안 됨.
 
 ## DGX_1 → Trossen PC1 (10/07 저녁) — 지금 돌릴 Eval (우선순위 순)
@@ -109,8 +128,7 @@ pose_guide 의 지정 자세. 지시는 `eval_najy_results_1006.md` 「DGX_1 →
 
 0. **(10/07 저녁) 위 「DGX_1 → Trossen PC1 (10/07 저녁)」 표 1→9 순.** 1(②' Hz 역검증)이 먼저다 — 아래 1~3 은 그 표의 2·3·4 와 같다.
 0. ~~②' Hz 역검증~~ ✅ 통과(10/07 15:32, 위 절). 1호기 목록의 1번 닫힘.
-1. **④' 시그널 실증** — 짧은 리셋 회차 `RESET_ONLY=1 FROM_STAGE=1 TO_STAGE=2 scripts/eval_chain.sh M1 hup` 을 띄우고 두 번째 터미널에서
-   `kill -HUP $(pgrep -f '[s]tage_runner')`. 로그에 stop_base → disconnect, 팔·베이스 제자리.
+1. ~~④' 시그널 실증~~ ✅ 통과(10/07 15:51, 위 절). HUP → `SIGHUP received` → stop_base primary → disconnect. 자식 프로세스 이름은 `.venv/bin/python3` — pgrep 패턴 주의.
 2. **③ 물체 든 채 리셋** — 가벼운 플라스틱 튜브 먼저(`RESET_ONLY=1 scripts/eval_chain.sh M1 resets_tube`), 그다음 비커. 그리퍼가 놓치거나 더 쥐면 멈추고 보고.
 3. **④ M1 + 러너로 단계 1개** — `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` (task04 장면 세팅). policy 구간 Hz·rearm·clamped·FIRED 를 10/06 1350 과 비교.
 4. B1~B3(지정 자세 출발 task05/02 · M2 task04 끝 정지 · task03/01 재시험) → `eval_najy_results_1006.md` 「다음」.
