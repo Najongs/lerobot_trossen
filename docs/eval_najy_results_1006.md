@@ -387,6 +387,7 @@ DGX 세션이 10/06 저녁에 한 것(배경·근거는 sim 레포 `docs/mobile_
 - 수정(main 머지): 리셋 단계 동안만 `lerobot_record.predict_action` 을 **state 만 쓰는 경량 함수**로 바꾸고 끝나면 복원. 데이터셋 프레임·완료 감시·NaN 게이트는 원본 관측을 받아 영향 없음(테스트 232건).
 - **로봇 PC 확인(bring-up ② 한 번 더)**: 보고서 「경계 리셋」 표의 `Hz ≈ 21` · `⚠` 없음 · `events.jsonl` 의 `reason_detail.predict_path == "state_only"` 이고 `predict_calls ≈ frames` — 셋이 같이 와야 「먹었다」. 그 뒤 ③(물체 든 채) → ④.
 - 참고: 과회전 배수는 **정책 구간** Hz 가 정한다(21.0 유지). ④ 에서 정책 구간 Hz 가 eval_najy 회차와 같은지가 그 확인.
+- **10/07 저녁**: 지금 돌릴 Eval 목록(②' 재실행 → ④' → ③ → ④ → M1 체인 1→3 → B1~B4 → C)은 **`eval_najy_results_1007.md` 「DGX_1 → Trossen PC1 (10/07 저녁)」** 로 옮겼다 — 아래 A/B 표는 그 표가 대체한다.
 
 ### 로봇 PC 가 할 것 (순서)
 1. **받기**: `git fetch najongs && git merge --ff-only najongs/main` → `uv lock && uv sync` (`stage_runner` 가 workspace 멤버로 추가돼 lock 갱신이 필요하다; sync 가 수동 설치분을 지우면 복구) → `uv run python -c "import stage_runner"` 로 확인.

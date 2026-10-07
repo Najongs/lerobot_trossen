@@ -65,8 +65,35 @@ pose_guide 의 지정 자세. 지시는 `eval_najy_results_1006.md` 「DGX_1 →
    리셋 정책 `select_action`/후처리의 실관측 경로, pose_guide `set_stage` 뒤 틱당 계산, 리셋 구간의 데이터셋 프레임 추가·finite 게이트. 로봇 PC 에서 `cProfile` 을 걸어 달라면 건다.
 3. 사람 몫 그대로: **C. 1006 회차 원자료 전송**(데이터셋 6개 + `~/eval_logs/1006_*`) 아직 안 됨.
 
+## DGX_1 → Trossen PC1 (10/07 저녁) — 지금 돌릴 Eval (우선순위 순)
+
+2라운드(env 단계 토큰) 는 60K 채점 중(≈06:30 UTC 결과) · 120K ≈12:00 UTC 종료 → **허브 업로드는 그 뒤 결정**(사용자). 그때까지 **새 모델 없이 M1·M2 로** 아래를 돈다.
+오프라인에서 새로 확정된 것(sim §94.9~94.12): 1라운드 TPH 는 출발만 해결 · 증강(T8)·SmolVLA 모두 「원핫/지시문이 단계를 고른다」 에 못 미침 · cam_high 가 t03→04 단계 선택을 지배하고 손목 카메라도 30~100% 기여.
+→ 실기에서 지금 필요한 것은 **러너 관문 닫기 + 오프라인 채점의 실기 라벨**이다. 전부 tmux(없으면 `nohup`) 안에서, **처음은 1ep, ESC 와 베이스 e-stop 을 함께**.
+
+**DGX 가 답한 것 (위 「1호기로 넘기는 것」 2번)** — 리셋 구간 12.5 Hz 의 원인은 리셋 번들(`device=cpu`)이 매 틱 카메라 3장을 CPU 에서 변환한 것(DGX 실측 틱당 324 ms vs 0.55 ms). 리셋 단계 동안만 `predict_action` 을 state 전용으로 바꾸고 끝나면 복원(main `14e07c9`→`a22b560`, 테스트 232건).
+**받기**: `git fetch najongs && git merge --ff-only najongs/main` — 이번엔 패키지 코드만 바뀌어 **`uv lock`/`uv sync` 불필요**(workspace 멤버는 editable). `git log --oneline -3 -- packages/stage_runner` 에 `a22b560` 이 보이면 됐다.
+
+| # | 무엇 (명령) | 기록할 것 | 닫히는 결정 | 시간 |
+|---|---|---|---|---|
+| **1** | **②' 리셋만 재실행** — `RESET_ONLY=1 scripts/eval_chain.sh M1 resets2` (빈손, ② 와 같은 조건·같은 시작 자세) | 보고서 「경계 리셋」 표의 **`Hz ≈ 21`** · `⚠` 없음 · `events.jsonl` 의 `reason_detail.predict_path == "state_only"` · `predict_calls ≈ frames` | Hz 수정이 **실기 경로에서 먹었나** — 셋이 같이 와야 한다. 하나라도 아니면(`bypassed` 포함) 멈추고 그 값 그대로 보고 | 10분 |
+| **2** | **④' 시그널** — `RESET_ONLY=1 FROM_STAGE=1 TO_STAGE=2 scripts/eval_chain.sh M1 hup`, 베이스가 **정지한 틈**에 두 번째 터미널에서 `kill -HUP $(pgrep -f '[s]tage_runner')` | 로그에 stop_base → disconnect · 팔·베이스 제자리 · 종료 코드 | 시그널 래치 실증(codex 치명 지적) | 5분 |
+| **3** | **③ 물체 든 채 리셋** — 가벼운 튜브 먼저 `RESET_ONLY=1 scripts/eval_chain.sh M1 resets_tube`, 통과하면 비커 `… resets_beaker` | 경계별 **그리퍼가 놓치나 / 더 쥐나** · reach_err · clamped | 「그리퍼 관측값 재명령」 이 파지력을 유지하나 — 유일하게 설계 변경이 필요할 수 있는 관문. 놓치면 거기서 멈추고 보고 | 20분 |
+| **4** | **④ M1 + 러너 단계 1개** — `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` (task04 장면 세팅, 1ep → 괜찮으면 2ep) | policy 구간 Hz · rearm `active` · clamped · FIRED **vs 10/06 1350** · **종료 사유**(`complete` / `manual` / `timeout` / `never_departed`) · 출발 s · 정지 감지 s | 러너가 실행 계층을 안 바꿨나 + **완료 감시의 첫 실기 데이터** — 오프라인 예측은 「M1 은 끝 장면에서 안 멈춘다」(§93.2) → `complete` 가 안 나고 `→` 로 넘기게 되는지 | 15분 |
+| **5** | **⑤-M1 체인 1→3** — `TO_STAGE=3 scripts/eval_chain.sh M1 s1_3` (`→` 로 넘긴다, 자동 완료를 기대하지 않음) | 단계별 종료(자동/수동/타임아웃) · 리셋 T·Δmax·도달 · **단계별 ∫θ·∫x**(베이스 드리프트) · **리셋 뒤 다음 단계가 출발하나** | 리셋+정책+전환이 한 프로세스에서 끝까지 도나 · 베이스 드리프트가 리셋 범위 밖에 쌓이는지(계획 §7 위험) · 지정 자세 리셋 뒤 M1 출발률(B1 을 체인 안에서 한 번 더) | 30분 |
+| 6 | **B1 지정 자세 출발** — `configs/chain/stage_params.json` `stages["5"]`·`["2"]` 의 `start_pose_rad_arm12` 에 팔을 맞추고(`POSE` 줄로 거리 확인) `scripts/eval_najy.sh M1 5 30 3` · `scripts/eval_najy.sh M1 2 30 3` | 출발 ep / 정지 ep · 시작 자세 거리 | 오프라인 출발 지도(M1 t05 20%·t02 26% 정지 예측, §94.9)의 **실기 라벨** — 채점을 믿어도 되는지 | 20분 |
+| 7 | **B2 M2 끝 정지** — `scripts/eval_najy.sh M2 4 30 2`, 부은 뒤 손대지 말고 30초 관찰 | 끝에서 머무나 / 움직이나(어느 관절·방향) | 끝 정지 지표(M2 120K t07 96%·t11 95%, §94.9)의 실기 검증 — 맞으면 M2 가 16D 폴백 참조군 | 10분 |
+| 8 | B3 task03·task01 재시험 — `eval_najy_results_1006.md` 「다음」 1·2 그대로 | 회전·전진량 vs 기준(task03 −81°, task01 +82°·1.64 m, 21 Hz 환산) | M1 이동 단계 실제 성공률 | 30분 |
+| 9 | **B4 (선택) 장면 변화 민감도** — task04 를 ④ 와 같은 세팅으로 `scripts/eval_najy.sh M1 4 30 1`, 그다음 **cam_high 시야 안에 작업과 무관한 물체 하나를 추가**(또는 조명만 바꿈)하고 같은 명령 1ep | 성공/실패 · 동작이 달라진 시점·관절 · 무엇을 바꿨나(사진) | 오프라인: t03→04 단계 선택을 cam_high 가 지배(M1 교환 0.175 vs 손목 0.07), 증강 모델은 그 의존을 손목으로 옮길 뿐(§94.12) — **환경 변화 취약성의 첫 실기 데이터**. 탐색용이지 판정 아님 | 10분 |
+| C | **전송(사람)** — 1006 데이터셋 6개 + `~/eval_logs/1006_*` + 위 1~9 의 `eval_chain_*`·`eval_najy_1007_*` → DGX `/raid/kiro-ai/eval/real/` (명령 `eval_najy.md` 「결과 넘기기」) | — | 1350 ep0/ep1/ep2 · C-2 프레임으로 출발 지도·진행도·원핫 진단을 **실기 라벨로 검증** → 2라운드 후보를 믿고 고른다. **여전히 가장 큰 도움** | — |
+
+- 순서의 이유: 1 은 DGX 수정의 역검증이라 가장 먼저(10분) · 2·3 은 ⑤ 전에 닫혀야 하는 안전 관문 · 4·5 는 러너 전체를 M1 로 끝까지 한 번 · 6·7 은 오프라인 채점의 라벨 · 8·9 는 시간이 남을 때.
+- **하지 말 것**: `scripts/eval_chain.sh TPH|ENV` — 허브에 없어 다운로드에서 멈춘다(정상, 올라가면 이 문서에 적는다) · M1 로 자동 완료를 기대하고 ⑤ 전체(1→11)를 돌리기 · 추가 수집.
+- **기록**: 회차마다 `eval_chain_report.py`/`eval_najy_post.sh` 산출을 `docs/run_logs/2026-10-07_eval_najy/` 에, 이 문서 「다음」 에 한 줄씩. **1(Hz)·3(그리퍼)·2(시그널)** 은 결과가 어느 쪽이든 바로 commit·push — DGX 가 보고 러너를 고친다.
+
 ## 다음
 
+0. **(10/07 저녁) 위 「DGX_1 → Trossen PC1 (10/07 저녁)」 표 1→9 순.** 1(②' Hz 역검증)이 먼저다 — 아래 1~3 은 그 표의 2·3·4 와 같다.
 1. **④' 시그널 실증** — 짧은 리셋 회차 `RESET_ONLY=1 FROM_STAGE=1 TO_STAGE=2 scripts/eval_chain.sh M1 hup` 을 띄우고 두 번째 터미널에서
    `kill -HUP $(pgrep -f '[s]tage_runner')`. 로그에 stop_base → disconnect, 팔·베이스 제자리.
 2. **③ 물체 든 채 리셋** — 가벼운 플라스틱 튜브 먼저(`RESET_ONLY=1 scripts/eval_chain.sh M1 resets_tube`), 그다음 비커. 그리퍼가 놓치거나 더 쥐면 멈추고 보고.
