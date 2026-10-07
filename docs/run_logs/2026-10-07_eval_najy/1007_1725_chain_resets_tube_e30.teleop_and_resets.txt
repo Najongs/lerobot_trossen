@@ -1,0 +1,45 @@
+17:25:21 r/runner.py:217 teleop phase (attempt 1): leader arms drive the followers for up to 300 s. Grasp / pose for reset_pre_03, then RIGHT ARROW to start; LEFT ARROW restarts this phase; ESC aborts
+17:25:58 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.95 rad | 가장 큰 차 L j3 -29° | L: j0 -36→-33 j1 +91→+70↓ j2 +20→+21 j3 +61→+32↓ j4 +9→+30↑ j5 +5→+4 | R:
+17:25:59 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.01 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +63→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:00 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.00 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +63→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:01 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.00 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +63→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:02 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.00 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +63→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:03 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:04 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:05 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:06 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:07 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:08 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:09 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:10 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:11 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:12 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:13 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:14 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:15 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:16 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:17 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:18 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:19 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:20 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:21 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:22 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:23 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.99 rad | 가장 큰 차 R j3 -31° | L: j0 -36→-33 j1 +91→+70↓ j2 +19→+21 j3 +62→+32↓ j4 +8→+30↑ j5 +5→+4 | R: 
+17:26:31 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.89 rad | 가장 큰 차 L j1 -26° | L: j0 -29→-33 j1 +96→+70↓ j2 +30→+21 j3 +52→+32↓ j4 +14→+30↑ j5 +11→+4 | 
+17:26:32 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.96 rad | 가장 큰 차 L j3 -32° | L: j0 -24→-33 j1 +96→+70↓ j2 +26→+21 j3 +64→+32↓ j4 +23→+30 j5 +11→+4 | R: j
+17:26:33 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 0.87 rad | 가장 큰 차 L j1 -26° | L: j0 -24→-33 j1 +96→+70↓ j2 +28→+21 j3 +54→+32↓ j4 +23→+30 j5 +11→+4 | R: j
+17:26:34 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.03 rad | 가장 큰 차 L j3 -32° | L: j0 -20→-33↓ j1 +98→+70↓ j2 +23→+21 j3 +64→+32↓ j4 +30→+30 j5 +8→+4 | R:
+17:26:35 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.00 rad | 가장 큰 차 L j3 -31° | L: j0 -20→-33↓ j1 +98→+70↓ j2 +25→+21 j3 +63→+32↓ j4 +30→+30 j5 +8→+4 | R:
+17:26:36 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.00 rad | 가장 큰 차 L j3 -31° | L: j0 -20→-33↓ j1 +98→+70↓ j2 +25→+21 j3 +63→+32↓ j4 +30→+30 j5 +8→+4 | R:
+17:26:37 se_guide.py:201 [→ 가능 ✔] POSE task03 | 목표까지 1.00 rad | 가장 큰 차 L j3 -31° | L: j0 -20→-33↓ j1 +98→+70↓ j2 +25→+21 j3 +63→+32↓ j4 +30→+30 j5 +8→+4 | R:
+Right arrow key pressed. Exiting loop...
+17:26:37 rate_log.py:157 Arm relative-target clamps this teleop phase: 103 arm-ticks (last partial window 0)
+17:26:37 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:26:37 r/runner.py:299 teleop phase (attempt 1) ended by arrow after 76.6 s; stop_base primary
+17:26:40 xecutors.py:579 stage 'reset_pre_03' ended: reached (52 frames in 2.48s, {'reset_T': 1.5, 'reset_dmax': 0.5417, 'reset_ticks': 32, 'reset_max_step_rad': 0.0317, 'reset_settle_ticks': 21, 'res
+17:26:40 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:26:43 xecutors.py:579 stage 'reset_to_04' ended: reached (52 frames in 2.48s, {'reset_T': 1.5, 'reset_dmax': 0.3761, 'reset_ticks': 32, 'reset_max_step_rad': 0.022, 'reset_settle_ticks': 21, 'reset
+17:26:43 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:26:45 xecutors.py:579 stage 'reset_to_05' ended: reached (52 frames in 2.48s, {'reset_T': 1.5, 'reset_dmax': 0.5051, 'reset_ticks': 32, 'reset_max_step_rad': 0.0296, 'reset_settle_ticks': 21, 'rese
+17:26:45 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:26:51 r/runner.py:645 trial ended: completed (3 stages, 156 frames)
