@@ -633,14 +633,16 @@ def reset_predict_action(policy: Any) -> Iterator[ResetPredictSwap]:
             # either way, so matching the CODE is what keeps the action identical.
             return postprocessor(action)
 
-    lerobot_record.predict_action = state_only_predict_action
-    swap.installed = True
-    logger.info(
-        "리셋 구간: 영상 변환 생략 -- 리셋은 observation.state 만 읽으므로 카메라 "
-        "프레임은 텐서로 바꾸지 않는다 (predict_path=state_only). 정책 구간은 "
-        "그대로 전체 변환을 쓴다."
-    )
+    # 대입부터 try 안에 둔다 -- 대입 직후 try 에 들어가기 전에 SystemExit(시그널 래치)·
+    # KeyboardInterrupt 가 오면 finally 를 못 타고 스왑이 남는 창이 있었다 (codex 10/07).
     try:
+        lerobot_record.predict_action = state_only_predict_action
+        swap.installed = True
+        logger.info(
+            "리셋 구간: 영상 변환 생략 -- 리셋은 observation.state 만 읽으므로 카메라 "
+            "프레임은 텐서로 바꾸지 않는다 (predict_path=state_only). 정책 구간은 "
+            "그대로 전체 변환을 쓴다."
+        )
         yield swap
     finally:
         lerobot_record.predict_action = original

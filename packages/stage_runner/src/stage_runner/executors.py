@@ -553,8 +553,15 @@ def run_chain_reset_stage(context: StageContext, stage: StageConfig) -> StageRes
             # the swap never took (an upstream that moved `predict_action`, or a
             # plugin that substituted the policy for this loop) and the operator
             # should expect the old ~12.5 Hz. `predict_calls` should be ~= frames.
-            "predict_path": predict_swap.predict_path,
-            "predict_calls": predict_swap.state_only_calls,
+            # 프레임은 생겼는데 경량·upstream 호출이 둘 다 0 이면 스왑이 **우회**된 것
+            # (다른 이름으로 predict 를 부르는 래퍼 등) -- `not_called` 로 숨기지 않는다 (codex 10/07).
+            "predict_path": (
+                "bypassed"
+                if frames > 0 and predict_swap.state_only_calls == 0 and predict_swap.upstream_calls == 0
+                else predict_swap.predict_path
+            ),
+            "predict_calls": predict_swap.state_only_calls,          # 경량 경로 호출 수 (≈ frames 이어야 함)
+            "predict_calls_upstream": predict_swap.upstream_calls,   # upstream 위임 호출 수 (REPLAY 등; 보통 0)
         }
     )
 
