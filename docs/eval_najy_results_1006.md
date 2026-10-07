@@ -382,6 +382,12 @@ DGX 세션이 10/06 저녁에 한 것(배경·근거는 sim 레포 `docs/mobile_
 - 1라운드 TPH 120K 채점(sim §94.9): **출발(P2)은 두 시드 모두 해결**(시작 정지 예측 ≤4%, M1 은 단계별 20~98%), 추종은 3단계(task07·10·11) 문턱 초과로 나빠짐, **끝 정지·진행도·원핫은 미달**(장면이 겹치는 경계에서 다음 단계 첫 동작이 나옴). 사용자 결정: **허브 업로드는 2라운드(env 단계 토큰, `exp_all11_tph_env_*`, 10/07 11:00 UTC 종료 예정) 결과를 보고** → 그때까지 로봇 PC 는 **M1 로 bring-up ①~④** 를 진행하면 된다(러너·리셋·시그널·환경변수 검증은 모델과 무관).
 - `scripts/eval_chain.sh` 의 `TPH`/`ENV` 모델 이름은 허브에 올라간 뒤에만 유효(지금은 다운로드 실패로 멈춘다 — 정상).
 
+### 10/07 낮 갱신 (DGX) — 리셋 구간 12.5 Hz 원인·수정
+- 원인: 리셋 번들(`device=cpu`)이 매 틱 카메라 3장을 CPU 에서 float 텐서로 변환(`prepare_observation_for_inference`) — DGX 실측 틱당 324 ms(영상 포함) vs 0.55 ms(생략). 정책 구간은 `fast_obs_patch` 가 GPU 에서 변환해 빠르고, mock 은 영상이 작아 안 보였다.
+- 수정(main 머지): 리셋 단계 동안만 `lerobot_record.predict_action` 을 **state 만 쓰는 경량 함수**로 바꾸고 끝나면 복원. 데이터셋 프레임·완료 감시·NaN 게이트는 원본 관측을 받아 영향 없음(테스트 232건).
+- **로봇 PC 확인(bring-up ② 한 번 더)**: 보고서 「경계 리셋」 표의 `Hz ≈ 21` · `⚠` 없음 · `events.jsonl` 의 `reason_detail.predict_path == "state_only"` 이고 `predict_calls ≈ frames` — 셋이 같이 와야 「먹었다」. 그 뒤 ③(물체 든 채) → ④.
+- 참고: 과회전 배수는 **정책 구간** Hz 가 정한다(21.0 유지). ④ 에서 정책 구간 Hz 가 eval_najy 회차와 같은지가 그 확인.
+
 ### 로봇 PC 가 할 것 (순서)
 1. **받기**: `git fetch najongs && git merge --ff-only najongs/main` → `uv lock && uv sync` (`stage_runner` 가 workspace 멤버로 추가돼 lock 갱신이 필요하다; sync 가 수동 설치분을 지우면 복구) → `uv run python -c "import stage_runner"` 로 확인.
 2. **bring-up ①~③ 은 M1 로, 새 모델 없이 지금 할 수 있다** — `DRY_RUN=1 scripts/eval_chain.sh M1` → `RESET_ONLY=1 … resets`(빈손 10경계; 큰 전이 5곳 t02→03·03→04·04→05·07→08·10→11 은 특히 눈으로) → 물체 든 채. 통과 기준은 G절 표. **처음은 에피소드 1개, ESC 와 베이스 e-stop 을 함께 둔다**(e-stop 은 팔을 멈추지 않는다 [추정]). ③ 의 「그리퍼가 쥐는 힘을 유지하나」 가 미확인 관문이다.
