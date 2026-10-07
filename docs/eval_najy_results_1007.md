@@ -52,16 +52,30 @@ pose_guide 의 지정 자세. 지시는 `eval_najy_results_1006.md` 「DGX_1 →
 - 영향: 리셋이 느려지는 쪽이라 안전엔 문제 없었다. 다만 ④ 의 「eval_najy 회차와 같은 수치」 비교는 **policy 구간끼리** 해야 하고, reset 구간 Hz 는 이 값이 첫 기준선이다.
 - 다른 보고 줄: rearm 은 리셋 구간에서 「active … 21 fps」 로 켜지고 경계마다 「off again (no record_loop phase tag)」 뒤 다시 켜진다 — 리셋당 재등록 104회(=52틱×2 트랜잭션), 정상.
 
+## ②' 리셋만 재실행 — Hz 수정 역검증 · `1007_1532_chain_resets2_e30` ([chain.md](run_logs/2026-10-07_eval_najy/1007_1532_chain_resets2_e30.chain.md) · [events](run_logs/2026-10-07_eval_najy/1007_1532_chain_resets2_e30.events.jsonl))
+
+`a22b560` 을 받은 뒤(`uv sync` 없이 editable, 테스트 232건 OK) 같은 조건으로: `RESET_ONLY=1 scripts/eval_chain.sh M1 resets2`, 빈손, 대기 자세 시작. 종료 코드 0 · completed · 저장 591프레임 · **40.7 s**(② 는 59.2 s).
+
+| DGX 가 요구한 셋 | ② (수정 전) | ②' (수정 후) | 판정 |
+|---|---|---|---|
+| 보고서 「경계 리셋」 `Hz` ≈ 21, `⚠` 없음 | 11.9~13.1 | **20.9~21.0**, ⚠ 없음 (루프 줄 mean 20.9~21.2, min 20.4~20.7) | ✅ |
+| `reason_detail.predict_path == "state_only"` | (없음) | 11/11 `state_only`, `predict_calls_upstream` 0 | ✅ |
+| `predict_calls ≈ frames` | — | 52/52 ×9 · 60/60 · 63/63 (= 프레임) | ✅ |
+
+- per-frame: arms 1+3 · base 10+10 · cam 0 · **other 22~24 ms**(② 55 ms) — 리셋 구간 `other` 가 policy 구간(24 ms)과 같아졌다. 벽시계 리셋 경과 2.5 s(② 4.2 s).
+- ② 의 다른 관문은 그대로 통과: 11/11 reached · 도달 오차 ≤0.0015 · clamped 0 · `stop_base_path` 11곳 `primary` · Δmax 동일(최대 1.048) · 베이스 명령 최대 0.0000 / 실측 적분 +0.0002 m · -0.08° (30 s).
+- 경고·에러 줄 없음, 팔·카메라 disconnect 정상. **수정이 실기 경로에서 먹었다.** 리셋 구간 Hz 기준선은 이 값(21.0)으로 바꾼다.
+
 ## 읽은 것
 
 - bring-up ①·② **통과**. 리셋 궤적(관절공간 직선, 시연에 없는 경로)은 빈손에서 전 경계 도달·상한 안·클램프 0 이었다. 큰 전이 다섯 곳의 Δmax 는 사전 계산(stage_params)과 일치한다.
-- 열린 것 하나: 리셋 구간 루프 12.5 Hz 의 원인. DGX 가 러너를 소유하므로 넘긴다(아래).
+- ~~열린 것 하나: 리셋 구간 루프 12.5 Hz 의 원인.~~ → DGX 가 원인(리셋 번들의 CPU 영상 변환)을 고쳤고 ②' 에서 21.0 Hz 로 확인됐다(위).
 - 사람 관찰이 비어 있다 — `~/eval_logs/eval_chain_results.csv` 는 정책 단계 라벨용(`run_id,stage_id,outcome,failure_phase`)이라 리셋 전용 회차엔 쓰지 않았다.
 
 ## 1호기(DGX_1)로 넘기는 것 — 10/07
 
 1. **②의 세 관문**: `stop_base_direct_ok` 11/11 `primary` · `clamped` 0 · 도달 오차 ≤0.0019. ③(그리퍼)·④'(시그널)는 아직.
-2. **리셋 구간 루프 12.5 Hz** (`other` 55 ms, mock 20.9 Hz) — 러너의 실로봇 리셋 경로에서 틱당 ~30 ms 가 어디서 드는지. 후보(미확인):
+2. ~~**리셋 구간 루프 12.5 Hz**~~ → **닫힘(②', 21.0 Hz · state_only · calls=frames)**. 원래 요청: (`other` 55 ms, mock 20.9 Hz) — 러너의 실로봇 리셋 경로에서 틱당 ~30 ms 가 어디서 드는지. 후보(미확인):
    리셋 정책 `select_action`/후처리의 실관측 경로, pose_guide `set_stage` 뒤 틱당 계산, 리셋 구간의 데이터셋 프레임 추가·finite 게이트. 로봇 PC 에서 `cProfile` 을 걸어 달라면 건다.
 3. 사람 몫 그대로: **C. 1006 회차 원자료 전송**(데이터셋 6개 + `~/eval_logs/1006_*`) 아직 안 됨.
 
@@ -94,6 +108,7 @@ pose_guide 의 지정 자세. 지시는 `eval_najy_results_1006.md` 「DGX_1 →
 ## 다음
 
 0. **(10/07 저녁) 위 「DGX_1 → Trossen PC1 (10/07 저녁)」 표 1→9 순.** 1(②' Hz 역검증)이 먼저다 — 아래 1~3 은 그 표의 2·3·4 와 같다.
+0. ~~②' Hz 역검증~~ ✅ 통과(10/07 15:32, 위 절). 1호기 목록의 1번 닫힘.
 1. **④' 시그널 실증** — 짧은 리셋 회차 `RESET_ONLY=1 FROM_STAGE=1 TO_STAGE=2 scripts/eval_chain.sh M1 hup` 을 띄우고 두 번째 터미널에서
    `kill -HUP $(pgrep -f '[s]tage_runner')`. 로그에 stop_base → disconnect, 팔·베이스 제자리.
 2. **③ 물체 든 채 리셋** — 가벼운 플라스틱 튜브 먼저(`RESET_ONLY=1 scripts/eval_chain.sh M1 resets_tube`), 그다음 비커. 그리퍼가 놓치거나 더 쥐면 멈추고 보고.
