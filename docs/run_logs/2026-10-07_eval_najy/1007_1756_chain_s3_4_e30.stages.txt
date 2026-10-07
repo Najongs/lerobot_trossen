@@ -1,0 +1,20 @@
+17:56:42 policies.py:313 chain: stage one-hot installed before the normalizer, K=11, initial stage 3. Every stage re-points it; the 'stage i/K active' line is re-emitted each time and its ABSENCE means the one-hot did not switch -- stop the run.
+17:56:54 r/runner.py:217 teleop phase (attempt 1): leader arms drive the followers for up to 300 s. Grasp / pose for reset_pre_03, then RIGHT ARROW to start; LEFT ARROW restarts this phase; ESC aborts; the ceiling aborts too.
+17:57:21 rate_log.py:157 Arm relative-target clamps this teleop phase: 100 arm-ticks (last partial window 0)
+17:57:21 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:57:21 r/runner.py:299 teleop phase (attempt 1) ended by arrow after 27.6 s; stop_base primary
+17:57:24 xecutors.py:579 stage 'reset_pre_03' ended: reached (52 frames in 2.48s, {'reset_T': 1.5, 'reset_dmax': 0.5383, 'reset_ticks': 32, 'reset_max_step_rad': 0.0315, 'reset_settle_ticks': 21, 'reset_jump_limit_rad': 0.6, 'reset_initial': True, 'reset_ceili
+17:57:24 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:57:24 ot_patch.py:199 LEROBOT_TASK_ONEHOT: stage 3/11 active -- policy state 14 -> 27 (base slots zeroed)
+17:57:30 mpletion.py:777 stage 3 (task03_turn_to_face_beaker) departed at 6.04s: the arm has been 0.102 rad from the pose it started this stage at for 3 ticks in a row. Completion is now allowed to fire; before this it could not.
+17:57:32 mpletion.py:678 stage 3 (task03_turn_to_face_beaker) complete by stall_nn: {'completion_reason': 'stall_nn', 'elapsed_s': 8.05, 'ticks': 169, 'stall_s': 2.962, 'p_last': None, 'p_hold_s': None, 'nn_dist': 0.1205, 'nn_index': 0, 'departed': True, 'depa
+17:57:32 xecutors.py:296 stage 't03' (task03) ended: complete (169 frames in 8.09s, p10 8.1 / p90 17.9)
+17:57:32 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:57:35 xecutors.py:579 stage 'reset_to_04' ended: reached (52 frames in 2.48s, {'reset_T': 1.5, 'reset_dmax': 0.407, 'reset_ticks': 32, 'reset_max_step_rad': 0.0238, 'reset_settle_ticks': 21, 'reset_jump_limit_rad': 1.5, 'reset_initial': False, 'reset_ceilin
+17:57:35 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:57:35 ot_patch.py:199 LEROBOT_TASK_ONEHOT: stage 4/11 active -- policy state 14 -> 27 (base slots zeroed)
+17:57:36 mpletion.py:777 stage 4 (task04_pour_liquid_from_tubes_to_beaker) departed at 0.92s: the arm has been 0.139 rad from the pose it started this stage at for 3 ticks in a row. Completion is now allowed to fire; before this it could not.
+17:58:10 xecutors.py:296 stage 't04' (task04) ended: timeout (732 frames in 34.97s, p10 13.1 / p90 17.5)
+17:58:10 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:58:10 r/runner.py:524 CHAIN BROKEN at stage 't04': ended 'timeout', which is not one of ['complete', 'manual']. ran to control_time_s with no completion; elapsed_s=34.967, control_time_s=34.960, margin_s=0.250, threshold_s=34.710 The remaining stages are NO
+17:58:27 r/runner.py:645 trial ended: chain_failed (4 stages, 1005 frames)
