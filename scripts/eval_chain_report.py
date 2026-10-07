@@ -317,9 +317,9 @@ def build_report(
     lines.append("")
     lines.append(
         "| 리셋 | 종료 | 사유 | T s | Δmax rad (상한) | 보폭 상한 rad | 도달 오차 rad "
-        "(tol) | 경과 s (상한) | 프레임 | clamped |"
+        "(tol) | 경과 s (상한) | Hz | 프레임 | clamped |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     interrupted: list[str] = []
     for record in stages:
         start, end = record["start"], record["end"]
@@ -334,7 +334,8 @@ def build_report(
             interrupted.append(str(start.get("stage_id")))
         lines.append(
             "| {label} | {term} | {why} | {T} | {dmax} ({limit}) | {step} | "
-            "{err} ({tol}) | {elapsed} ({ceiling}) | {frames} | {clamped} |".format(
+            "{err} ({tol}) | {elapsed} ({ceiling}) | {hz} | {frames} | "
+            "{clamped} |".format(
                 label=f"`{start.get('stage_id')}`" + (" (최초)" if initial else ""),
                 term=f"**{terminator}**",
                 # `not_reached` 는 세 사건의 결과다 — 거부(움직이기 전) ·
@@ -349,6 +350,21 @@ def build_report(
                 tol=fmt(detail.get("reset_tol_rad"), ".3f"),
                 elapsed=fmt(end.get("elapsed_s"), ".1f"),
                 ceiling=fmt(detail.get("reset_ceiling_s"), ".1f"),
+                # 리셋 구간 Hz 는 **읽어야 하는 수치**다 — 10/07 에 여기가
+                # 11.9~13.1 Hz 였고(목표 21), 원인은 리셋 번들의 CPU 영상
+                # 변환이었다. `⚠` 는 그 생략이 **안 걸렸다**는 뜻이다
+                # (`reason_detail.predict_path`): 그러면 낮은 Hz 는 램프 탓이
+                # 아니라 변환 탓이다. 옛 회차의 events.jsonl 에는 키가 없어서
+                # 표시가 붙지 않고(`None`), `not_called` 도 붙지 않는다 —
+                # 첫 틱 전에 끊긴 리셋은 **아무것도 추론하지 않은** 것이라
+                # 「생략이 안 걸렸다」와 다르다 (없음 ≠ 안 걸림).
+                hz=fmt(end.get("hertz"), ".1f")
+                + (
+                    "⚠"
+                    if detail.get("predict_path")
+                    not in (None, "state_only", "not_called")
+                    else ""
+                ),
                 frames=fmt(end.get("frames"), "d"),
                 clamped=fmt(detail.get("clamped_ticks"), "d"),
             )

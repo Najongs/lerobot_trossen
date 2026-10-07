@@ -7,11 +7,12 @@ else in the package imports ``lerobot.scripts.lerobot_record``.
 
 import logging
 import sys
-from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass, field
 from typing import Any
 
+import torch
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.pipeline_features import (
     aggregate_pipeline_dataset_features,
@@ -27,6 +28,7 @@ from lerobot.processor import (
 )
 from lerobot.robots import Robot, RobotConfig, make_robot_from_config
 from lerobot.scripts import lerobot_record
+from lerobot.utils import control_utils
 from lerobot.utils.constants import ACTION
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.import_utils import register_third_party_plugins
@@ -446,6 +448,202 @@ def call_record_loop(
         single_task=single_task,
         display_data=display_data,
     )
+
+
+# ---------------------------------------------------------------- reset fast path
+
+# `predict_path` in a reset stage's reason_detail. MEASURED, never declared: the
+# swap below counts its own calls and the executor writes whichever of these the
+# count supports -- see `ResetPredictSwap.predict_path`.
+PREDICT_PATH_STATE_ONLY: str = "state_only"
+PREDICT_PATH_UPSTREAM: str = "upstream"
+PREDICT_PATH_MIXED: str = "mixed"
+# Installed, and then nothing was predicted at all: an Esc or a stale
+# ``exit_early`` breaks ``record_loop`` at the TOP of its first iteration
+# (lerobot_record.py:343-345), before ``predict_action``. Distinct from
+# ``upstream`` on purpose -- "nothing ran" is not "the swap did not take", and
+# labelling it ``upstream`` would make the report flag a reset that never moved.
+PREDICT_PATH_NOT_CALLED: str = "not_called"
+
+
+def is_image_observation_key(name: str) -> bool:
+    """True for the observation keys whose conversion is the cost being skipped.
+
+    THE SAME TEST UPSTREAM USES. ``prepare_observation_for_inference`` decides
+    per key with ``if "image" in name`` (policies/utils.py:129) and that branch
+    is the whole expense: uint8 -> float32, a divide by 255 and a full
+    ``.permute(2,0,1).contiguous()`` copy, per camera, on the CPU. Matching the
+    predicate rather than the ``observation.images.`` prefix means a dataset that
+    names a single camera ``observation.image`` (OBS_IMAGE, constants.py:24) is
+    covered too, and no key that upstream would convert is left behind.
+    """
+    return "image" in name
+
+
+@dataclass
+class ResetPredictSwap:
+    """What the reset window actually did with ``predict_action``.
+
+    Read back by the executor AFTER ``record_loop`` returns, and the reason the
+    counters exist at all: the repo rule is 「줬다가 아니라 먹었다」. A
+    ``predict_path`` written from the intent would read ``state_only`` even in
+    the two cases where the lightweight function never ran -- an upstream that
+    moved ``predict_action`` off ``lerobot_record`` (``installed`` False), or a
+    plugin that replaced the policy object for this loop
+    (``chunk_execution_patch`` does exactly that when ``REPLAY_DATASET`` is set,
+    and the swap then delegates). The operator would see the old 12.5 Hz under a
+    label claiming the fix was in effect.
+    """
+
+    installed: bool = False
+    state_only_calls: int = 0
+    upstream_calls: int = 0
+    # Why the swap could not be installed, for the log. Empty when it was.
+    refused: str = field(default="")
+
+    @property
+    def predict_path(self) -> str:
+        # ``installed`` FIRST. Keyed on the counters alone, a reset that was
+        # broken before its first tick (Esc at the top of record_loop) would
+        # report ``upstream`` -- the one label that means "the swap did not
+        # take" -- about a window where the swap was in place and simply never
+        # asked. 「없음 ≠ 안 걸림」.
+        if not self.installed:
+            return PREDICT_PATH_UPSTREAM
+        if self.state_only_calls and not self.upstream_calls:
+            return PREDICT_PATH_STATE_ONLY
+        if self.state_only_calls:
+            return PREDICT_PATH_MIXED
+        if self.upstream_calls:
+            return PREDICT_PATH_UPSTREAM
+        return PREDICT_PATH_NOT_CALLED
+
+
+@contextmanager
+def reset_predict_action(policy: Any) -> Iterator[ResetPredictSwap]:
+    """Swap ``lerobot_record.predict_action`` for a state-only one, for a reset only.
+
+    WHY. ``record_loop`` calls ``predict_action`` every tick
+    (lerobot_record.py:358) and ``prepare_observation_for_inference`` inside it
+    converts EVERY observation key, cameras included. The reset bundle runs on
+    ``device="cpu"`` (reset_policy.ResetPolicyConfig) with identity processors,
+    so the three 480x640x3 uint8 frames are converted on the CPU -- measured
+    51-59 ms of the reset loop's per-frame ``other=`` term on the robot PC
+    (docs/eval_najy_results_1007.md), i.e. 11.9-13.1 Hz against a target of 21.
+    ``fast_obs_patch`` does not help here: it moves the conversion to ``device``,
+    and ``device`` IS the CPU for a reset. ``ResetPolicy.select_action`` reads
+    ``batch[OBS_STATE]`` and NOTHING else, so every one of those bytes is waste.
+
+    WHY THE MODULE ATTRIBUTE ON ``lerobot_record`` AND NOT ``control_utils``.
+    ``record_loop`` resolves ``predict_action`` as a global of the module it is
+    defined in (``from ... import predict_action`` at lerobot_record.py:135-138,
+    called at :358), so the binding that matters is
+    ``lerobot_record.predict_action``. Rebinding ``control_utils.predict_action``
+    would not be seen by the loop. The two fork plugins that rebind
+    ``record_loop`` (``loop_rate_log``, ``chunk_execution_patch``) install
+    ``functools.wraps`` WRAPPERS that call the original function object, whose
+    ``__globals__`` is still ``lerobot_record.__dict__`` -- so the swap reaches
+    the loop on the robot PC too, where those wrappers are in place. This is the
+    same late-binding argument as ``call_record_loop``'s, read the other way
+    round.
+
+    SCOPE. Whatever was bound at entry is restored in ``finally`` -- on the
+    normal exit, on an exception out of ``record_loop`` and on the Esc path, all
+    of which leave through the same block. Policy stages and plain
+    ``lerobot-record`` therefore never see this function: the window is one
+    reset's ``call_record_loop`` and nothing else.
+
+    GUARDED BY POLICY IDENTITY. The lightweight path runs only when the loop is
+    driving ``policy`` -- the reset bundle's :class:`ResetPolicy`. Anything else
+    (``chunk_execution_patch`` substitutes a replay policy into ``kwargs`` when
+    ``REPLAY_DATASET`` is set, including for a reset) is delegated to the
+    function that was bound at entry, unmodified, and counted separately.
+    """
+    swap = ResetPredictSwap()
+    original = getattr(lerobot_record, "predict_action", None)
+    if not callable(original):
+        swap.refused = (
+            "lerobot.scripts.lerobot_record.predict_action is missing or not "
+            "callable; the reset runs through whatever record_loop resolves"
+        )
+        logger.warning(f"리셋 구간: 영상 변환 생략을 걸 수 없다 -- {swap.refused}")
+        yield swap
+        return
+
+    expected_policy = policy
+
+    def state_only_predict_action(
+        observation: dict,
+        policy: Any = None,
+        device: Any = None,
+        preprocessor: Any = None,
+        postprocessor: Any = None,
+        use_amp: bool = False,
+        task: str | None = None,
+        robot_type: str | None = None,
+    ):
+        # `policy` SHADOWS the enclosing name on purpose: record_loop passes it
+        # by keyword (lerobot_record.py:360) and the signature has to match
+        # upstream's. The reset bundle's policy is reached through the closure
+        # cell `expected_policy` instead.
+        if policy is not expected_policy:
+            swap.upstream_calls += 1
+            return original(
+                observation=observation,
+                policy=policy,
+                device=device,
+                preprocessor=preprocessor,
+                postprocessor=postprocessor,
+                use_amp=use_amp,
+                task=task,
+                robot_type=robot_type,
+            )
+        swap.state_only_calls += 1
+        # A NEW DICT, never the caller's. record_loop reuses `observation_frame`
+        # for the dataset row it writes one block later
+        # (`frame = {**observation_frame, **action_frame, ...}`,
+        # lerobot_record.py:411-413), and `prepare_observation_for_inference`
+        # REPLACES every value in the dict it is handed. Upstream protects the
+        # caller with `copy(observation)` (control_utils.py:100); the filter here
+        # allocates a new dict anyway, which is the same protection -- so the
+        # recorded frame still carries the camera arrays, at full uint8 fidelity,
+        # and `build_dataset_frame` is untouched.
+        state_only = {
+            name: value
+            for name, value in observation.items()
+            if not is_image_observation_key(name)
+        }
+        with (
+            torch.inference_mode(),
+            torch.autocast(device_type=device.type)
+            if getattr(device, "type", None) == "cuda" and use_amp
+            else nullcontext(),
+        ):
+            batch = control_utils.prepare_observation_for_inference(
+                state_only, device, task, robot_type
+            )
+            batch = preprocessor(batch)
+            action = policy.select_action(batch)
+            # RETURNED UNSQUEEZED AND ON ITS DEVICE, exactly as upstream does it.
+            # control_utils.predict_action's docstring claims step 5 removes the
+            # batch dimension and moves to the CPU; the installed 0.4.4 code does
+            # neither (control_utils.py:112-115 -- `return action` straight off
+            # the postprocessor). `make_robot_action` is what squeezes and moves
+            # (policies/utils.py:194-195), and it is the next call in record_loop
+            # either way, so matching the CODE is what keeps the action identical.
+            return postprocessor(action)
+
+    lerobot_record.predict_action = state_only_predict_action
+    swap.installed = True
+    logger.info(
+        "리셋 구간: 영상 변환 생략 -- 리셋은 observation.state 만 읽으므로 카메라 "
+        "프레임은 텐서로 바꾸지 않는다 (predict_path=state_only). 정책 구간은 "
+        "그대로 전체 변환을 쓴다."
+    )
+    try:
+        yield swap
+    finally:
+        lerobot_record.predict_action = original
 
 
 def classify_termination(
