@@ -1,0 +1,29 @@
+17:35:25 policies.py:313 chain: stage one-hot installed before the normalizer, K=11, initial stage 4. Every stage re-points it; the 'stage i/K active' line is re-emitted each time and its ABSENCE means the one-hot did not switch -
+17:35:37 r/runner.py:217 teleop phase (attempt 1): leader arms drive the followers for up to 300 s. Grasp / pose for reset_pre_04, then RIGHT ARROW to start; LEFT ARROW restarts this phase; ESC aborts; the ceiling aborts too.
+17:37:02 rate_log.py:157 Arm relative-target clamps this teleop phase: 55 arm-ticks (last partial window 0)
+17:37:02 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:37:02 r/runner.py:299 teleop phase (attempt 1) ended by arrow after 84.8 s; stop_base primary
+17:37:05 xecutors.py:579 stage 'reset_pre_04' ended: reached (52 frames in 2.48s, {'reset_T': 1.5, 'reset_dmax': 0.4314, 'reset_ticks': 32, 'reset_max_step_rad': 0.0253, 'reset_settle_ticks': 21, 'reset_jump_limit_rad': 0.6, 'rese
+17:37:05 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:37:05 ot_patch.py:199 LEROBOT_TASK_ONEHOT: stage 4/11 active -- policy state 14 -> 27 (base slots zeroed)
+17:37:06 mpletion.py:777 stage 4 (task04_pour_liquid_from_tubes_to_beaker) departed at 1.26s: the arm has been 0.150 rad from the pose it started this stage at for 3 ticks in a row. Completion is now allowed to fire; before this i
+17:37:06 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.1 Hz, min=16.9 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:07 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=17.2 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:09 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.2 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:10 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.0 Hz, clamped=2 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:12 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=18.4 Hz, clamped=7 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:13 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.6 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:15 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.3 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:16 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.1 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:18 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=16.5 Hz, clamped=1 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:19 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=17.4 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:20 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.6 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:22 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=17.2 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:23 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=18.4 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:25 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.9 Hz, min=16.3 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:26 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=17.5 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arm
+17:37:27 rate_log.py:157 Arm relative-target clamps this policy phase: 10 arm-ticks (last partial window 0)
+17:37:27 xecutors.py:296 stage 't04' (task04) ended: timeout (476 frames in 22.74s, p10 13.1 / p90 17.5)
+17:37:27 nsitions.py:344 stop_base confirmed: base.set_cmd_vel(0.0, 0.0) was accepted
+17:37:27 r/runner.py:524 CHAIN BROKEN at stage 't04': ended 'timeout', which is not one of ['complete', 'manual']. ran to control_time_s with no completion; elapsed_s=22.737, control_time_s=22.724, margin_s=0.250, threshold_s=22.4
+17:37:37 r/runner.py:645 trial ended: chain_failed (2 stages, 528 frames)

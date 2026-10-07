@@ -128,6 +128,26 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 - **비커(1731)도 통과** — 가장 큰 전이 둘(t08→09 0.98 rad, t10→11 1.05 rad)을 비커를 든 채 지났다. 그리퍼 명령 = 실측(331프레임 내내, 차 0). → **③ 관문 닫힘**: 「매 틱 관측값 재명령」 으로 파지가 유지된다 [튜브 1회·비커 1회].
 - 다음: **④ M1 + 러너 단계 1개(task04)** `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4`.
 
+## ④ M1 + 러너로 단계 1개 (task04 붓기) — `1007_1735_chain_one4_e30` ([chain.md](run_logs/2026-10-07_eval_najy/1007_1735_chain_one4_e30.chain.md) · [events](run_logs/2026-10-07_eval_najy/1007_1735_chain_one4_e30.events.jsonl) · [로그 발췌](run_logs/2026-10-07_eval_najy/1007_1735_chain_one4_e30.policy_stage.txt))
+
+`FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4`. 텔레옵 창 84.8 s(튜브 집고 비커 앞) → `→` → 최초 리셋 reached(Δ0.43) → **M1 정책 단계 t04**.
+**사람 판정: 붓기 동작함(양팔), 물을 바닥에 조금 흘림, 오른팔은 한 번이 아니라 여러 번 반복한 느낌** — 10/02 1150(eval_najy, 1/1 성공, 왼팔 3~4회 반복)과 같은 양상.
+
+| 볼 것 (DGX 표 4번) | 이번 (러너) | 10/06 1350 (`eval_najy.sh`, policy 구간) | 판정 |
+|---|---|---|---|
+| 원핫 | `stage 4/11 active -- policy state 14 -> 27` (set_stage) | `installed` + `stage 3/11 active` | ✅ 같은 패치 경로 |
+| policy 구간 Hz | mean 20.9~21.1 (min 16.3~18.4), per-frame arms 1+2 · base 10+10 · cam 0 | 21.0 (min 15.3~17.0), 같은 per-frame | ✅ 동일 |
+| rearm | `active for this policy loop at 21 fps` (reset 구간 포함) | active | ✅ |
+| clamped (0.1 rad 상한) | 10 arm-tick / 476 프레임 | 1350: 0 · 1347(task01): 83 | ✅ 범위 안 |
+| FIRED (페이싱) | 0 | 0 | ✅ |
+| 종료 사유 | **`timeout`** 22.7 s (= p90 17.5 × 1.3) — 사람이 `→` 를 안 눌렀고 완료 감시자도 안 울림 | — | 예상대로(§93.2 「M1 은 끝에서 안 멈춤」) |
+| 출발 | `departed` **1.26 s** (팔 0.15 rad 이탈, 3틱 연속) | — | ✅ 출발 래치 첫 실기 |
+| 베이스 | ∫θ 명령 +1.4° / 실측 0.0, ∫x 0.001 m, stop_base primary | — | ✅ |
+
+- 결과는 `chain_failed`(exit 4, 에피소드 528프레임 저장 = 리셋 52 + 정책 476). **러너 검증으로는 통과** — 실행 계층 수치가 eval_najy 회차와 같고, 원핫·출발·정지·저장이 전부 찍혔다. 모델 평가가 아니다.
+- 팔 움직임(`eval_motion_stats`, 에피소드 전체 25.1 s — 앞 2.5 s 는 리셋): 프레임당 0.042 rad(학습 중앙 0.060), 방향 바뀜 0.40/s(학습 0.29). 「청크 경계 점프 0.8×」 는 **쓰지 않는다** — 에피소드 앞의 리셋 52프레임 때문에 30프레임 경계 위상이 어긋나 지표가 경계를 못 짚는다(체인 데이터셋에 `eval_motion_stats` 를 쓰려면 정책 구간만 잘라야 한다 — 보류).
+- 완료 감시자가 22.7 s 안에 안 울린 이유는 로그상 「정지 3 s」 조건이 한 번도 안 맞은 것 [추정 — M1 이 반복 붓기로 계속 움직임]. ⑤ 에서는 **사람이 `→` 로 넘긴다**(DGX 지시).
+
 ## 읽은 것
 
 - bring-up ①·② **통과**. 리셋 궤적(관절공간 직선, 시연에 없는 경로)은 빈손에서 전 경계 도달·상한 안·클램프 0 이었다. 큰 전이 다섯 곳의 Δmax 는 사전 계산(stage_params)과 일치한다.
@@ -180,6 +200,7 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 0. ~~②' Hz 역검증~~ ✅ 통과(10/07 15:32, 위 절). 1호기 목록의 1번 닫힘.
 1. ~~④' 시그널 실증~~ ✅ 통과(10/07 15:51, 위 절). HUP → `SIGHUP received` → stop_base primary → disconnect. 자식 프로세스 이름은 `.venv/bin/python3` — pgrep 패턴 주의.
 2. **③ 물체 든 채 리셋** — 튜브는 `RESET_ONLY=1 FROM_STAGE=3 TO_STAGE=5 scripts/eval_chain.sh M1 resets_tube`, 비커는 `FROM_STAGE=6 TO_STAGE=11 … resets_beaker` (물체를 드는 단계부터). **튜브 ✅(1725) · 비커 ✅(1731) — ③ 닫힘**(위 ③ 절).
-3. **④ M1 + 러너로 단계 1개** — `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` (텔레옵 창에서 튜브 집고 비커 앞 task04 지정 자세로 → ). policy 구간 Hz·rearm·clamped·FIRED 를 10/06 1350 과 비교. ← **지금 여기**
+3. ~~④ M1 + 러너로 단계 1개~~ ✅ 러너 검증 통과(1735, 위 ④ 절) — 붓기 동작, timeout 종료(사람 `→` 없이), 실행 계층 수치 동일.
+3b. **⑤-M1 체인 1→3** — `TO_STAGE=3 scripts/eval_chain.sh M1 s1_3`. 텔레옵 창: 빈손, 선반 앞(task01 시작). 단계 상한 task01 12.8 s · task02 37.2 s · task03 23.3 s — 상한 전에 `→` 로 넘겨야 체인이 이어진다(timeout = 체인 끊김). ← **지금 여기**
 4. B1~B3(지정 자세 출발 task05/02 · M2 task04 끝 정지 · task03/01 재시험) → `eval_najy_results_1006.md` 「다음」.
 5. C. 전송(사람).
