@@ -11,6 +11,7 @@ YAML, not bugs in the package. Each message names the key to change.
 """
 
 import logging
+import math
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -1228,3 +1229,27 @@ def run_preflight(
         f"{robot_action_dimension(robot)}-dim action), dataset "
         f"{config.dataset.repo_id}."
     )
+
+
+def check_teleop_window(config: StageRunnerConfig) -> None:
+    """A leader-arm teleop window needs a positive, finite ceiling.
+
+    ``teleop_time_s <= 0`` (or NaN/inf) is not "no window": record_loop returns
+    before its first tick, the runner files the window as ``timeout`` and the
+    trial is aborted before the first stage moves -- a run that fails for a
+    typo. ``scripts/eval_chain.sh`` validates the value, a direct
+    ``python -m stage_runner`` did not (review 10/07). Refused here, before any
+    hardware is touched.
+    """
+    if getattr(config, "teleop", None) is None:
+        return
+    ceiling = getattr(config, "teleop_time_s", None)
+    try:
+        value = float(ceiling)
+    except (TypeError, ValueError):
+        value = float("nan")
+    if not math.isfinite(value) or value <= 0:
+        raise PreflightError(
+            f"teleop_time_s={ceiling!r} -- the teleop window's ceiling must be a positive "
+            "number of seconds (default 300). Drop --teleop.* to run without the window."
+        )

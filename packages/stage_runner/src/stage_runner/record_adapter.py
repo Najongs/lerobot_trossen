@@ -723,8 +723,12 @@ def call_teleop_loop(
     셋: ``→`` (exit_early), ``←`` (rerecord_episode + exit_early), ESC (stop_recording +
     exit_early), 또는 ``control_time_s`` 타임아웃. 플래그 해석은 호출자
     (``runner._run_teleop_phase``)가 한다 -- record_loop 는 exit_early 만 스스로 지운다.
-    ``robot_action_processor`` 는 그대로 타므로 팔 한 틱 상한(max_relative_target)과
-    NaN 게이트는 텔레옵 action 에도 걸린다; 완료 감시자는 begin_stage 전이라 꺼져 있다.
+    ``robot_action_processor`` 를 그대로 타고 ``robot.send_action`` 으로 간다. 팔 한 틱 상한
+    (``max_relative_target``)은 파이프라인 step 이 아니라 팔로워의 ``send_action``
+    (``ensure_safe_goal_position``)에서 걸리므로 텔레옵 action 에도 항상 적용된다. NaN 게이트
+    (``FiniteActionGateStep``)는 **체인 런(``chain.enabled``)에서만** ``robot_action`` 끝에
+    설치된다 -- version 1 설정에 ``--teleop.*`` 를 주면 게이트 없이 돈다(리뷰 10/07).
+    완료 감시자는 begin_stage 전이라 꺼져 있다.
     """
     lerobot_record.record_loop(
         robot=robot,

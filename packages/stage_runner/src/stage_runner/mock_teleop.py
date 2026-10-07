@@ -31,6 +31,13 @@ class MockTeleopConfig(TeleoperatorConfig):
     # answers that value, for a test that wants the window to move the arm.
     pose_rad: float | None = None
     include_base: bool = True
+    # What the leader reports for the base. The real leader fills x.vel/theta.vel
+    # with the base's MEASURED velocity (mobileai_leader.get_latest_base_velocity),
+    # which the window zeroes by default (TeleopBaseZeroStep). Non-zero values here
+    # let an e2e test prove the zeroing on the full cli path -- with 0.0 (the
+    # default) the test would pass even if the step were missing (review 10/07).
+    x_vel: float = 0.0
+    theta_vel: float = 0.0
 
 
 class MockTeleop(Teleoperator):
@@ -42,6 +49,10 @@ class MockTeleop(Teleoperator):
         self.config = config
         self._connected = False
         self.calls = 0
+        # Same test-only handle as MockRobot.last_instance: cli builds the teleop.
+        MockTeleop.last_instance = self
+
+    last_instance: "MockTeleop | None" = None
 
     @property
     def _joint_names(self) -> list[str]:
@@ -87,8 +98,8 @@ class MockTeleop(Teleoperator):
             for index, name in enumerate(self._joint_names)
         }
         if self.config.include_base:
-            action["x.vel"] = 0.0
-            action["theta.vel"] = 0.0
+            action["x.vel"] = float(self.config.x_vel)
+            action["theta.vel"] = float(self.config.theta_vel)
         return action
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:

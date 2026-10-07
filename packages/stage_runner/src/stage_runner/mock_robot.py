@@ -121,6 +121,12 @@ class MockRobot(Robot):
             for index, name in enumerate(self._joint_names)
         }
         self._base_velocity: dict[str, float] = {"x.vel": 0.0, "theta.vel": 0.0}
+        # The most recent instance, for an e2e test that drives cli.main and then
+        # wants `sent_actions` -- cli builds the robot itself, so the test has no
+        # other handle on it. Test-only; nothing in the package reads it.
+        MockRobot.last_instance = self
+
+    last_instance: "MockRobot | None" = None
 
     @property
     def _joint_names(self) -> list[str]:

@@ -405,7 +405,7 @@ def build_report(
     }
     lines.append(f"- 정책 단계 {policy_total}개: {policy_line}")
     if other_policy:
-        lines.append(f"  - 그 밖: {other_policy} (중단·오류)")
+        lines.append(f"  - 그 밖: {other_policy} (중단·시그널·오류)")
     boundary = sum(
         1
         for record in stages
@@ -417,7 +417,7 @@ def build_report(
         f"{reset_total - boundary}): {reset_line}"
     )
     if other_reset:
-        lines.append(f"  - 그 밖: {other_reset} (중단·오류)")
+        lines.append(f"  - 그 밖: {other_reset} (중단·시그널·오류)")
     lines.append(
         "- **자동 완료 {auto} / 수동 완료 {manual}**: 수동이 있으면 그만큼은 "
         "모델이 끝을 스스로 알리지 못한 것이다 (사용자 결정 10/06 — 두 모델 모두 "

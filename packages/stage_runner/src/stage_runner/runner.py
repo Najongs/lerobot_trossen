@@ -33,13 +33,16 @@ from stage_runner.preflight import (
 from stage_runner.results import (
     ABORTING_TERMINATORS,
     TERMINATED_BY_ERROR,
+    TERMINATED_BY_SIGNAL,
     TRIAL_REASON_ABORTED,
     TRIAL_REASON_ABORTED_EMPTY,
     TRIAL_REASON_CHAIN_FAILED,
     TRIAL_REASON_COMPLETED,
     TRIAL_REASON_EXCEPTION,
+    TRIAL_REASON_SIGNAL,
     StageResult,
     TrialOutcome,
+    signal_exit_name,
 )
 from stage_runner.transitions import StopBaseOutcome
 
@@ -111,6 +114,15 @@ def _initial_gap_rad(context: StageContext, first) -> tuple[float, str] | None:
     except Exception:  # a readout must never cost the run
         logger.warning("initial gap could not be measured -- the arrow is accepted unchecked", exc_info=True)
         return None
+# SIGTERM/SIGHUP landed inside the window (cli.SignalLatch's SystemExit) -- an
+# operator's stop, not a defect; kept apart from `exception` like the stage and
+# trial values (results.TERMINATED_BY_SIGNAL / TRIAL_REASON_SIGNAL).
+TELEOP_ENDED_BY_SIGNAL: str = "signal"
+# The NaN/Inf action gate tripped inside the window. It raises stop_recording,
+# the same flag Esc does, so without this value a model/stats defect would be
+# filed as "the operator pressed Esc" (review 10/07). The exit code was already
+# 4 (cli checks the gate first); only the window's label was wrong.
+TELEOP_ENDED_BY_NAN_GATE: str = "nan_gate"
 
 
 def _run_teleop_phase(context: StageContext, stages) -> bool:
@@ -184,6 +196,13 @@ def _run_teleop_phase(context: StageContext, stages) -> bool:
                 )
                 return True
             # A stale right-arrow from before the loop must not end the phase on its first tick.
+            # Said out loud, like executors._discard_stale_exit_early does for a stage: a
+            # press during connect that vanished without a line is a mystery at analysis.
+            if events.get("exit_early"):
+                logger.warning(
+                    "teleop phase: a RIGHT ARROW pressed before the window (e.g. during "
+                    "connect) is discarded -- press it again once the leader arms are live"
+                )
             events["exit_early"] = False
             log.emit(
                 EVENT_TELEOP_START,
@@ -222,15 +241,22 @@ def _run_teleop_phase(context: StageContext, stages) -> bool:
                     t_mono=time.perf_counter(),
                     attempt=attempt,
                     elapsed_s=time.perf_counter() - started,
-                    ended_by=TELEOP_ENDED_BY_EXCEPTION,
-                    error=repr(error),
+                    ended_by=(
+                        TELEOP_ENDED_BY_SIGNAL
+                        if signal_exit_name(error)
+                        else TELEOP_ENDED_BY_EXCEPTION
+                    ),
+                    error=signal_exit_name(error) or repr(error),
                     stop_base_path=None,
                     stop_base_direct_ok=None,
                 )
                 raise
             elapsed = time.perf_counter() - started
             gap = None
-            if events.get("stop_recording"):
+            gate = context.finite_gate
+            if gate is not None and getattr(gate, "tripped", False):
+                ended_by = TELEOP_ENDED_BY_NAN_GATE  # checked before Esc: same flag
+            elif events.get("stop_recording"):
                 ended_by = TELEOP_ENDED_BY_ESC
             elif events.get("rerecord_episode"):
                 events["rerecord_episode"] = False
@@ -565,7 +591,11 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 log.emit(
                     EVENT_TRIAL_END,
                     frame_idx=frame_count,
-                    reason=TRIAL_REASON_EXCEPTION,
+                    reason=(
+                        TRIAL_REASON_SIGNAL
+                        if signal_exit_name(error)
+                        else TRIAL_REASON_EXCEPTION
+                    ),
                     completed=False,
                     stage_count=len(results),
                     elapsed_s=time.perf_counter() - trial_started,
@@ -791,8 +821,13 @@ def _record_failed_trial(
             EVENT_STAGE_END,
             stage_id=stage_id,
             frame_idx=frame_count,
-            terminator=TERMINATED_BY_ERROR,
-            reason=repr(error),
+            # A SIGTERM/SIGHUP unwinding through the stage is the operator's
+            # stop, not the stage's defect: `signal` with the signal's name,
+            # so the chain report does not file it under crashes (④', 10/07).
+            terminator=(
+                TERMINATED_BY_SIGNAL if signal_exit_name(error) else TERMINATED_BY_ERROR
+            ),
+            reason=signal_exit_name(error) or repr(error),
             stage_index=stage_index,
             elapsed_s=elapsed_s,
             frames=frames,
@@ -819,9 +854,17 @@ def _record_failed_trial(
         context.log.emit(
             EVENT_TRIAL_END,
             frame_idx=frame_count,
-            reason=TRIAL_REASON_EXCEPTION,
+            reason=TRIAL_REASON_SIGNAL if signal_exit_name(error) else TRIAL_REASON_EXCEPTION,
             completed=False,
             stage_count=len(results) if stage_in_flight is None else len(results) + 1,
+            # ADDITIVE (review 10/07): the emergency stop's outcome. When the
+            # unwind happened before any stage ran -- the teleop window, the
+            # only place the robot moves before the first stage_start -- there
+            # is no stage boundary to carry it (stage_id is None above), and a
+            # base that may still be moving left no line in events.jsonl.
+            emergency_stop_base_path=outcome.path,
+            emergency_stop_base_is_stopped=outcome.base_is_stopped,
+            emergency_stop_base_error=outcome.error,
             elapsed_s=time.perf_counter() - trial_started,
             # NOT saved, and said out loud. The buffer's state is unknown after
             # an exception, so the frames are discarded by

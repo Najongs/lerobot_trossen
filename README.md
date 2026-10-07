@@ -984,7 +984,13 @@ the base holding its last velocity command. A SECOND SIGTERM is IGNORED: unwindi
 teardown would leave the arms torqued, and so is one that arrives after the teardown has begun.
 An inherited `SIG_IGN` is left alone, which is what keeps `nohup` doing its job. Closing the window
 is still not how to end a run; Esc is. SIGKILL and power loss remain uncovered (no in-process
-handler can reach them).
+handler can reach them). In `events.jsonl` a signal-cut stage ends with `terminator: "signal"`
+(reason `SIGHUP`/`SIGTERM`), the trial with `reason: "signal"`, and a teleop window with
+`ended_by: "signal"` -- separate from `error`/`exception`, so the chain report does not count an
+operator's kill as a crash (10/07, after the robot PC's ④' run). The exit code is still
+`128 + signum`. To find the runner's PID from another terminal use
+`pgrep -f '[.]venv/bin/python3 -m stage_runner'` -- `uv run` starts it as `python3`, and a
+`[s]tage_runner` pattern finds nothing.
 
 **DO NOT READ THE STOP LOG AS CONFIRMATION.** `stop_base commanded: ...` is intent.
 `MobileAIRobot.send_action` does not raise when the base write fails -- a failed Modbus

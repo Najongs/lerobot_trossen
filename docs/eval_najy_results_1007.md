@@ -119,6 +119,11 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
    리셋 정책 `select_action`/후처리의 실관측 경로, pose_guide `set_stage` 뒤 틱당 계산, 리셋 구간의 데이터셋 프레임 추가·finite 게이트. 로봇 PC 에서 `cProfile` 을 걸어 달라면 건다.
 2a. **러너 변경(텔레옵 구간)을 받아 달라** — 위 「로봇 PC 가 러너를 바꿨다」. 베이스 되먹임 구조(리더 x.vel/θ.vel = 실측)가 의도인지 확인 + codex 교차 검토.
 2b. **④' 결과**: 시그널 래치는 실기에서 동작(위 절). 요청 하나 — events/보고서에서 시그널 종료를 `error/exception` 이 아니라 따로 표기해 주면 집계에서 크래시와 갈린다.
+   → **DGX 반영(10/07 저녁, main)**: `terminator: signal`(reason `SIGHUP`/`SIGTERM`) · `trial_end.reason: signal` · 텔레옵 창 `ended_by: signal` — 종료 코드 128+signum 은 그대로. 보고서 「그 밖」 은 `(중단·시그널·오류)`.
+2c. **텔레옵 구간(`d4bc8f8`) DGX 읽기 전용 리뷰 결과** — ①~⑦ 안전 보장은 전부 성립(코드 판독; ①의 NaN 게이트는 체인 런 한정). 고친 것(main): [중요] 텔레옵 창 안에서 예외·시그널이 나면 비상 stop_base 결과가 events 에 안 남던 것 → `trial_end` 에 `emergency_stop_base_{path,is_stopped,error}` 추가 · [중요] 베이스 0 덮기가 e2e 로 검증되지 않던 것(mock 리더가 늘 0 을 보냄) → mock 리더에 `x_vel/theta_vel` 노브, 전체 cli 경로에서 기본 0 / `teleop_base_from_leader=true` 면 통과를 검증하는 테스트 · `teleop_time_s<=0` 을 preflight 가 거부(exit 2) · 창 안 NaN 트립이 `esc` 로 찍히던 것 → `ended_by: nan_gate` · connect 중 누른 `→` 폐기를 경고로 · 주석·docstring 정정(해제 순서, 한 틱 상한의 실제 자리).
+   **남긴 것(보류)**: `←` 재시작 횟수 상한 없음(ESC 로 탈출 가능) · 상한 직전 0.25 s 안의 `→` 는 timeout 으로 분류(안전한 방향) · `EVENT_SCHEMA_VERSION` 유지.
+   **[추정] ③ 에서 꼭 볼 것**: 텔레옵으로 쥔 「조임」(명령 위치가 접촉점보다 더 닫힘)은 창이 끝나는 순간 `build_hold_action`·리셋 램프가 그리퍼를 **실측 위치로 재명령**하면서 사라질 수 있다 — 물체를 쥔 채 첫 리셋에서 미끄러지는지가 이 구간의 존재 이유를 가른다. 튜브부터, 놓치면 멈추고 보고.
+   참고: `scripts/eval_chain.sh` 의 `TELEOP` 기본값이 1 이라 **RESET_ONLY 포함 모든 회차의 기본 동작이 바뀌었다** — 옛 경로는 `TELEOP=0`.
 3. 사람 몫 그대로: **C. 1006 회차 원자료 전송**(데이터셋 6개 + `~/eval_logs/1006_*`) 아직 안 됨.
 
 ## DGX_1 → Trossen PC1 (10/07 저녁) — 지금 돌릴 Eval (우선순위 순)
@@ -133,7 +138,7 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 | # | 무엇 (명령) | 기록할 것 | 닫히는 결정 | 시간 |
 |---|---|---|---|---|
 | **1** | **②' 리셋만 재실행** — `RESET_ONLY=1 scripts/eval_chain.sh M1 resets2` (빈손, ② 와 같은 조건·같은 시작 자세) | 보고서 「경계 리셋」 표의 **`Hz ≈ 21`** · `⚠` 없음 · `events.jsonl` 의 `reason_detail.predict_path == "state_only"` · `predict_calls ≈ frames` | Hz 수정이 **실기 경로에서 먹었나** — 셋이 같이 와야 한다. 하나라도 아니면(`bypassed` 포함) 멈추고 그 값 그대로 보고 | 10분 |
-| **2** | **④' 시그널** — `RESET_ONLY=1 FROM_STAGE=1 TO_STAGE=2 scripts/eval_chain.sh M1 hup`, 베이스가 **정지한 틈**에 두 번째 터미널에서 `kill -HUP $(pgrep -f '[s]tage_runner')` | 로그에 stop_base → disconnect · 팔·베이스 제자리 · 종료 코드 | 시그널 래치 실증(codex 치명 지적) | 5분 |
+| **2** | **④' 시그널** — `RESET_ONLY=1 FROM_STAGE=1 TO_STAGE=2 scripts/eval_chain.sh M1 hup`, 베이스가 **정지한 틈**에 두 번째 터미널에서 `kill -HUP $(pgrep -f '[.]venv/bin/python3 -m stage_runner')` (`[s]tage_runner` 패턴은 `uv run` 자식 이름과 안 맞아 PID 를 못 찾는다 — 로봇 PC 10/07 실측) | 로그에 stop_base → disconnect · 팔·베이스 제자리 · 종료 코드 | 시그널 래치 실증(codex 치명 지적) — ✅ 통과(위 ④' 절). **DGX 반영**: 시그널 종료는 이제 events 에 `terminator: signal`(reason `SIGHUP`/`SIGTERM`) · `trial_end.reason: signal` 로 찍히고 보고서 「그 밖」 이 `(중단·시그널·오류)` 로 갈린다 | 5분 |
 | **3** | **③ 물체 든 채 리셋** — 가벼운 튜브 먼저 `RESET_ONLY=1 scripts/eval_chain.sh M1 resets_tube`, 통과하면 비커 `… resets_beaker` | 경계별 **그리퍼가 놓치나 / 더 쥐나** · reach_err · clamped | 「그리퍼 관측값 재명령」 이 파지력을 유지하나 — 유일하게 설계 변경이 필요할 수 있는 관문. 놓치면 거기서 멈추고 보고 | 20분 |
 | **4** | **④ M1 + 러너 단계 1개** — `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` (task04 장면 세팅, 1ep → 괜찮으면 2ep) | policy 구간 Hz · rearm `active` · clamped · FIRED **vs 10/06 1350** · **종료 사유**(`complete` / `manual` / `timeout` / `never_departed`) · 출발 s · 정지 감지 s | 러너가 실행 계층을 안 바꿨나 + **완료 감시의 첫 실기 데이터** — 오프라인 예측은 「M1 은 끝 장면에서 안 멈춘다」(§93.2) → `complete` 가 안 나고 `→` 로 넘기게 되는지 | 15분 |
 | **5** | **⑤-M1 체인 1→3** — `TO_STAGE=3 scripts/eval_chain.sh M1 s1_3` (`→` 로 넘긴다, 자동 완료를 기대하지 않음) | 단계별 종료(자동/수동/타임아웃) · 리셋 T·Δmax·도달 · **단계별 ∫θ·∫x**(베이스 드리프트) · **리셋 뒤 다음 단계가 출발하나** | 리셋+정책+전환이 한 프로세스에서 끝까지 도나 · 베이스 드리프트가 리셋 범위 밖에 쌓이는지(계획 §7 위험) · 지정 자세 리셋 뒤 M1 출발률(B1 을 체인 안에서 한 번 더) | 30분 |

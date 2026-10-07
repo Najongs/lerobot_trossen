@@ -234,7 +234,10 @@ t02·03·04·05·10 은 시연 시작 자세가 **쌍봉**이라 관절별 평�
 | `teleop_time_s` | 300 | 그 구간 한 번의 상한(초). `→` 가 먼저 오면 거기서 끝. 넘기면 **중단**(첫 단계가 시작 전 중단) |
 | `teleop_base_from_leader` | false | 리더 action 의 x.vel/theta.vel 을 베이스에 그대로 보낼지. 기본은 0 으로 덮는다(되먹임 구조, 리뷰 10/07) |
 
-두 체인 YAML 은 키를 두지 않는다 — `scripts/eval_chain.sh` 가 CLI 로 얹는다(`TELEOP=0` 으로 끔). 테스트는 `stage_runner_mock_teleop`(`mock_teleop.py`).
+두 체인 YAML 은 키를 두지 않는다 — `scripts/eval_chain.sh` 가 CLI 로 얹는다(`TELEOP=0` 으로 끔). 테스트는 `stage_runner_mock_teleop`(`mock_teleop.py`, `x_vel`/`theta_vel` 로 0 아닌 리더 베이스 속도를 흉내낼 수 있다).
+
+`teleop_time_s` 는 양수·유한이어야 한다 — 아니면 preflight 가 exit 2 로 거부한다(0 이면 창이 한 틱도 안 돌고 `timeout` 중단이 되던 것, 리뷰 10/07).
+events 의 `teleop_end.ended_by` 어휘: `arrow`(→ 로 정상 종료) · `left_arrow_restart` · `esc` · `timeout`(**중단**) · `esc_before_start` · `left_arrow_before_start` · `nan_gate`(창 안에서 NaN/Inf 게이트가 끊음, exit 4) · `signal`(SIGTERM/SIGHUP) · `exception`. 창 안에서 예외·시그널로 풀릴 때는 단계 경계가 없으므로 비상 stop_base 결과가 `trial_end.emergency_stop_base_{path,is_stopped,error}` 에 남는다.
 
 ## 테스트용 가짜 파일
 

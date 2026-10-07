@@ -98,6 +98,10 @@ class StageContext:
     chain: ChainRuntime | None = None
     # 리더암 텔레옵 장치 (lerobot Teleoperator). None 이면 텔레옵 구간이 없다.
     teleop: Any | None = None
+    # The NaN/Inf action gate cli installs on chain runs (finite_gate.FiniteActionGateStep),
+    # or None. The runner reads only `.tripped`, to file a teleop window the gate cut short
+    # as `nan_gate` instead of `esc` (the gate raises the same stop_recording flag; review 10/07).
+    finite_gate: Any | None = None
 
     def buffered_frame_count(self) -> int:
         """Frames written into the current episode buffer so far.

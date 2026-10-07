@@ -834,6 +834,77 @@ class TeleopPhaseTests(unittest.TestCase):
         self.assertEqual(run.of("teleop_start")[-1]["attempt"], 2)
         self.assertFalse(run.trial_end["completed"], run.trial_end)
         self.assertEqual(run.of("stage_end")[0]["frames"], 0, "nothing may have moved")
+    def test_leader_base_velocity_never_reaches_the_robot_on_the_full_path(self) -> None:
+        """The review's point: with a leader that reports 0 base velocity, the
+        unit test above passes even if TeleopBaseZeroStep is never installed.
+        Here the mock leader reports a NON-zero base velocity and the whole cli
+        path runs; every action the robot received during the window must carry
+        base 0 by default, and the leader's values only with
+        ``teleop_base_from_leader=true`` (the lerobot-record behaviour)."""
+        from stage_runner import mock_robot, mock_teleop
+
+        def window_actions() -> list[dict]:
+            robot = mock_robot.MockRobot.last_instance
+            teleop = mock_teleop.MockTeleop.last_instance
+            self.assertIsNotNone(robot)
+            self.assertIsNotNone(teleop)
+            self.assertGreater(teleop.calls, 0, "the window never ticked")
+            # record_loop sends exactly one action per get_action(): the window's
+            # actions are the first `calls` entries (nothing moves before it).
+            actions = robot.sent_actions[: teleop.calls]
+            self.assertEqual(len(actions), teleop.calls)
+            return actions
+
+        leader = (
+            "--teleop.type=stage_runner_mock_teleop",
+            "--teleop.x_vel=0.3",
+            "--teleop.theta_vel=-0.1",
+            "--teleop_time_s=3",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=2,
+                extra_argv=leader,
+                patch_events=_events_with_timers((0.6, {"exit_early": True})),
+            )
+            self.assertEqual(run.of("teleop_end")[0]["ended_by"], "arrow", run.of("teleop_end"))
+            self.assertFalse(run.of("teleop_start")[0]["base_from_leader"])
+            for action in window_actions():
+                self.assertEqual(action["x.vel"], 0.0, action)
+                self.assertEqual(action["theta.vel"], 0.0, action)
+
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=2,
+                extra_argv=leader + ("--teleop_base_from_leader=true",),
+                patch_events=_events_with_timers((0.6, {"exit_early": True})),
+            )
+            self.assertTrue(run.of("teleop_start")[0]["base_from_leader"])
+            for action in window_actions():
+                self.assertAlmostEqual(action["x.vel"], 0.3, places=6, msg=action)
+                self.assertAlmostEqual(action["theta.vel"], -0.1, places=6, msg=action)
+
+    def test_a_zero_or_negative_window_ceiling_is_refused_before_hardware(self) -> None:
+        """``--teleop_time_s=0`` used to abort the run as a `timeout` before the
+        first stage; preflight now refuses it (exit 2, no run directory)."""
+        with tempfile.TemporaryDirectory() as directory:
+            dataset_root = Path(directory) / "dataset"
+            output_root = Path(directory) / "outputs"
+            argv = [
+                "--config_path",
+                str(CHAIN_CONFIG),
+                f"--chain.params_path={MOCK_PARAMS}",
+                "--chain.model.policy_path=mock://progress",
+                "--chain.to_stage=2",
+                f"--dataset.root={dataset_root}",
+                f"--output.root={output_root}",
+                "--teleop.type=stage_runner_mock_teleop",
+                "--teleop_time_s=0",
+            ]
+            self.assertEqual(cli.main(argv), 2)
+            self.assertFalse(output_root.exists(), "preflight must refuse before step 9")
 
     def test_base_velocity_from_the_leader_is_zeroed_by_default(self) -> None:
         from lerobot.processor.core import TransitionKey

@@ -33,16 +33,44 @@ TERMINATED_BY_ERROR: str = "error"
 TERMINATED_BY_COMPLETE: str = "complete"
 TERMINATED_BY_REACHED: str = "reached"
 TERMINATED_BY_NOT_REACHED: str = "not_reached"
+# `signal`: the stage was cut short by SIGTERM/SIGHUP -- cli.SignalLatch raises
+# SystemExit(128 + signum) on the first delivery, and before 10/07 that landed
+# in the same `error` bucket as a policy that blew up. The robot PC's ④' run
+# (eval_najy_results_1007.md) showed the two were indistinguishable in events
+# and in the chain report; only a log line told them apart. An operator's
+# `kill`/dropped SSH is not a defect of the run, so it gets its own value.
+TERMINATED_BY_SIGNAL: str = "signal"
 TERMINATED_BY_VALUES: tuple[str, ...] = (
     TERMINATED_BY_TIMEOUT,
     TERMINATED_BY_MANUAL,
     TERMINATED_BY_STOP_RECORDING,
     TERMINATED_BY_RERECORD_REQUESTED,
     TERMINATED_BY_ERROR,
+    TERMINATED_BY_SIGNAL,
     TERMINATED_BY_COMPLETE,
     TERMINATED_BY_REACHED,
     TERMINATED_BY_NOT_REACHED,
 )
+
+
+def signal_exit_name(error: BaseException) -> str | None:
+    """'SIGTERM' / 'SIGHUP' when ``error`` is the SystemExit cli.SignalLatch raises
+    for that signal (code 128 + signum), else None.
+
+    Only the two signals the latch traps are recognised -- an ordinary
+    ``sys.exit(1)`` or a ``SystemExit`` with a non-integer code stays an error.
+    The check is on the exit code, not on the latch object, so the runner needs no
+    handle on the latch and a test can inject ``SystemExit(129)`` directly.
+    """
+    import signal as _signal
+
+    if not isinstance(error, SystemExit) or not isinstance(error.code, int):
+        return None
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(_signal, name, None)
+        if number is not None and error.code == 128 + int(number):
+            return name
+    return None
 
 # A terminator TYPE that can be PLANNED but never REACHED. `completion` names
 # the rule a chain policy stage ends by; the outcome is `complete`, `manual` or
@@ -76,6 +104,7 @@ ABORTING_TERMINATORS: frozenset[str] = frozenset(
         TERMINATED_BY_STOP_RECORDING,
         TERMINATED_BY_RERECORD_REQUESTED,
         TERMINATED_BY_ERROR,
+        TERMINATED_BY_SIGNAL,
     }
 )
 
@@ -87,6 +116,10 @@ TRIAL_REASON_COMPLETED: str = "completed"
 TRIAL_REASON_ABORTED: str = "aborted"
 TRIAL_REASON_ABORTED_EMPTY: str = "aborted_empty"
 TRIAL_REASON_EXCEPTION: str = "exception"
+# The trial was unwound by SIGTERM/SIGHUP (see TERMINATED_BY_SIGNAL). Kept apart
+# from "exception" so the chain report does not count an operator's kill or a
+# dropped SSH session as a crash; the base-stop and disconnect path is the same.
+TRIAL_REASON_SIGNAL: str = "signal"
 # A chain stage ended with a terminator its StageConfig.required_terminator does
 # not allow: a policy stage timed out instead of completing, or a boundary reset
 # never arrived. Separate from "aborted", which means a HUMAN stopped the run --

@@ -370,6 +370,7 @@ def run_trial_process(
             cfg.stages = config.expand_chain(cfg, chain_params)
 
         preflight.check_stage_definitions(cfg)
+        preflight.check_teleop_window(cfg)
 
         # Step 6. Constructed, NOT connected: observation_features and
         # action_features are config-derived and readable already, which is what
@@ -613,7 +614,8 @@ def run_trial_process(
         if cfg.display_data:
             init_rerun(session_name="stage_runner")
 
-        # 리더암 텔레옵 장치 (10/07). 만들기만 한다 -- 연결은 robot.connect() 뒤, 해제는 그 앞.
+        # 리더암 텔레옵 장치 (10/07). 만들기만 한다 -- 연결은 robot.connect() 뒤, 해제는
+        # robot.disconnect() **뒤** 의 finally 에서(하드웨어 먼저; 리뷰 10/07 에서 주석 정정).
         teleop = record_adapter.make_teleop(cfg.teleop) if cfg.teleop is not None else None
 
         try:
@@ -647,6 +649,7 @@ def run_trial_process(
                 run_directory=run_directory,
                 chain=chain_runtime,
                 teleop=teleop,
+                finite_gate=finite_gate,
             )
 
             # Steps 14-18. VideoEncodingManager.__exit__ flushes the encoders,
