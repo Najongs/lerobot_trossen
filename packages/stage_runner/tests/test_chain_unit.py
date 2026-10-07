@@ -1856,6 +1856,321 @@ class LateBoundRecordLoopTest(NoRobotSdkMixin, unittest.TestCase):
         )
 
 
+class _RecordingPolicy:
+    """Duck-typed policy that remembers the keys of every batch it was given.
+
+    The action is DERIVED FROM THE STATE it was handed, like ``ResetPolicy``'s
+    ramp is -- a constant would make
+    ``test_the_action_matches_upstream_on_the_same_state`` pass against any
+    implementation, including one that handed the policy the wrong state.
+    """
+
+    def __init__(self, width: int = 16) -> None:
+        self.width = width
+        self.batches: list[tuple[str, ...]] = []
+
+    def select_action(self, batch):
+        self.batches.append(tuple(sorted(batch)))
+        return batch["observation.state"].clone()
+
+    def reset(self) -> None:
+        return None
+
+
+def _identity(value):
+    return value
+
+
+def _reset_observation(width: int = 16):
+    """One tick's `observation_frame`: the state vector plus three camera frames.
+
+    The image shape is the production one (480x640x3 uint8, mobileai's three
+    RealSense streams). It is what makes the skipped conversion measurable:
+    upstream turns each of these into a float32 CHW copy on the CPU every tick.
+
+    The state is DISTINCT PER JOINT, not zeros: the action-equality test derives
+    the action from it, and all-zeros would match a batch assembled wrongly.
+    """
+    import numpy as np
+
+    return {
+        "observation.state": np.linspace(
+            -1.0, 1.0, num=width, dtype=np.float32
+        ),
+        "observation.images.cam_high": np.zeros((480, 640, 3), dtype=np.uint8),
+        "observation.images.cam_left_wrist": np.zeros((480, 640, 3), dtype=np.uint8),
+        "observation.images.cam_right_wrist": np.zeros((480, 640, 3), dtype=np.uint8),
+    }
+
+
+class ResetPredictPathTest(NoRobotSdkMixin, unittest.TestCase):
+    """The reset window must not convert camera frames, and must put the real
+    ``predict_action`` back.
+
+    WHY THESE TWO AND NOT A TIMING TEST. The cost being removed is 51-59 ms per
+    tick of CPU work on the robot PC (three 480x640x3 uint8 -> float32 CHW
+    copies); it is 0.1 ms here and no wall-clock assertion would be stable. What
+    IS decidable off the robot is the only thing the speedup depends on: that no
+    image key reaches the conversion, and that policy stages and plain
+    ``lerobot-record`` see upstream's function unchanged afterwards.
+    """
+
+    def setUp(self) -> None:  # noqa: N802
+        import torch
+        from lerobot.scripts import lerobot_record
+        from lerobot.utils import control_utils
+
+        self.torch = torch
+        self.lerobot_record = lerobot_record
+        self.control_utils = control_utils
+        self.device = torch.device("cpu")
+        self.seen: list[tuple[str, ...]] = []
+        self._real_prepare = control_utils.prepare_observation_for_inference
+
+        def spy(observation, device, task=None, robot_type=None):
+            self.seen.append(tuple(sorted(observation)))
+            return self._real_prepare(observation, device, task, robot_type)
+
+        control_utils.prepare_observation_for_inference = spy
+        self.addCleanup(
+            setattr,
+            control_utils,
+            "prepare_observation_for_inference",
+            self._real_prepare,
+        )
+
+    def _call(self, policy, observation, *, driven_by=None):
+        return self.lerobot_record.predict_action(
+            observation=observation,
+            policy=driven_by if driven_by is not None else policy,
+            device=self.device,
+            preprocessor=_identity,
+            postprocessor=_identity,
+            use_amp=False,
+            task="reset:02",
+            robot_type="mobileai_robot",
+        )
+
+    # ------------------------------------------------------- (a) no image keys
+
+    def test_no_image_key_reaches_the_conversion_or_the_policy(self) -> None:
+        from stage_runner import record_adapter
+
+        policy = _RecordingPolicy()
+        observation = _reset_observation()
+        with record_adapter.reset_predict_action(policy) as swap:
+            self.assertTrue(swap.installed)
+            action = self._call(policy, observation)
+
+        self.assertEqual(len(self.seen), 1, self.seen)
+        self.assertEqual(
+            [name for name in self.seen[0] if "image" in name],
+            [],
+            "prepare_observation_for_inference must not be handed a camera "
+            "frame during a reset -- converting it on the CPU IS the 51-59 ms "
+            "per tick this swap exists to remove",
+        )
+        self.assertIn("observation.state", self.seen[0])
+        self.assertEqual(
+            [name for name in policy.batches[0] if "image" in name],
+            [],
+            "ResetPolicy.select_action reads observation.state and nothing else",
+        )
+        self.assertIn("observation.state", policy.batches[0])
+        self.assertEqual(swap.state_only_calls, 1)
+        self.assertEqual(swap.upstream_calls, 0)
+        self.assertEqual(
+            swap.predict_path, record_adapter.PREDICT_PATH_STATE_ONLY
+        )
+        # The tensor record_loop hands to make_robot_action: STILL BATCHED.
+        # control_utils.predict_action returns postprocessor(action) with no
+        # squeeze and no .cpu() (control_utils.py:112-115); make_robot_action is
+        # what squeezes (policies/utils.py:194-195).
+        self.assertEqual(tuple(action.shape), (1, policy.width))
+
+    def test_the_upstream_path_does_convert_the_images(self) -> None:
+        """The control: without the swap, the image keys DO reach the conversion.
+
+        Without this the test above passes against any implementation, including
+        one where nothing is skipped because nothing is called.
+        """
+        policy = _RecordingPolicy()
+        self._call(policy, _reset_observation())
+        self.assertEqual(len(self.seen), 1, self.seen)
+        self.assertEqual(
+            len([name for name in self.seen[0] if "image" in name]),
+            3,
+            "upstream predict_action converts every camera frame",
+        )
+
+    def test_the_caller_s_observation_frame_is_left_intact(self) -> None:
+        """``record_loop`` writes the dataset row from this very dict.
+
+        ``frame = {**observation_frame, **action_frame, ...}``
+        (lerobot_record.py:411-413) runs AFTER predict_action, so a mutated dict
+        would record converted float tensors -- or drop the camera keys outright.
+        """
+        import numpy as np
+
+        from stage_runner import record_adapter
+
+        policy = _RecordingPolicy()
+        observation = _reset_observation()
+        originals = dict(observation)
+        with record_adapter.reset_predict_action(policy):
+            self._call(policy, observation)
+
+        self.assertEqual(sorted(observation), sorted(originals))
+        for name, value in originals.items():
+            self.assertIs(observation[name], value, name)
+            self.assertIsInstance(value, np.ndarray, name)
+        self.assertEqual(
+            observation["observation.images.cam_high"].dtype,
+            np.uint8,
+            "the recorded frame must keep the camera data as the camera gave it",
+        )
+
+    def test_the_action_matches_upstream_on_the_same_state(self) -> None:
+        """Same policy, same state -> byte-identical action.
+
+        The swap is a performance change and must not be a behaviour change:
+        what reaches ``make_robot_action`` has to be what upstream would have
+        produced for the state-only part of the observation.
+        """
+        from stage_runner import record_adapter
+
+        state_only = {
+            name: value
+            for name, value in _reset_observation().items()
+            if "image" not in name
+        }
+        upstream = self._call(_RecordingPolicy(), dict(state_only))
+        policy = _RecordingPolicy()
+        with record_adapter.reset_predict_action(policy):
+            swapped = self._call(policy, _reset_observation())
+
+        self.assertEqual(tuple(upstream.shape), tuple(swapped.shape))
+        self.assertEqual(upstream.dtype, swapped.dtype)
+        self.assertTrue(
+            bool(self.torch.equal(upstream, swapped)),
+            f"{upstream} != {swapped}: the policy derives its action from the "
+            "state it was handed, so a difference here is a state assembled "
+            "differently by the lightweight path",
+        )
+
+    # --------------------------------------------------- (b) restoration, always
+
+    def test_the_original_is_restored_on_a_normal_exit(self) -> None:
+        from stage_runner import record_adapter
+
+        before = self.lerobot_record.predict_action
+        with record_adapter.reset_predict_action(_RecordingPolicy()):
+            self.assertIsNot(self.lerobot_record.predict_action, before)
+        self.assertIs(self.lerobot_record.predict_action, before)
+
+    def test_the_original_is_restored_when_the_loop_raises(self) -> None:
+        """The Esc path and the error path leave through the same ``finally``.
+
+        A leaked swap would make EVERY later stage -- and the next
+        ``lerobot-record`` in the same process -- run a policy without its
+        images. That is not a slow run, it is a wrong one.
+        """
+        from stage_runner import record_adapter
+
+        before = self.lerobot_record.predict_action
+        with self.assertRaises(RuntimeError):
+            with record_adapter.reset_predict_action(_RecordingPolicy()):
+                raise RuntimeError("record_loop blew up mid-ramp")
+        self.assertIs(self.lerobot_record.predict_action, before)
+
+    def test_a_policy_stage_after_a_reset_runs_upstream_untouched(self) -> None:
+        from stage_runner import record_adapter
+
+        with record_adapter.reset_predict_action(_RecordingPolicy()):
+            pass
+        policy = _RecordingPolicy()
+        self._call(policy, _reset_observation())
+        self.assertEqual(
+            len([name for name in policy.batches[0] if "image" in name]),
+            3,
+            "a policy rollout must still get its cameras",
+        )
+
+    def test_another_policy_in_the_window_is_delegated_upstream(self) -> None:
+        """``chunk_execution_patch`` substitutes a replay policy into the loop's
+        kwargs when ``REPLAY_DATASET`` is set -- for resets too. The swap must
+        then stand aside, and SAY SO in predict_path."""
+        from stage_runner import record_adapter
+
+        expected = _RecordingPolicy()
+        substituted = _RecordingPolicy()
+        with record_adapter.reset_predict_action(expected) as swap:
+            self._call(substituted, _reset_observation(), driven_by=substituted)
+
+        self.assertEqual(swap.state_only_calls, 0)
+        self.assertEqual(swap.upstream_calls, 1)
+        self.assertEqual(swap.predict_path, record_adapter.PREDICT_PATH_UPSTREAM)
+        self.assertEqual(
+            len([name for name in substituted.batches[0] if "image" in name]),
+            3,
+            "a delegated call must be upstream's, unmodified",
+        )
+
+    def test_a_missing_upstream_predict_action_is_reported_not_crashed(self) -> None:
+        """If upstream ever moves ``predict_action`` off ``lerobot_record`` the
+        swap cannot take -- and the run must still work, with the JSONL saying
+        the reset went the slow way."""
+        from stage_runner import record_adapter
+
+        original = self.lerobot_record.predict_action
+        del self.lerobot_record.predict_action
+        try:
+            with record_adapter.reset_predict_action(_RecordingPolicy()) as swap:
+                self.assertFalse(swap.installed)
+                self.assertFalse(
+                    hasattr(self.lerobot_record, "predict_action"),
+                    "nothing may be installed when there was nothing to restore",
+                )
+            self.assertEqual(
+                swap.predict_path, record_adapter.PREDICT_PATH_UPSTREAM
+            )
+            self.assertTrue(swap.refused)
+        finally:
+            self.lerobot_record.predict_action = original
+
+    def test_a_reset_broken_before_its_first_tick_is_not_called_not_upstream(
+        self,
+    ) -> None:
+        """Esc at the top of ``record_loop`` means NOTHING was predicted.
+
+        ``upstream`` is the label that means "the swap did not take" and makes
+        the report flag the row. Using it for a reset that never ran a tick
+        would blame the fix for a keypress.
+        """
+        from stage_runner import record_adapter
+
+        with record_adapter.reset_predict_action(_RecordingPolicy()) as swap:
+            pass
+        self.assertTrue(swap.installed)
+        self.assertEqual(swap.state_only_calls, 0)
+        self.assertEqual(
+            swap.predict_path, record_adapter.PREDICT_PATH_NOT_CALLED
+        )
+
+    def test_mixed_is_reported_when_only_some_ticks_took_the_fast_path(self) -> None:
+        from stage_runner import record_adapter
+
+        expected = _RecordingPolicy()
+        with record_adapter.reset_predict_action(expected) as swap:
+            self._call(expected, _reset_observation())
+            self._call(
+                _RecordingPolicy(),
+                _reset_observation(),
+                driven_by=_RecordingPolicy(),
+            )
+        self.assertEqual(swap.predict_path, record_adapter.PREDICT_PATH_MIXED)
+
+
 class ExtraActionFeatureTest(NoRobotSdkMixin, unittest.TestCase):
     def _robot(self):
         from stage_runner.mock_robot import MockRobot, MockRobotConfig

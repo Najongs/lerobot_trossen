@@ -513,17 +513,26 @@ def run_chain_reset_stage(context: StageContext, stage: StageConfig) -> StageRes
     clamped_before = record_adapter.clamped_arm_ticks()
     frames_before = context.buffered_frame_count()
     started = time.perf_counter()
-    record_adapter.call_record_loop(
-        robot=context.robot,
-        events=context.events,
-        fps=context.config.dataset.fps,
-        processors=context.processors,
-        dataset=context.dataset,
-        bundle=bundle,
-        control_time_s=reset_plan.control_time_s,
-        single_task=stage.instruction or stage.name,
-        display_data=context.config.display_data,
-    )
+    # THE RESET'S ONLY DIFFERENCE FROM A POLICY STAGE'S LOOP. Inside this
+    # context `record_loop` ticks through a `predict_action` that leaves the
+    # camera frames alone -- the ramp reads `observation.state` and nothing else,
+    # and converting three 480x640x3 uint8 frames on the CPU every tick is what
+    # held the reset loop at 11.9-13.1 Hz against a 21 Hz target
+    # (docs/eval_najy_results_1007.md). The swap is undone on the way out,
+    # including on an exception and on the Esc path, so the policy stages either
+    # side of this reset run upstream's function untouched.
+    with record_adapter.reset_predict_action(bundle.policy) as predict_swap:
+        record_adapter.call_record_loop(
+            robot=context.robot,
+            events=context.events,
+            fps=context.config.dataset.fps,
+            processors=context.processors,
+            dataset=context.dataset,
+            bundle=bundle,
+            control_time_s=reset_plan.control_time_s,
+            single_task=stage.instruction or stage.name,
+            display_data=context.config.display_data,
+        )
     elapsed_s = time.perf_counter() - started
     frames = context.buffered_frame_count() - frames_before
     policy = bundle.policy
@@ -539,6 +548,13 @@ def run_chain_reset_stage(context: StageContext, stage: StageConfig) -> StageRes
             ),
             "reset_tol_rad": chain.reset.tol_rad,
             "clamped_ticks": _clamped_delta(clamped_before),
+            # MEASURED, not declared. `state_only` only if the lightweight
+            # function actually ran every tick it was asked for; `upstream` means
+            # the swap never took (an upstream that moved `predict_action`, or a
+            # plugin that substituted the policy for this loop) and the operator
+            # should expect the old ~12.5 Hz. `predict_calls` should be ~= frames.
+            "predict_path": predict_swap.predict_path,
+            "predict_calls": predict_swap.state_only_calls,
         }
     )
 

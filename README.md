@@ -1014,6 +1014,13 @@ Why each piece exists -- all three failures are measured, not assumed:
 - **The reset.** Stage k's end pose and stage k+1's start pose are 0.25-1.28 rad apart at all ten
   boundaries, because every stage was recorded from its own hand-built start pose. The transition
   is not in the training data, so no policy can produce it.
+  A reset's `record_loop` runs with the camera conversion SKIPPED (the ramp reads
+  `observation.state` only, and the reset bundle's `device` is the CPU, so `LEROBOT_FAST_OBS`
+  cannot help it): converting three 480x640x3 uint8 frames per tick held the reset loop at
+  12.5 Hz against the 21 Hz target on 10/07. Whether the skip actually took is measured per
+  stage in `events.jsonl` -- `reason_detail.predict_path` (`state_only`) and `predict_calls` --
+  and the reset table's `Hz` column marks the run with `⚠` when it did not. Policy stages and
+  plain `lerobot-record` are unaffected; the swap is scoped to one reset's loop.
 - **The completion rule.** The stage **departed** (below) **and** `p >= 0.95` held for 1 s
   **and** the output stalled for 3 s **and** the elapsed time past the stage's p10. None of the
   four works alone: demonstration lengths spread 1.3-2.7x, 23-35% of the demonstrations of

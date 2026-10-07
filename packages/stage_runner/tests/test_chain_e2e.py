@@ -452,6 +452,35 @@ class ChainEndToEndTest(unittest.TestCase):
             detail = event["reason_detail"]
             self.assertGreater(detail["reset_dmax"], 0.0)
             self.assertLess(detail["reach_err"], detail["reset_tol_rad"])
+        # Every ramp went through the state-only predict path, and SAID SO per
+        # stage. The claim this carries is "the swap was installed and every tick
+        # of every reset used it", which is what the 12.5 -> ~21 Hz fix depends
+        # on; the SKIPPED CONVERSION itself is asserted in
+        # test_chain_unit.ResetPredictPathTest (MockRobot has no cameras, so
+        # there is no image key here to skip).
+        for event in ends:
+            detail = event["reason_detail"]
+            self.assertEqual(
+                detail["predict_path"],
+                "state_only",
+                f"{event['stage_id']}: {detail}",
+            )
+            self.assertEqual(
+                detail["predict_calls"],
+                event["frames"],
+                f"{event['stage_id']}: one lightweight predict per recorded "
+                "frame, or the swap was bypassed on some ticks",
+            )
+        # And it did not leak: after a full run upstream's function is back.
+        from lerobot.scripts import lerobot_record
+        from lerobot.utils import control_utils
+
+        self.assertIs(
+            lerobot_record.predict_action,
+            control_utils.predict_action,
+            "the reset swap must be undone -- a leak would run the NEXT "
+            "lerobot-record's policy without its camera frames",
+        )
         # No checkpoint was loaded.
         trial_start = run.of("trial_start")[0]
         self.assertEqual(
