@@ -102,6 +102,26 @@ class StageParams:
     start_pose_source: str
     end_poses: tuple[Mapping[str, float], ...]
     end_pose_tol_rad: float
+    # "move" (1·3·6·10: the base travels, the arm barely moves) or "manip".
+    # Optional in the file for compatibility; a file that marks no stage as
+    # "move" reproduces the 10/07 false completion (robot PC run 1756: the arm
+    # wiggled 0.10 rad, stalled near an end pose, and task03 was declared
+    # complete without the base ever turning), so the loader warns about it.
+    kind: str = "manip"
+    # Demonstration medians of |integral x.vel| (m) and |integral theta.vel|
+    # (rad) over the stage, at 21 Hz. The monitor requires a "move" stage to
+    # cover `move_base_fraction` of each axis that matters before it may
+    # depart or complete. None when the file does not carry them.
+    base_fwd_total_m: float | None = None
+    base_rot_total_rad: float | None = None
+    # The demonstrations' p10 of the same integrals. An axis is REQUIRED of a
+    # move stage only when its p10 clears the departure threshold -- i.e. at
+    # least 90% of the demonstrations travel on it. task09 drives 0.22 m in the
+    # median demonstration but 0 in a tenth of them, so a median rule would make
+    # a correct, stationary close-the-fridge uncompletable. Falls back to the
+    # median when the file carries no p10.
+    base_fwd_p10_m: float | None = None
+    base_rot_p10_rad: float | None = None
 
     def timeout_s(self, factor: float) -> float:
         """The stage's ``control_time_s``: p90 times the configured factor.
@@ -276,6 +296,53 @@ def _stage(
             f"{raw['end_pose_tol_rad']!r}"
         )
 
+    # Optional (10/07): stage kind and the base-travel medians a "move" stage is
+    # judged by. `base_*_total_*` may be a number or an object {median, p10, p90}
+    # as export_chain_params.py writes it; the median is what the monitor uses.
+    kind = raw.get("kind", "manip")
+    if kind not in ("move", "manip"):
+        problems.append(f"{where}.kind: expected 'move' or 'manip', got {kind!r}")
+        kind = "manip"
+    totals: dict[str, float | None] = {}
+    p10s: dict[str, float | None] = {}
+    for key in ("base_fwd_total_m", "base_rot_total_rad"):
+        value = raw.get(key)
+        p10_value = None
+        if isinstance(value, dict):
+            p10_value = value.get("p10")
+            value = value.get("median")
+        if value is None:
+            totals[key] = None
+            p10s[key] = None
+            continue
+        number_value = _finite(value)
+        if number_value is None or number_value < 0.0:
+            problems.append(
+                f"{where}.{key}: expected a non-negative finite number (or an "
+                f"object with a 'median'), got {raw.get(key)!r}"
+            )
+            totals[key] = None
+            p10s[key] = None
+            continue
+        totals[key] = number_value
+        if p10_value is None:
+            p10s[key] = number_value
+        else:
+            p10_number = _finite(p10_value)
+            if p10_number is None or p10_number < 0.0 or p10_number > number_value:
+                problems.append(
+                    f"{where}.{key}.p10: expected 0 <= p10 <= median, got {p10_value!r}"
+                )
+                p10s[key] = None
+            else:
+                p10s[key] = p10_number
+    if kind == "move" and totals["base_fwd_total_m"] is None and totals["base_rot_total_rad"] is None:
+        problems.append(
+            f"{where}: kind is 'move' but neither base_fwd_total_m nor "
+            "base_rot_total_rad is given -- the monitor would have no travel to "
+            "require, which is the false completion the kind exists to prevent"
+        )
+
     if len(problems) != before:
         return None
 
@@ -290,6 +357,11 @@ def _stage(
         start_pose_source=start_pose_source,
         end_poses=tuple(end_poses),
         end_pose_tol_rad=float(tolerance),
+        kind=kind,
+        base_fwd_total_m=totals["base_fwd_total_m"],
+        base_rot_total_rad=totals["base_rot_total_rad"],
+        base_fwd_p10_m=p10s["base_fwd_total_m"],
+        base_rot_p10_rad=p10s["base_rot_total_rad"],
     )
 
 
@@ -395,6 +467,19 @@ def parse_chain_params(
 
     if problems:
         raise ChainParamsError(_message(location, problems))
+
+    if stages and not any(stage.kind == "move" for stage in stages.values()):
+        # Not an error -- a file from before 10/07 has no `kind` -- but said
+        # out loud: on such a file every stage is judged as manipulation, and
+        # a move stage can then complete without the base ever moving (robot
+        # PC run 1756). Regenerate with sim scripts/export_chain_params.py.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            f"{location}: no stage is marked kind='move' -- the file predates the "
+            "base-travel completion rule, so stages 1/3/6/10 can be declared "
+            "complete without the base moving. Regenerate stage_params.json."
+        )
 
     return ChainParams(
         schema_version=SCHEMA_VERSION,

@@ -197,7 +197,9 @@ def main(argv: list[str]) -> int:
     assert params is not None
     print(
         f"   단계 파라미터 OK: {len(params.stages)}단계 · fps {params.fps} · "
-        f"sim {str(params.source.get('sim_commit', '?'))[:12]}",
+        f"sim {str(params.source.get('sim_commit', '?'))[:12]} · "
+        # 10/07: 이동 단계 목록. 비어 있으면 옛 파일 -- 이동 단계가 베이스 없이 완료될 수 있다(1756).
+        f"move={[n for n, s in sorted(params.stages.items()) if s.kind == 'move']}",
         file=sys.stderr,
     )
 

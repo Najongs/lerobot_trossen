@@ -1040,6 +1040,150 @@ class _MonitorHarness(NoRobotSdkMixin):
         monitor(create_transition(action=action, observation=observation))
 
 
+class MoveStageCompletionTest(_MonitorHarness, unittest.TestCase):
+    """A "move" stage is judged by its BASE: robot PC run 1756 (10/07) declared
+    task03 complete after a 0.10 rad arm wiggle, a 3 s stall and an end-pose NN
+    hit while the base never turned. The mock stage 1 is re-declared as a pure
+    turn (median 1.4 rad, p10 1.3 rad; x axis negligible), so the arm rules that
+    completed it before must now be refused and the base travel must decide."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import dataclasses
+
+        self.params = dataclasses.replace(
+            self.params,
+            kind="move",
+            base_rot_total_rad=1.4,
+            base_rot_p10_rad=1.3,
+            base_fwd_total_m=0.02,
+            base_fwd_p10_m=0.0,
+        )
+
+    def _spin(self, monitor, ticks: int, *, progress=None) -> None:
+        # theta.vel 1.0 rad/s for `ticks` ticks of 1/21 s: ~0.048 rad per tick.
+        for _ in range(ticks):
+            self._tick(monitor, progress=progress, theta=1.0, offset=0.0)
+
+    def _stall_near_end(self, monitor, *, progress=None) -> None:
+        # end_poses[0] of the mock file is start_pose + 0.05, inside tol: the
+        # geometry that let 1756 complete. Stalled there for over stall_s.
+        for _ in range(40):
+            self._tick(monitor, progress=progress, offset=0.05)
+            if self.events["exit_early"]:
+                break
+
+    def test_the_arm_alone_neither_departs_nor_completes_a_move_stage(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        self._tick(monitor, offset=0.0)
+        for _ in range(10):  # 0.2 rad, well over departure_arm_rad, for 10 ticks
+            self._tick(monitor, offset=self.DEPARTED)
+        self._stall_near_end(monitor)
+        self.assertFalse(self.events["exit_early"], "the 1756 false completion")
+        self.assertIsNone(monitor.end_stage())
+        self.assertFalse(monitor.last_departure.departed, "the arm must not latch a move stage")
+        self.assertGreater(monitor.last_departure.arm_rad, 0.1, "the arm IS still measured")
+
+    def test_half_the_demonstrated_turn_is_not_enough(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        self._tick(monitor, offset=0.0)
+        self._spin(monitor, 6)  # ~0.29 rad: past the 0.17 departure latch, under 0.5 * 1.4
+        self._stall_near_end(monitor)
+        self.assertFalse(self.events["exit_early"])
+        self.assertIsNone(monitor.end_stage())
+        self.assertTrue(monitor.last_departure.departed, "the base DID latch the departure")
+
+    def test_a_sixteen_d_move_stage_completes_by_base_travel_then_stall(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        self._tick(monitor, offset=0.0)
+        self._spin(monitor, 16)  # ~0.76 rad >= 0.5 * 1.4
+        self._stall_near_end(monitor)
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_STALL_BASE)
+        self.assertTrue(result.base_travel_ok)
+        self.assertGreaterEqual(abs(result.base_rot_rad), 0.7)
+        self.assertIsNotNone(result.nn_dist, "recorded, not required")
+        detail = result.as_detail()
+        self.assertIn("base_rot_rad", detail)
+        self.assertTrue(detail["base_travel_ok"])
+
+    def test_a_progress_model_on_a_move_stage_still_needs_the_travel(self) -> None:
+        monitor = self._monitor(has_progress=True)
+        self._tick(monitor, progress=0.0, offset=0.0)
+        self._spin(monitor, 6, progress=0.5)
+        self._stall_near_end(monitor, progress=1.0)
+        self.assertFalse(self.events["exit_early"], "p=1 held + stall, but the base turned 0.29 rad")
+        self.assertIsNone(monitor.end_stage())
+
+        monitor = self._monitor(has_progress=True)
+        self._tick(monitor, progress=0.0, offset=0.0)
+        self._spin(monitor, 16, progress=0.5)
+        self._stall_near_end(monitor, progress=1.0)
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_PROGRESS)
+        self.assertTrue(result.base_travel_ok)
+
+    def test_a_manip_stage_is_unchanged(self) -> None:
+        import dataclasses
+
+        self.params = dataclasses.replace(self.params, kind="manip")
+        monitor = self._monitor(has_progress=False)
+        self._depart(monitor, has_progress=False)
+        self._stall_near_end(monitor)
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_STALL_NN)
+        self.assertIsNone(result.base_travel_ok)
+        self.assertIsNone(result.as_detail()["base_rot_rad"])
+
+
+class MoveStageParamsLoaderTest(NoRobotSdkMixin, unittest.TestCase):
+    def _document(self):
+        import json
+
+        return json.loads(Path(MOCK_PARAMS).read_text())
+
+    def test_a_file_without_kinds_still_loads_as_manip(self) -> None:
+        stage = load_params().stage(1)
+        self.assertEqual(stage.kind, "manip")
+        self.assertIsNone(stage.base_rot_total_rad)
+        self.assertIsNone(stage.base_rot_p10_rad)
+
+    def test_a_move_stage_needs_a_travel_median(self) -> None:
+        document = self._document()
+        document["stages"]["1"]["kind"] = "move"
+        with self.assertRaises(cp.ChainParamsError) as caught:
+            cp.parse_chain_params(document, expected_fps=21)
+        self.assertIn("kind is 'move'", str(caught.exception))
+
+    def test_travel_objects_and_numbers_are_both_accepted(self) -> None:
+        document = self._document()
+        document["stages"]["1"]["kind"] = "move"
+        document["stages"]["1"]["base_rot_total_rad"] = {"median": 1.42, "p10": 1.33, "p90": 1.52}
+        document["stages"]["1"]["base_fwd_total_m"] = 0.104
+        params = cp.parse_chain_params(document, expected_fps=21)
+        stage = params.stage(1)
+        self.assertEqual(stage.kind, "move")
+        self.assertAlmostEqual(stage.base_rot_total_rad, 1.42)
+        self.assertAlmostEqual(stage.base_rot_p10_rad, 1.33)
+        self.assertAlmostEqual(stage.base_fwd_total_m, 0.104)
+        self.assertAlmostEqual(stage.base_fwd_p10_m, 0.104, msg="a bare number is its own p10")
+
+    def test_a_bad_kind_or_p10_is_refused(self) -> None:
+        document = self._document()
+        document["stages"]["1"]["kind"] = "drive"
+        with self.assertRaises(cp.ChainParamsError):
+            cp.parse_chain_params(document, expected_fps=21)
+        document = self._document()
+        document["stages"]["1"]["kind"] = "move"
+        document["stages"]["1"]["base_rot_total_rad"] = {"median": 1.0, "p10": 1.5}
+        with self.assertRaises(cp.ChainParamsError) as caught:
+            cp.parse_chain_params(document, expected_fps=21)
+        self.assertIn("p10", str(caught.exception))
+
+
 class CompletionMonitorTest(_MonitorHarness, unittest.TestCase):
     """The conjunction's four synthetic sequences, departure held satisfied.
 

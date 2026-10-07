@@ -226,6 +226,20 @@ t02·03·04·05·10 은 시연 시작 자세가 **쌍봉**이라 관절별 평�
 
 ---
 
+## 단계 kind 와 베이스 이동량 (`stage_params.json`, 10/07 저녁)
+
+로봇 PC ⑤ 1756: task03(회전)이 **베이스가 한 번도 안 돈 채** 팔 0.10 rad 출발 + 3 s 정지 + 끝 자세 NN 으로 `complete` 가 났다 —
+이동 단계는 시연에서도 팔이 움직이고(0.02 rad/프레임), 시작 자세가 끝 자세 집합 안에 있어 NN 이 공짜다. 그래서:
+
+| 키 (단계마다) | 뜻 |
+|---|---|
+| `kind` | `move`(1·3·6·10) / `manip`. 시연의 **p10** ∫x ≥ 0.10 m 또는 ∫θ ≥ 0.17 rad 인 축이 있으면 move (`export_chain_params.py`). task09 는 중앙 ∫x 0.22 m 지만 p10 이 0 이라 manip |
+| `base_fwd_total_m` · `base_rot_total_rad` | `{median, p10, p90}` — 명령 베이스 속도를 21 Hz 로 적분한 \|∫x\|·\|∫θ\| 의 시연 분포. 숫자 하나면 그 값이 중앙이자 p10 |
+
+러너(`completion.py`)는 `kind == "move"` 단계에서 **팔로는 출발을 래치하지 않고**(베이스 누적 0.17 rad / 0.10 m 만),
+완료는 「p10 이 출발 문턱을 넘는 축마다 \|누적\| ≥ `move_base_fraction`(0.5) × 중앙값」 을 **추가로** 요구한다 — 16D 는 끝 자세 NN 대신 이 조건(`stall_base`), 17D 는 진행도 ∧ 정지 ∧ 이 조건.
+`reason_detail` 에 `base_fwd_m`·`base_rot_rad`·`base_travel_ok` 가 남는다. kind 가 없는 옛 파일은 전부 manip 으로 읽혀 **1756 의 거짓 완료가 재현된다** — 로더가 경고한다.
+
 ## 텔레옵 구간 키 (StageRunnerConfig 최상위, 10/07)
 
 | 키 | 기본 | 뜻 |

@@ -4,8 +4,8 @@
  "note": "시연 길이는 표기 30 fps 가 아니라 실제 ~21 Hz 로 환산(§90). 자세는 팔 12관절 rad, 그리퍼·베이스 제외.",
  "source": {
   "sim_repo": "Najongs/trossen-ai-simulation",
-  "sim_commit": "a07c939",
-  "generated": "2026-10-06",
+  "sim_commit": "71ffbbe",
+  "generated": "2026-10-07",
   "scripts": [
    "scripts/export_chain_params.py",
    "scripts/reset_designate.py",
@@ -344,7 +344,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.078,
-   "end_pose_tol_rad": 0.15
+   "end_pose_tol_rad": 0.15,
+   "kind": "move",
+   "base_fwd_total_m": {
+    "median": 1.641,
+    "p10": 1.521,
+    "p90": 1.777
+   },
+   "base_rot_total_rad": {
+    "median": 1.431,
+    "p10": 1.378,
+    "p90": 1.482
+   }
   },
   "2": {
    "name": "task02_pickup_tubes",
@@ -658,7 +669,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.274,
-   "end_pose_tol_rad": 0.411
+   "end_pose_tol_rad": 0.411,
+   "kind": "manip",
+   "base_fwd_total_m": {
+    "median": 0.001,
+    "p10": 0.0,
+    "p90": 0.001
+   },
+   "base_rot_total_rad": {
+    "median": 0.002,
+    "p10": 0.001,
+    "p90": 0.006
+   }
   },
   "3": {
    "name": "task03_turn_to_face_beaker",
@@ -972,7 +994,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.322,
-   "end_pose_tol_rad": 0.483
+   "end_pose_tol_rad": 0.483,
+   "kind": "move",
+   "base_fwd_total_m": {
+    "median": 0.104,
+    "p10": 0.037,
+    "p90": 0.246
+   },
+   "base_rot_total_rad": {
+    "median": 1.42,
+    "p10": 1.332,
+    "p90": 1.516
+   }
   },
   "4": {
    "name": "task04_pour_liquid_from_tubes_to_beaker",
@@ -1286,7 +1319,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.257,
-   "end_pose_tol_rad": 0.386
+   "end_pose_tol_rad": 0.386,
+   "kind": "manip",
+   "base_fwd_total_m": {
+    "median": 0.0,
+    "p10": 0.0,
+    "p90": 0.001
+   },
+   "base_rot_total_rad": {
+    "median": 0.002,
+    "p10": 0.0,
+    "p90": 0.006
+   }
   },
   "5": {
    "name": "task05_tube_disposal",
@@ -1599,7 +1643,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.249,
-   "end_pose_tol_rad": 0.374
+   "end_pose_tol_rad": 0.374,
+   "kind": "manip",
+   "base_fwd_total_m": {
+    "median": 0.0,
+    "p10": 0.0,
+    "p90": 0.001
+   },
+   "base_rot_total_rad": {
+    "median": 0.002,
+    "p10": 0.0,
+    "p90": 0.004
+   }
   },
   "6": {
    "name": "task06_task06-2_pickup_beaker_and_move_to_refrigerator_14D_new_2",
@@ -1913,7 +1968,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.108,
-   "end_pose_tol_rad": 0.162
+   "end_pose_tol_rad": 0.162,
+   "kind": "move",
+   "base_fwd_total_m": {
+    "median": 0.559,
+    "p10": 0.477,
+    "p90": 0.639
+   },
+   "base_rot_total_rad": {
+    "median": 0.017,
+    "p10": 0.003,
+    "p90": 0.04
+   }
   },
   "7": {
    "name": "task07_open_refrigerator",
@@ -2227,7 +2293,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.213,
-   "end_pose_tol_rad": 0.32
+   "end_pose_tol_rad": 0.32,
+   "kind": "manip",
+   "base_fwd_total_m": {
+    "median": 0.001,
+    "p10": 0.0,
+    "p90": 0.003
+   },
+   "base_rot_total_rad": {
+    "median": 0.003,
+    "p10": 0.0,
+    "p90": 0.015
+   }
   },
   "8": {
    "name": "task08_takeout_and_put_beaker",
@@ -2541,7 +2618,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.176,
-   "end_pose_tol_rad": 0.264
+   "end_pose_tol_rad": 0.264,
+   "kind": "manip",
+   "base_fwd_total_m": {
+    "median": 0.0,
+    "p10": 0.0,
+    "p90": 0.001
+   },
+   "base_rot_total_rad": {
+    "median": 0.0,
+    "p10": 0.0,
+    "p90": 0.004
+   }
   },
   "9": {
    "name": "task09_close_refrigerator",
@@ -2855,7 +2943,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.143,
-   "end_pose_tol_rad": 0.214
+   "end_pose_tol_rad": 0.214,
+   "kind": "manip",
+   "base_fwd_total_m": {
+    "median": 0.217,
+    "p10": 0.0,
+    "p90": 0.284
+   },
+   "base_rot_total_rad": {
+    "median": 0.008,
+    "p10": 0.001,
+    "p90": 0.022
+   }
   },
   "10": {
    "name": "task10_move_to_beaker_shelf",
@@ -3169,7 +3268,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.05,
-   "end_pose_tol_rad": 0.15
+   "end_pose_tol_rad": 0.15,
+   "kind": "move",
+   "base_fwd_total_m": {
+    "median": 1.359,
+    "p10": 1.21,
+    "p90": 1.524
+   },
+   "base_rot_total_rad": {
+    "median": 0.013,
+    "p10": 0.002,
+    "p90": 0.034
+   }
   },
   "11": {
    "name": "task11_place_beaker_on_the_shelf",
@@ -3483,7 +3593,18 @@
     ]
    ],
    "end_pose_nn_median_rad": 0.188,
-   "end_pose_tol_rad": 0.282
+   "end_pose_tol_rad": 0.282,
+   "kind": "manip",
+   "base_fwd_total_m": {
+    "median": 0.001,
+    "p10": 0.0,
+    "p90": 0.204
+   },
+   "base_rot_total_rad": {
+    "median": 0.003,
+    "p10": 0.0,
+    "p90": 0.072
+   }
   }
  }
 }

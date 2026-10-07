@@ -126,6 +126,10 @@ BASE_VELOCITY_KEYS: tuple[str, ...] = (
 # the same measurement.
 REASON_PROGRESS: str = "progress"
 REASON_STALL_NN: str = "stall_nn"
+# 16-D model on a "move" stage: stalled after covering the required share of
+# the demonstrated base travel. The arm's end-pose NN is recorded but not
+# required (10/07, robot PC 1756).
+REASON_STALL_BASE: str = "stall_base"
 
 # Prefixed onto the `reason` of a stage that ran out its ceiling without the
 # departure latch ever setting. It is a DIFFERENT fact from an ordinary timeout
@@ -203,6 +207,15 @@ class CompletionSettings:
     departure_base_rot_rad: float = 0.17
     # |integral of the COMMANDED x.vel| over the stage, in metres.
     departure_base_fwd_m: float = 0.10
+    # A "move" stage (StageParams.kind) must cover this fraction of the
+    # demonstrations' median base travel -- on every axis whose median clears
+    # the departure threshold above -- before it may complete, and its
+    # departure latch ignores the arm. Robot PC run 1756 (10/07): task03 was
+    # declared complete after a 0.10 rad arm wiggle, a 3 s stall and an end-pose
+    # NN hit, with the base never having turned. 0.5 is a floor, not a target:
+    # a chain that turns half of -81 deg has clearly started the turn, and the
+    # p10 floor + stall still decide WHEN.
+    move_base_fraction: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -228,10 +241,18 @@ class CompletionResult:
     # typed optional because `Departure` carries None for a stage that never
     # departed and the two are read through the same key in the report.
     departed_s: float | None = None
+    # COMMANDED base travel integrated over the stage (signed), and the
+    # fraction-of-median check a "move" stage passed. None on a manip stage.
+    base_fwd_m: float | None = None
+    base_rot_rad: float | None = None
+    base_travel_ok: bool | None = None
 
     def as_detail(self) -> dict[str, Any]:
         return {
             "completion_reason": self.reason,
+            "base_fwd_m": None if self.base_fwd_m is None else round(self.base_fwd_m, 4),
+            "base_rot_rad": None if self.base_rot_rad is None else round(self.base_rot_rad, 4),
+            "base_travel_ok": self.base_travel_ok,
             "elapsed_s": round(self.elapsed_s, 3),
             "ticks": self.ticks,
             "stall_s": round(self.stall_s, 3),
@@ -761,7 +782,12 @@ class CompletionMonitorStep(ProcessorStep):
         else:
             stage.arm_departure_ticks = 0
         why = ""
-        if stage.arm_departure_ticks >= DEPARTURE_ARM_TICKS:
+        # A "move" stage departs by its BASE only: its demonstrations move the
+        # arm too (task03 0.021 rad/frame), so the arm condition always fired
+        # first and a stage whose base never turned counted as departed (robot
+        # PC 1756, 10/07). The arm is still measured, for the report.
+        is_move = getattr(stage.params, "kind", "manip") == "move"
+        if not is_move and stage.arm_departure_ticks >= DEPARTURE_ARM_TICKS:
             why = (
                 f"the arm has been {worst:.3f} rad from the pose it started this "
                 f"stage at for {stage.arm_departure_ticks} ticks in a row"
@@ -821,6 +847,22 @@ class CompletionMonitorStep(ProcessorStep):
         if stalled is None:
             return None
 
+        # A "move" stage must have TRAVELLED, whatever the progress head or the
+        # arm's end pose says: the arm barely moves in those stages, so an
+        # end-pose NN hit is near-free and a stalled base at the start scene is
+        # exactly the false completion of robot PC run 1756 (10/07).
+        is_move = getattr(stage.params, "kind", "manip") == "move"
+        travel_ok: bool | None = None
+        if is_move:
+            travel_ok = self._base_travel_ok(stage)
+            if not travel_ok:
+                return None
+        base_fields = dict(
+            base_fwd_m=stage.base_fwd_m if is_move else None,
+            base_rot_rad=stage.base_rot_rad if is_move else None,
+            base_travel_ok=travel_ok,
+        )
+
         if stage.has_progress:
             held = self._progress_held(stage, now)
             if held is None:
@@ -833,6 +875,7 @@ class CompletionMonitorStep(ProcessorStep):
                 p_last=stage.samples[-1].progress,
                 p_hold_s=held,
                 departed_s=stage.departed_at_s,
+                **base_fields,
             )
 
         # 16-D model: no progress output exists, so "stopped" has to be
@@ -840,6 +883,20 @@ class CompletionMonitorStep(ProcessorStep):
         # every stage (§93, t04), so this is a weaker signal than progress and
         # that is exactly why `allow_manual_complete` is on for M1 too.
         distance, index = self._nearest_end_pose(stage)
+        if is_move:
+            # The arm's end pose says nothing about a move stage (its start pose
+            # IS one of its end poses to 0.001 rad for t03/t10); the base travel
+            # above is the corroboration. nn_dist is recorded, not required.
+            return CompletionResult(
+                reason=REASON_STALL_BASE,
+                elapsed_s=elapsed,
+                ticks=stage.ticks,
+                stall_s=stalled,
+                nn_dist=distance,
+                nn_index=index,
+                departed_s=stage.departed_at_s,
+                **base_fields,
+            )
         if distance is None or distance > stage.params.end_pose_tol_rad:
             return None
         return CompletionResult(
@@ -850,7 +907,39 @@ class CompletionMonitorStep(ProcessorStep):
             nn_dist=distance,
             nn_index=index,
             departed_s=stage.departed_at_s,
+            **base_fields,
         )
+
+    def _base_travel_ok(self, stage: _Stage) -> bool:
+        """Has a "move" stage covered `move_base_fraction` of the demonstrated
+        median travel on every axis that matters?
+
+        An axis matters when the demonstrations' p10 on it clears the departure
+        threshold for that axis -- at least nine demonstrations in ten travel
+        there (so a pure turn is judged on theta only, a straight drive on x
+        only, task01 on both; task03's 0.10 m median drive has p10 0.04 and is
+        not required). The amount required is `move_base_fraction` of the
+        MEDIAN. A move stage whose file carries no usable axis cannot complete
+        by itself -- the loader refuses such a file, and this returns False
+        rather than True so a hand-edited file fails closed.
+        """
+        settings = self.settings
+        params = stage.params
+        fraction = float(settings.move_base_fraction)
+        checks: list[bool] = []
+        fwd_median = getattr(params, "base_fwd_total_m", None)
+        fwd_p10 = getattr(params, "base_fwd_p10_m", None)
+        if fwd_median is not None:
+            gate = fwd_median if fwd_p10 is None else fwd_p10
+            if gate >= settings.departure_base_fwd_m:
+                checks.append(abs(stage.base_fwd_m) >= fraction * fwd_median)
+        rot_median = getattr(params, "base_rot_total_rad", None)
+        rot_p10 = getattr(params, "base_rot_p10_rad", None)
+        if rot_median is not None:
+            gate = rot_median if rot_p10 is None else rot_p10
+            if gate >= settings.departure_base_rot_rad:
+                checks.append(abs(stage.base_rot_rad) >= fraction * rot_median)
+        return bool(checks) and all(checks)
 
     def _stalled(self, stage: _Stage, now: float) -> float | None:
         """Length of the trailing window in which nothing moved, or None.
