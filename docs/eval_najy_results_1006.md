@@ -410,11 +410,42 @@ DGX 세션이 10/06 저녁에 한 것(배경·근거는 sim 레포 `docs/mobile_
 - task06 단계 파라미터(p10/p50/p90 31.5/36.7/47.2 s, 시작 자세)는 **새 데이터셋의 전체 과제 에피소드(task_index 0)** 기준. 체인에서 단계 6 은 「잡기→이동」 전체다.
 - 녹화 주기 21 Hz 확정(§90) → `stage_params.json` 의 길이는 21 Hz 환산. 이동 단계 기준 회전·전진량도 1.43 배(이 문서 위 「다음」 과 같음).
 
+## DGX_1 → Trossen PC1 (10/07 아침) — 2라운드 기다리는 동안 돌릴 것 (우선순위 순)
+
+2라운드(env 단계 토큰) 결과는 10/07 11:00 UTC 종료 + 채점 2시간 뒤. 그때까지 **새 모델 없이** 결정에 영향을 주는 실기는 아래다. 절차는 `eval_najy.md` G절(체인)·D절(단일 단계), 기록 형식은 §4. **전부 tmux 안에서, 처음은 에피소드 1개, ESC 와 베이스 e-stop 을 함께.**
+
+### A. 체인 러너 bring-up ①~④ — M1 로, 반나절
+| # | 무엇 | 기록할 것 | 닫히는 결정 |
+|---|---|---|---|
+| ① | `git merge --ff-only najongs/main` → `uv lock && uv sync` → `uv run python -c "import stage_runner"` → `DRY_RUN=1 scripts/eval_chain.sh M1` | 폭 검사 출력(`action 16D` · `state 27D · 원핫 K=11`), `set_stage` 줄, 조립 명령의 `--chain.*` | 러너가 로봇 PC 환경에서 뜨나 |
+| ② | `RESET_ONLY=1 scripts/eval_chain.sh M1 resets` **빈손 10경계** — 시작 전 팔을 task01 시작 자세 **0.3 rad 안**에 손으로(`POSE task01` 줄). 큰 전이 5곳(t02→03·03→04·04→05·07→08·10→11)은 눈으로 | 경계별 `reached`·`reach_err`(tol 0.05)·**`clamped` 0**·`stop_base_direct_ok`·`display_data: false` 로 잰 루프 Hz | 리셋 궤적 안전·도달 tol 현실성. **`stop_base_direct_ok: false` 가 뜨는데 베이스는 멈춰 있으면 Modbus 2회 쓰기 경합[추정] — 멈추고 보고** |
+| ③ | 같은 리셋을 **가벼운 물체 → 튜브·비커** 순으로 (`RESET_ONLY=1`) | 그리퍼가 놓치나 / 더 쥐나 | **그리퍼 「관측값 재명령」 이 파지력을 유지하나** — 유일하게 설계 변경이 필요할 수 있는 관문. 놓치면 ③ 에서 멈추고 보고 |
+| ④ | `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh M1 one4` | eval_najy 회차와 루프 Hz·rearm `active`(reset 구간 포함)·clamped·FIRED 가 같은지 | 러너가 실행 계층을 안 바꿨나 |
+| ④' | ② 도중 베이스가 **정지한 상태**에서 SSH 를 끊거나 `kill -HUP <러너 pid>` | 로그에 stop_base → disconnect 가 찍히나, 팔·베이스가 그 자리에 있나 | 시그널 래치 실증(codex 치명 지적) |
+
+### B. 설계 판단용 짧은 실험 — 각 2~3ep
+| # | 무엇 | 왜 지금 |
+|---|---|---|
+| B1 | **지정 시작 자세에서 출발하나** — `configs/chain/stage_params.json` 의 `stages["5"].start_pose_rad_arm12`(task05)·`["2"]`(task02) 에 팔을 맞추고(`POSE` 줄로 거리 확인) `scripts/eval_najy.sh M1 5 30 3`, `… M1 2 30 3` | DGX 오프라인 지도는 「분포 안 시작에서도 M1 이 20~40% 정지」 라고 예측. 실기에서 몇 ep 가 출발하는지가 **채점 검증 라벨**이 되고, 리셋+지정 자세만으로 충분한지 가른다 |
+| B2 | **끝에서 머무나** — `scripts/eval_najy.sh M2 4 30 2`(task04, M2). 부은 뒤 손대지 말고 30초 관찰 | 오프라인에서 M2 120K 가 끝 정지율이 가장 높다(t07 96%·t11 95%). 실기에서 끝 장면에 머무르면 M2 를 16D 폴백 참조군으로 쓸 수 있고, 움직이면 끝 정지 지표를 의심한다 |
+| B3 | task03 재시험(시작 자세 허용 안) · task01 선반 앞 재시험 — 아래 「다음」 1·2번 그대로 | 베이스 회전 −81°·전진 1.64 m(21 Hz 환산) 기준 확인, M1 이동 단계 실제 성공률 |
+
+### C. 로봇 안 움직이고 DGX 에 가장 큰 도움 — 데이터 전송 (아직 안 옴)
+`~/.cache/huggingface/lerobot/kiroaiseoul/eval_najy_1006_*` 6개 + `~/eval_logs/1006_*` → DGX `/raid/kiro-ai/eval/real/` (명령은 `eval_najy.md` 「결과 넘기기」). 1350 ep0/ep1/ep2(출발/정지)·C-2(task05 자리 task04) 프레임이 있어야 출발 지도·진행도·원핫 진단을 **실기 라벨로 검증**하고 2라운드 후보를 믿고 고른다. A·B 에서 생기는 `eval_chain_*`·`eval_najy_1007_*` 도 같이.
+
+### 하지 말 것
+- M1 로 체인 ⑤ 를 **자동 완료를 기대하고** 돌리기 — M1 은 끝에서 안 멈추고 원핫이 안 먹어 `→` 로만 넘어간다. 그 수치는 러너 검증이지 모델 평가가 아니다.
+- 추가 데이터 수집 — 2라운드 판정 전엔 수집 규약(체인 녹화·시작 퍼뜨리기)이 확정되지 않는다.
+
+### 기록·보고
+회차마다 `eval_najy_post.sh`/`eval_chain_report.py` 산출을 `docs/run_logs/2026-10-07_eval_najy/` 에 넣고, 이 문서(또는 `eval_najy_results_1007.md`)의 「다음」 에 A/B 결과 한 줄씩. **③ 그리퍼 · ② `stop_base_direct_ok` · ④' 시그널** 세 관문은 결과가 어느 쪽이든 바로 commit·push — DGX 가 그걸 보고 러너를 고친다.
+
 ## 다음
 
 사람 결정(10/06): 원핫(임베딩)으로 단계를 고르는 것이 목표였으므로, 시작 자세로 단계를 맞추는 방식은 채택하지 않는다 —
 task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 C-3 은 보류, **D 의 이동 단계를 계속한다.**
 
+0. **(10/07) 위 「2라운드 기다리는 동안 돌릴 것」 A → B → C 순.** 아래 1·2 는 B3 에 해당.
 1. **task03 재시험 — 시작 자세를 허용(0.32) 안으로.** 리셋 구간에서 `POSE task03` 의 손목 j4(L +41°, R −44°)·j1(+92°/+84°)까지 맞춘 뒤
    `scripts/eval_najy.sh M1 3 30 3`. 판정에 쓸 수 있는 첫 회차가 된다. 그래도 정지면 `M3 3 30 3`.
 2. **task01 재시험 — 비커 선반 앞(task11 이 끝난 자리)에서 시작**: `scripts/eval_najy.sh M1 1 30 3`. 기준은 약 +82°·1.64 m (21 Hz 환산).
