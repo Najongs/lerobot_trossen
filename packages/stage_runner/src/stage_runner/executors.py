@@ -704,7 +704,7 @@ def _clamped_delta(before: int | None) -> int | None:
     return after - before
 
 
-def _set_pose_guide(stage_number: int | None, chain=None) -> None:
+def _set_pose_guide(stage_number: int | None, chain=None, gate_rad: float | None = None) -> None:
     """Point ``pose_guide`` at this reset's target, or turn it off for a rollout.
 
     Reached through ``sys.modules`` and never imported: the module lives in
@@ -726,7 +726,14 @@ def _set_pose_guide(stage_number: int | None, chain=None) -> None:
         if stage_number is None or chain is None:
             setter(None)
             return
-        setter(stage_number, chain.params.start_pose_deg_pairs(stage_number))
+        pairs = chain.params.start_pose_deg_pairs(stage_number)
+        if gate_rad is None:
+            setter(stage_number, pairs)
+            return
+        try:
+            setter(stage_number, pairs, gate_deg=math.degrees(gate_rad))
+        except TypeError:  # an older pose_guide without the gate keyword
+            setter(stage_number, pairs)
     except Exception:  # a readout must never cost a run
         logger.debug("could not point pose_guide at the reset target", exc_info=True)
 

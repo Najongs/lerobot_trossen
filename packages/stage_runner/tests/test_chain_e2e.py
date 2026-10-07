@@ -813,6 +813,28 @@ class TeleopPhaseTests(unittest.TestCase):
         self.assertFalse(run.trial_end["completed"], run.trial_end)
         self.assertEqual(run.of("stage_end")[0]["frames"], 0)
 
+    def test_right_arrow_is_ignored_while_the_arm_is_outside_the_initial_gate(self) -> None:
+        # pose_rad=2.0 parks every joint 2 rad away from the mock stage-1 pose: the arrow
+        # must bounce (arrow_not_ready), the window continues, and the ceiling then aborts.
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_chain(
+                Path(directory),
+                to_stage=1,
+                extra_argv=(
+                    "--teleop.type=stage_runner_mock_teleop",
+                    "--teleop.pose_rad=2.0",
+                    "--teleop_time_s=1.6",
+                ),
+                patch_events=_events_with_timers((0.5, {"exit_early": True})),
+            )
+        ends = run.of("teleop_end")
+        self.assertEqual([e["ended_by"] for e in ends], ["arrow_not_ready", "timeout"], ends)
+        self.assertGreater(ends[0]["gap_rad"], ends[0]["gate_rad"])
+        self.assertTrue(ends[0]["gap_joint"])
+        self.assertEqual(run.of("teleop_start")[-1]["attempt"], 2)
+        self.assertFalse(run.trial_end["completed"], run.trial_end)
+        self.assertEqual(run.of("stage_end")[0]["frames"], 0, "nothing may have moved")
+
     def test_base_velocity_from_the_leader_is_zeroed_by_default(self) -> None:
         from lerobot.processor.core import TransitionKey
 

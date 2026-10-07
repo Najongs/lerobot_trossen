@@ -81,9 +81,14 @@ _TARGET_OVERRIDE: tuple[tuple[float, ...], tuple[float, ...]] | None = None
 _GUIDE_PHASES = ("teleop", "reset")
 
 
+_GATE_DEG: float | None = None  # 텔레옵 구간: 「가장 큰 차」 가 이 아래면 → 가 받아들여진다
+_ready_prev: bool | None = None
+
+
 def set_stage(
     stage: int | None,
     target_deg: tuple[tuple[float, ...], tuple[float, ...]] | None = None,
+    gate_deg: float | None = None,
 ) -> None:
     """Re-point the guide at another stage inside ONE process (chain runner).
 
@@ -105,7 +110,7 @@ def set_stage(
     ``stage=None`` turns the guide off, which is what a run with no stage context
     (an initial reset before stage 1 has been chosen) should print: nothing.
     """
-    global _STAGE, _TARGET_OVERRIDE, _last_t
+    global _STAGE, _TARGET_OVERRIDE, _last_t, _GATE_DEG, _ready_prev
     if stage is not None and stage not in TARGETS_DEG and target_deg is None:
         logger.warning(f"{_ENV_VAR}: stage {stage} has no target; guide off.")
         stage = None
@@ -117,6 +122,10 @@ def set_stage(
         )
     _STAGE = stage
     _TARGET_OVERRIDE = target_deg
+    # ``gate_deg``: 러너의 텔레옵 구간이 넘긴다 -- 최초 리셋의 관절별 상한(initial_max_jump_rad).
+    # 있으면 POSE 줄 앞에 [→ 가능 ✔] / [아직 ✘ …] 를 붙이고, 처음 가능해지는 순간 터미널 벨을 울린다.
+    _GATE_DEG = gate_deg
+    _ready_prev = None
     # So the first tick of the new stage prints immediately instead of waiting
     # out the remainder of the previous stage's one-second period.
     _last_t = 0.0
@@ -179,8 +188,18 @@ def pose_guide_tick(sent_arms: dict) -> None:
             if _TARGET_OVERRIDE is None and _STAGE in _MULTIMODAL
             else ""
         )
+        global _ready_prev
+        ready_mark = ""
+        if _GATE_DEG is not None and tag == "POSE":
+            ready = abs(worst[0]) < _GATE_DEG
+            bell = "\a" if (ready and _ready_prev is False) else ""
+            _ready_prev = ready
+            ready_mark = (
+                f"{bell}[→ 가능 ✔] " if ready
+                else f"[아직 ✘ {worst[1]} {abs(worst[0]):.0f}° > {_GATE_DEG:.0f}°] "
+            )
         logger.info(
-            f"{tag} task{_STAGE:02d}{note} | 목표까지 {math.sqrt(sq):.2f} rad | "
+            f"{ready_mark}{tag} task{_STAGE:02d}{note} | 목표까지 {math.sqrt(sq):.2f} rad | "
             f"가장 큰 차 {worst[1]} {worst[0]:+.0f}° | " + " | ".join(parts)
         )
     except Exception:  # never let a display break a recording

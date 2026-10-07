@@ -1,7 +1,9 @@
 """The trial body: one function, one episode, one pass over the stages."""
 
 import logging
+import math
 import time
+from collections.abc import Mapping
 
 from lerobot.utils.control_utils import is_headless
 
@@ -79,6 +81,36 @@ TELEOP_ENDED_BY_TIMEOUT: str = "timeout"
 TELEOP_ENDED_BY_ESC_BEFORE_START: str = "esc_before_start"
 TELEOP_ENDED_BY_LEFT_BEFORE_START: str = "left_arrow_before_start"
 TELEOP_ENDED_BY_EXCEPTION: str = "exception"
+TELEOP_ENDED_BY_ARROW_NOT_READY: str = "arrow_not_ready"
+
+
+def _initial_gap_rad(context: StageContext, first) -> tuple[float, str] | None:
+    """(largest per-joint gap in rad, joint name) between the arm now and the first
+    stage's designated pose -- the number the initial reset's jump gate will see.
+    None when it cannot be measured (no chain, no pose, keys missing)."""
+    chain = context.chain
+    if chain is None or first is None or first.stage_number is None:
+        return None
+    try:
+        stage_params = chain.params.stage(first.stage_number)
+        target = getattr(stage_params, "start_pose", None) or stage_params.start_pose_rad_arm12
+        observation = context.robot.get_observation()
+        worst, worst_name = -1.0, ""
+        for index, name in enumerate(chain.params.arm_joint_order):
+            # ChainParams keeps the pose by joint NAME (chain_params.py: "why names and
+            # not indices"); a plain sequence in arm_joint_order is accepted too.
+            goal = target[name] if isinstance(target, Mapping) else target[index]
+            value = observation.get(f"{name}.pos")
+            if value is None:
+                logger.warning(f"initial gap not measured: observation has no {name}.pos -- the arrow is accepted unchecked")
+                return None
+            gap = abs(float(value) - float(goal))
+            if gap > worst:
+                worst, worst_name = gap, name
+        return (worst, worst_name) if worst >= 0.0 else None
+    except Exception:  # a readout must never cost the run
+        logger.warning("initial gap could not be measured -- the arrow is accepted unchecked", exc_info=True)
+        return None
 
 
 def _run_teleop_phase(context: StageContext, stages) -> bool:
@@ -105,8 +137,9 @@ def _run_teleop_phase(context: StageContext, stages) -> bool:
     events = context.events
     log = context.log
     first = stages[0] if stages else None
+    gate_rad = context.chain.reset.initial_max_jump_rad if context.chain is not None else None
     if first is not None and context.chain is not None:
-        _set_pose_guide(first.stage_number, context.chain)
+        _set_pose_guide(first.stage_number, context.chain, gate_rad=gate_rad)
     control_time_s = float(config.teleop_time_s)
     margin = record_adapter.manual_detection_margin_s(config.dataset.fps)
     task = (first.instruction or first.name) if first is not None else "teleop"
@@ -196,6 +229,7 @@ def _run_teleop_phase(context: StageContext, stages) -> bool:
                 )
                 raise
             elapsed = time.perf_counter() - started
+            gap = None
             if events.get("stop_recording"):
                 ended_by = TELEOP_ENDED_BY_ESC
             elif events.get("rerecord_episode"):
@@ -204,6 +238,18 @@ def _run_teleop_phase(context: StageContext, stages) -> bool:
                 ended_by = TELEOP_ENDED_BY_RESTART
             elif elapsed < control_time_s - margin:
                 ended_by = TELEOP_ENDED_BY_ARROW
+                # The arrow is accepted only when the initial reset would be too: measured
+                # against the same per-joint gate, so the operator never has to read it off
+                # the log (the POSE line shows [→ 가능 ✔] for the same condition).
+                gap = _initial_gap_rad(context, first)
+                if gap is not None and gate_rad is not None and gap[0] > gate_rad:
+                    ended_by = TELEOP_ENDED_BY_ARROW_NOT_READY
+                    logger.error(
+                        f"RIGHT ARROW IGNORED: {gap[1]} is {gap[0]:.2f} rad "
+                        f"({math.degrees(gap[0]):.0f}°) from the {first_id} start pose, over the "
+                        f"initial reset gate {gate_rad:.2f} rad ({math.degrees(gate_rad):.0f}°). "
+                        "Keep driving with the leader until the POSE line says [→ 가능 ✔], then press again."
+                    )
             else:
                 ended_by = TELEOP_ENDED_BY_TIMEOUT
                 events["stop_recording"] = True  # the ceiling is an abort, not a start
@@ -220,12 +266,15 @@ def _run_teleop_phase(context: StageContext, stages) -> bool:
                 ended_by=ended_by,
                 stop_base_path=outcome.path,
                 stop_base_direct_ok=getattr(outcome, "direct_ok", None),
+                gap_rad=(round(gap[0], 4) if ended_by == TELEOP_ENDED_BY_ARROW_NOT_READY else None),
+                gap_joint=(gap[1] if ended_by == TELEOP_ENDED_BY_ARROW_NOT_READY else None),
+                gate_rad=gate_rad,
             )
             logger.info(
                 f"teleop phase (attempt {attempt}) ended by {ended_by} after {elapsed:.1f} s; "
                 f"stop_base {outcome.path}"
             )
-            if ended_by == TELEOP_ENDED_BY_RESTART:
+            if ended_by in (TELEOP_ENDED_BY_RESTART, TELEOP_ENDED_BY_ARROW_NOT_READY):
                 continue
             return base_is_stopped
     finally:

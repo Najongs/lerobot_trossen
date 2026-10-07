@@ -96,6 +96,10 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 - **베이스는 구간 동안 0 으로 덮는다**(`TeleopBaseZeroStep`, teleop_action 파이프라인에 구간 동안만 설치) — 리더 action 의 x.vel/theta.vel 은 `get_latest_base_velocity()`, 즉 같은 틱의
   베이스 실측이라 토크 켜진 베이스에 되먹임되는 구조다(basevel.csv teleop 행 cmd==meas). eval_najy 리셋 구간도 같은 구조였다 — **DGX 확인 요청**: 의도된 설계인가.
 - `cli`: 리더 connect 는 `robot.connect()` 뒤, disconnect 는 `robot.disconnect()` 의 finally 에서. `mock_teleop.py`(테스트용).
+- **첫 실기 `1007_1626_chain_resets_tube_e30`**: 텔레옵 구간 32.4 s · 리더로 튜브 집음 · `→` · stop_base primary — 구간 자체는 동작. 그 뒤 최초 리셋이
+  `largest joint gap 0.874 rad > initial_max_jump_rad 0.6` 으로 **거부(아무것도 안 움직임, exit 4)** — `FROM_STAGE=1` 의 목표가 빈손 대기 자세라 튜브 든 팔로는 못 들어간다.
+  사용자: 「로그 보면서 맞추는 게 쉽지 않다」 → 두 가지를 더했다: ① **`→` 는 팔이 최초 리셋 상한 안일 때만 받는다**(`arrow_not_ready` 로 기록하고 구간 계속, 로그 `RIGHT ARROW IGNORED`)
+  ② `POSE` 줄 앞에 `[→ 가능 ✔]` / `[아직 ✘ R j3 50° > 34°]` 표시 + 가능해지는 순간 터미널 벨(`pose_guide.set_stage(gate_deg=…)`). 물체를 든 시작은 그 물체를 드는 단계부터(`FROM_STAGE=3`/`6`).
 - 단계 **사이**의 텔레옵(정책이 못 집은 물체를 사람이 쥐여 주고 이어 가기)은 넣지 않았다 — `←` 의 의미(체인 중단)를 바꾸는 일이라 DGX 와 설계할 것.
 
 **읽기 전용 리뷰(Claude, 10/07) 반영**: 수용 ① 구간 전 ESC/`←` 가 켜져 있으면 루프에 안 들어감(치명 — 리더가 300 s 팔을 끌 뻔) ② 정상 경로 `stop_base` + `base_is_stopped` 합산 ③ 베이스 0 덮기(설정으로 끔)
