@@ -35,6 +35,9 @@
 #                 팔을 끌어 물체를 쥐게 하고 시작 자세를 잡은 뒤 `→` 로 첫 리셋에 넘긴다.
 #                 `←` 는 구간을 다시(타이머 리셋), ESC 는 중단. 녹화되지 않는다.
 #   TELEOP_S=300  텔레옵 구간 한 번의 상한(초). 넘기면 **중단**이다(램프가 혼자 시작되지 않게)
+#   TIMEOUT_FACTOR=1.3  정책 단계 상한 = p90 × 이 값 (`--chain.completion.timeout_factor`). M1 참조군처럼
+#                 끝을 스스로 못 알리고 느린 모델을 러너 검증용으로 돌릴 때만 올린다 — 10/07 1743: task01 상한
+#                 12.8 s 안에 M1 이 6 cm 만 가고 끊겼다. 본선 판정에는 기본값(1.3)으로 돌린다.
 #   TELEOP_BASE=1 텔레옵 구간에서 리더의 x.vel/theta.vel 을 베이스에 그대로 보낸다(lerobot-record
 #                 리셋 구간과 같음). 기본 0 = 0 으로 덮는다 -- 리더의 두 값은 같은 틱에 잰 베이스
 #                 속도라 토크 켜진 베이스에 되먹임된다(리뷰 10/07). 베이스 위치는 띄우기 전에 손으로
@@ -69,6 +72,7 @@ RESET_ONLY=${RESET_ONLY:-0}
 TELEOP=${TELEOP:-1}
 TELEOP_S=${TELEOP_S:-300}
 TELEOP_BASE=${TELEOP_BASE:-0}
+TIMEOUT_FACTOR=${TIMEOUT_FACTOR:-}
 
 # 불리언 환경변수를 0/1 로 정규화하거나 거부한다. **명령 치환으로 쓰지 마라** —
 # `$(...)` 안의 `exit 2` 는 서브셸만 죽이고 스크립트는 계속 간다. 그래서 전역
@@ -95,6 +99,8 @@ _norm_flag DRY_RUN    "$DRY_RUN";    DRY_RUN=$NORM_FLAG
 _norm_flag RESET_ONLY "$RESET_ONLY"; RESET_ONLY=$NORM_FLAG
 _norm_flag TELEOP     "$TELEOP";     TELEOP=$NORM_FLAG
 _norm_flag TELEOP_BASE "$TELEOP_BASE"; TELEOP_BASE=$NORM_FLAG
+[[ -z "$TIMEOUT_FACTOR" ]] || [[ "$TIMEOUT_FACTOR" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v v="${TIMEOUT_FACTOR:-1}" 'BEGIN{exit !(v+0 >= 1)}' \
+  || { echo "!! TIMEOUT_FACTOR=$TIMEOUT_FACTOR — 1 이상의 수여야 한다 (기본 1.3 = YAML)" >&2; exit 2; }
 [[ "$TELEOP_S" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v v="$TELEOP_S" 'BEGIN{exit !(v+0 > 0)}' \
   || { echo "!! TELEOP_S=$TELEOP_S — 양수(초)여야 한다" >&2; exit 2; }
 
@@ -165,6 +171,10 @@ ARGS=(uv run python -m stage_runner
   "--dataset.repo_id=kiroaiseoul/eval_${RUN}"
   "--output.run_id=$RUN")
 [[ "$MANUAL" == 1 ]] || ARGS+=("--chain.completion.allow_manual_complete=false")
+if [[ -n "$TIMEOUT_FACTOR" ]]; then
+  ARGS+=("--chain.completion.timeout_factor=$TIMEOUT_FACTOR")
+  echo "   ⚠️ TIMEOUT_FACTOR=$TIMEOUT_FACTOR: 정책 단계 상한 = p90 × $TIMEOUT_FACTOR (러너 검증용 — 본선 판정은 기본 1.3)"
+fi
 # 리더암 텔레옵 구간 -- eval_najy.sh 의 리더 설정과 같다. 러너가 연결 직후 한 번 돈다
 # (runner._run_teleop_phase). RESET_ONLY 회차에서도 돈다: bring-up ③ 이 바로 「물체를 쥔 채」 다.
 if [[ "$TELEOP" == 1 ]]; then

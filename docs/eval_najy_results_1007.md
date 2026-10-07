@@ -201,6 +201,7 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 1. ~~④' 시그널 실증~~ ✅ 통과(10/07 15:51, 위 절). HUP → `SIGHUP received` → stop_base primary → disconnect. 자식 프로세스 이름은 `.venv/bin/python3` — pgrep 패턴 주의.
 2. **③ 물체 든 채 리셋** — 튜브는 `RESET_ONLY=1 FROM_STAGE=3 TO_STAGE=5 scripts/eval_chain.sh M1 resets_tube`, 비커는 `FROM_STAGE=6 TO_STAGE=11 … resets_beaker` (물체를 드는 단계부터). **튜브 ✅(1725) · 비커 ✅(1731) — ③ 닫힘**(위 ③ 절).
 3. ~~④ M1 + 러너로 단계 1개~~ ✅ 러너 검증 통과(1735, 위 ④ 절) — 붓기 동작, timeout 종료(사람 `→` 없이), 실행 계층 수치 동일.
-3b. **⑤-M1 체인 1→3** — `TO_STAGE=3 scripts/eval_chain.sh M1 s1_3`. 텔레옵 창: 빈손, 선반 앞(task01 시작). 단계 상한 task01 12.8 s · task02 37.2 s · task03 23.3 s — 상한 전에 `→` 로 넘겨야 체인이 이어진다(timeout = 체인 끊김). ← **지금 여기**
+3b. **⑤-M1 체인** — 첫 시도 `1007_1743_chain_s1_3_e30`(1→3): 텔레옵 14.6 s → 최초 리셋 reached → **t01 에서 끊김**: M1 이 12.8 s 상한(p90 9.86×1.3) 안에 전진 0.06 m·회전 +2.4° 만 하고 `timeout`(출발 7.4 s). exec 30·21 Hz·원핫 정상 — 모델이 느린 것(10/06 task01 과 같은 꼴), 러너 문제 아님. 텔레옵 창 중 베이스 e-stop 이 잠깐 걸렸다 풀림(경고 2줄, 정책 전).
+    → 러너 검증(⑤)은 task01 을 빼고 **`FROM_STAGE=2 TO_STAGE=4 scripts/eval_chain.sh M1 s2_4`** 로(랙 앞 빈손 시작; 집기→회전→붓기, 전환 2개), 또는 `TIMEOUT_FACTOR=4` 로 상한을 늘려 1→3. ← **지금 여기**
 4. B1~B3(지정 자세 출발 task05/02 · M2 task04 끝 정지 · task03/01 재시험) → `eval_najy_results_1006.md` 「다음」.
 5. C. 전송(사람).
