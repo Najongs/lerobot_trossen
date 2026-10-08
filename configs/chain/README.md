@@ -274,6 +274,14 @@ p 도 끝 자세 NN 도 **지금 장면**의 함수라서 시작≈끝 단계에
 키가 없는 옛 파일에서는 이 조건을 **적용하지 않는다**(manip 이 기본 kind 라 닫으면 체인이 아예 안 돈다) — 로더가 파일당 한 줄 경고하고 `_chain_preflight` 가 DRY_RUN 요약에 찍는다.
 시연 p10 이 `departure_arm_rad`(0.10) 아래인 단계도 적용하지 않는다(task09 베이스와 같은 논리; 10/08 파일에는 해당 단계 없음 — 조작 최소 p10 은 t11 의 2.66).
 
+**codex 교차 검토 (10/08, 201735c 대상) — 처리**:
+
+| 지적 | 처리 |
+|---|---|
+| [치명] `move_base_fraction`·`manip_arm_fraction` 을 preflight 가 검증하지 않는다 — 0·음수·NaN 이면 요구량이 0 이 돼 가드가 조용히 꺼진다 | **수용**. `threshold_problems` 가 (0, 1] 유한값만 받는다. 회귀 테스트 `test_a_travel_fraction_outside_zero_one_is_refused` |
+| [중요] 관측·액션 키가 빠진 틱은 조기 return 해 `last_measured` 를 지우지 않는다 — 다음 유한 틱이 빈틈을 직선으로 이어 누적을 부풀린다 | **수용**. NaN 틱과 같은 규칙으로 기준점을 지운다. 테스트 `test_a_missing_key_tick_does_not_bridge_the_travel` |
+| [중요] 누적에 최대 틱 간격·deadband 가 없다 | **간격은 수용, deadband 는 기각**. 유한 틱 사이가 `TRAVEL_MAX_GAP_S`(0.5 s, 21 Hz 의 약 10틱) 를 넘으면 기준점을 다시 잡는다(과소 계산 = 완료를 더 늦게 = 안전 쪽). 테스트 `test_a_long_sample_gap_does_not_bridge_the_travel`. deadband 는 넣지 않는다 — 엔코더 잡음 누적이 t10 에서 틱당 0.0003 rad(위 실측)라 요구량(중앙×0.4)에 비해 무시할 만하고, deadband 를 넣으면 시연(명령 기준)과 측정의 비교 기준이 달라진다 |
+
 ### 11단계 시연 팔 누적 중앙값 [rad] (p10)
 
 | t01 move | t02 | t03 move | t04 | t05 | t06 move | t07 | t08 | t09 | t10 move | t11 |

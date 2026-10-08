@@ -143,6 +143,9 @@ REASON_STALL_NN: str = "stall_nn"
 # the demonstrated base travel. The arm's end-pose NN is recorded but not
 # required (10/07, robot PC 1756).
 REASON_STALL_BASE: str = "stall_base"
+# Longest interval between finite samples that the arm-travel integral bridges (21 Hz is 0.048 s;
+# 0.5 s is ~10 missed ticks). Longer gaps restart the baseline instead (codex 10/08).
+TRAVEL_MAX_GAP_S: float = 0.5
 
 # Prefixed onto the `reason` of a stage that ran out its ceiling without the
 # departure latch ever setting. It is a DIFFERENT fact from an ordinary timeout
@@ -702,6 +705,10 @@ class CompletionMonitorStep(ProcessorStep):
                     f"{key!r} is missing from the "
                     f"{'action' if key not in action else 'observation'}",
                 )
+                # The travel must not bridge a missing-key gap either (codex 10/08) -- the same
+                # rule as a NaN tick below: the pose after the gap is not one this stage measured
+                # moving to.
+                stage.last_measured = None
                 return
             commanded.append(_as_float(action[key]))
             measured.append(_as_float(observation[key]))
@@ -880,6 +887,11 @@ class CompletionMonitorStep(ProcessorStep):
         # Path length, accumulated here rather than measured from `samples`:
         # see `_Stage.arm_travel_rad`. One tick's increment, from the previous
         # FINITE tick, so a glitch costs the interval around it and nothing else.
+        # A long gap between finite ticks (a stalled loop, a camera timeout) is not integrated: the
+        # straight line across it is not a path this stage measured (codex 10/08). Restarting the
+        # baseline under-counts, which refuses completion for longer -- the safe direction.
+        if stage.last_measured is not None and delta > TRAVEL_MAX_GAP_S:
+            stage.last_measured = None
         if stage.last_measured is not None:
             stage.arm_travel_rad += math.sqrt(
                 math.fsum(

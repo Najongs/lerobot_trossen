@@ -1322,6 +1322,38 @@ class ManipStageCompletionTest(_MonitorHarness, unittest.TestCase):
         self.assertTrue(result.arm_travel_ok)
         self.assertLessEqual(result.nn_dist, self.params.end_pose_tol_rad)
 
+    # ------------------------------------------ gaps must not be bridged (codex 10/08)
+
+    def test_a_missing_key_tick_does_not_bridge_the_travel(self) -> None:
+        """A tick whose observation lacks a joint blinds the monitor and must also
+        drop the travel baseline: the next good tick's pose is not one this stage
+        measured moving to, so the straight line across the gap is not counted."""
+        from lerobot.processor import create_transition
+
+        monitor = self._monitor(has_progress=False)
+        self._tick(monitor, offset=0.0)
+        before = monitor._stage.arm_travel_rad
+        action = {f"{n}.pos": self.params.start_pose[n] + 1.0 for n in self.names}
+        observation = {k: v for k, v in action.items() if not k.startswith(self.names[0])}
+        action["x.vel"] = 0.0
+        action["theta.vel"] = 0.0
+        self.now += 1 / 21.0
+        monitor(create_transition(action=action, observation=observation))
+        self._tick(monitor, offset=1.0)   # far away: 1.0 rad on all 12 joints
+        self.assertAlmostEqual(monitor._stage.arm_travel_rad, before, places=9,
+                               msg="the jump across the missing-key tick was integrated")
+
+    def test_a_long_sample_gap_does_not_bridge_the_travel(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        self._tick(monitor, offset=0.0)
+        self._tick(monitor, offset=0.01)
+        before = monitor._stage.arm_travel_rad
+        self.assertGreater(before, 0.0)
+        self._tick(monitor, offset=1.0, dt=comp.TRAVEL_MAX_GAP_S + 0.1)
+        self.assertAlmostEqual(monitor._stage.arm_travel_rad, before, places=9)
+        self._tick(monitor, offset=1.01)   # an ordinary tick after the gap counts again
+        self.assertGreater(monitor._stage.arm_travel_rad, before)
+
     # ------------------------------------------- what the rule must NOT touch
 
     def test_a_file_without_the_key_keeps_the_old_behaviour(self) -> None:
@@ -4481,6 +4513,14 @@ class ThresholdPreflightTest(NoRobotSdkMixin, unittest.TestCase):
     def test_a_zero_stall_window_is_refused(self) -> None:
         problems = self._problems(**{"completion.stall_s": 0.0})
         self.assertIn("chain.completion.stall_s", problems)
+
+    def test_a_travel_fraction_outside_zero_one_is_refused(self) -> None:
+        """codex 10/08: 0 or a negative fraction makes the travel requirement 0 and
+        silently turns the move/manip false-completion guards off."""
+        for name in ("completion.move_base_fraction", "completion.manip_arm_fraction"):
+            for bad in (0.0, -0.4, float("nan"), 1.5):
+                self.assertIn(name.split(".")[1], self._problems(**{name: bad}), (name, bad))
+            self.assertEqual(self._problems(**{name: 0.4}), "", name)
 
     def test_a_nan_threshold_is_refused(self) -> None:
         """Written as ``not (x > 0)``: ``x <= 0`` is False for a NaN and PASSES."""

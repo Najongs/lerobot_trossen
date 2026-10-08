@@ -704,6 +704,16 @@ def threshold_problems(chain) -> list[str]:
         if not (float(value) > 1.0):
             problems.append(f"`chain.{path}: {value}` must be > 1.0 -- {why}")
 
+    # The travel guards (8258f26 move, 201735c manip). A zero, negative or non-finite fraction makes the
+    # requirement 0 or negative and silently disables the guard (codex 10/08) -- refuse it here.
+    for name in ("move_base_fraction", "manip_arm_fraction"):
+        value = getattr(completion, name, None)
+        if value is not None and not (math.isfinite(float(value)) and 0.0 < float(value) <= 1.0):
+            problems.append(
+                f"`chain.completion.{name}: {value}` must be a finite number in (0, 1] -- "
+                "it is the share of the demonstrated travel a stage must cover before it may "
+                "complete, and 0 or less turns the false-completion guard off."
+            )
     if not (0.0 < float(completion.p_done) <= 1.0):
         problems.append(
             f"`chain.completion.p_done: {completion.p_done}` must be in (0, 1]: "
