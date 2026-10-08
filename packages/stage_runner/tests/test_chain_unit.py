@@ -1184,6 +1184,284 @@ class MoveStageParamsLoaderTest(NoRobotSdkMixin, unittest.TestCase):
         self.assertIn("p10", str(caught.exception))
 
 
+class ManipStageCompletionTest(_MonitorHarness, unittest.TestCase):
+    """A "manip" stage must have MOVED THE ARM: robot PC run 1128 (10/08) read
+    p 0.976 out of the t04 START scene -- tubes held over the beaker, which is
+    what the t04 END scene also looks like -- held it 0.95 s, stopped 2.96 s and
+    was declared complete at 13.1 s having never poured (human judgement).
+
+    The mock stage 1 is re-declared as a manipulation whose demonstrations
+    travel 12.0 rad of arm path (p10 9.0), so with ``manip_arm_fraction`` 0.4 the
+    stage must cover 4.8 rad. The prelude that latches the departure covers
+    0.69, i.e. 5.8% of the median -- a 0.10 rad wiggle is what the LATCH asks
+    for, and the whole point is that it is not what COMPLETION asks for."""
+
+    # One tick at `offset` displaces all twelve joints by `offset`, so the path
+    # length one tick adds is |Δoffset| * sqrt(12).
+    SPAN = math.sqrt(12.0)
+    # The mock file's end_poses[0] is start_pose + 0.05, well inside
+    # end_pose_tol_rad (0.12): the geometry that makes "stalled near a
+    # demonstrated end pose" free for a stage standing in its start scene.
+    END = 0.05
+    MEDIAN = 12.0
+
+    def setUp(self) -> None:
+        super().setUp()
+        import dataclasses
+
+        self.params = dataclasses.replace(
+            self.params,
+            kind="manip",
+            arm_travel_total_rad=self.MEDIAN,
+            arm_travel_p10_rad=9.0,
+        )
+        # The offset the arm is standing at, and the path length driven so far.
+        # Tracked HERE rather than read back off the monitor, so every assertion
+        # about the monitor's number is checked against one this test computed.
+        self.offset: float | None = None
+        self.travel = 0.0
+
+    @property
+    def required(self) -> float:
+        return self.settings.manip_arm_fraction * self.MEDIAN
+
+    def _go(self, monitor, offset: float, *, progress=None, ticks: int = 1) -> None:
+        for _ in range(ticks):
+            if self.offset is not None:
+                self.travel += abs(offset - self.offset) * self.SPAN
+            self._tick(monitor, progress=progress, offset=offset)
+            self.offset = offset
+
+    def _depart_manip(self, monitor, *, progress=None) -> None:
+        """The minimum prelude that latches the departure, and nothing else.
+
+        The same sequence :meth:`_MonitorHarness._depart` sends, but through
+        ``_go`` so the travel is accounted. ``progress`` is passed through
+        UNCHANGED rather than forced to 0.0, because p = 0.99 from the first
+        tick is exactly what run 1128 did.
+        """
+        self._go(monitor, 0.0, progress=progress)
+        self._go(monitor, self.DEPARTED, progress=progress, ticks=comp.DEPARTURE_ARM_TICKS)
+
+    def _dither(self, monitor, rad: float, *, progress=None, ticks: int = 20) -> None:
+        """About ``rad`` of path length that goes NOWHERE: the arm oscillates
+        about the end pose in steps too small to be a departure or a stall.
+
+        This is the shape of run 1128's arm -- 0.315 rad of net displacement
+        over the stage and many times that of path -- and the reason the rule is
+        a path length rather than a displacement. The exact total is
+        ``self.travel``; ``rad`` is the oscillation budget, which the first
+        tick's move from the prelude's pose adds to.
+        """
+        step = rad / (ticks * self.SPAN)
+        for index in range(ticks):
+            self._go(monitor, self.END + (step if index % 2 else 0.0), progress=progress)
+
+    def _stall_at_end(self, monitor, *, progress=None) -> None:
+        """Stopped on the end pose for longer than ``stall_s``, until it fires."""
+        for _ in range(40):
+            self._go(monitor, self.END, progress=progress)
+            if self.events["exit_early"]:
+                break
+
+    # ------------------------------------------------------------------ 1128
+
+    def test_a_progress_model_that_never_moved_the_arm_is_refused(self) -> None:
+        """Run 1128: p 0.99 from tick one, a departure-sized wiggle, a stall."""
+        monitor = self._monitor(has_progress=True)
+        self._depart_manip(monitor, progress=0.99)
+        self._stall_at_end(monitor, progress=0.99)
+        self.assertAlmostEqual(self.travel, 1.2124, places=3)
+        self.assertLess(self.travel, 0.11 * self.MEDIAN, "about a tenth of the median")
+        self.assertLess(self.travel, self.required)
+        self.assertFalse(self.events["exit_early"], "the 1128 false completion")
+        result = monitor.end_stage()
+        self.assertIsNone(result)
+        departure = monitor.last_departure
+        self.assertTrue(departure.departed, "it DID leave the start pose -- by 0.2 rad")
+        # The refusal has to be legible in the report of a stage that then timed
+        # out, or the next robot-PC run cannot tell it from "progress never fired".
+        detail = departure.as_detail()
+        self.assertAlmostEqual(detail["departure_meas_arm_travel_rad"], round(self.travel, 4))
+        self.assertAlmostEqual(detail["arm_travel_required_rad"], self.required)
+
+    def test_half_the_demonstrated_travel_completes(self) -> None:
+        """The same sequence with the arm actually working: ~50% of the median."""
+        monitor = self._monitor(has_progress=True)
+        self._depart_manip(monitor, progress=0.99)
+        self._dither(monitor, 5.0, progress=0.99)
+        self.assertFalse(self.events["exit_early"], "a moving arm is not stalled")
+        self._stall_at_end(monitor, progress=0.99)
+        self.assertGreater(self.travel, 0.45 * self.MEDIAN)
+        self.assertLess(self.travel, 0.55 * self.MEDIAN, "about half the median")
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_PROGRESS)
+        self.assertTrue(result.arm_travel_ok)
+        self.assertAlmostEqual(result.arm_travel_rad, self.travel, places=6)
+        self.assertIsNone(result.base_travel_ok, "a manip stage is not judged by its base")
+        self.assertAlmostEqual(result.as_detail()["arm_travel_rad"], round(self.travel, 4))
+
+    def test_the_sixteen_d_end_pose_rule_needs_the_travel_too(self) -> None:
+        """The 16-D path is the one 1128 would have taken without a progress
+        head, and it is WEAKER: the arm is standing exactly on end_poses[0]."""
+        monitor = self._monitor(has_progress=False)
+        self._depart_manip(monitor)
+        self._stall_at_end(monitor)
+        self.assertFalse(self.events["exit_early"], "stalled ON an end pose, but idle")
+        self.assertIsNone(monitor.end_stage())
+
+        self.setUp()
+        monitor = self._monitor(has_progress=False)
+        self._depart_manip(monitor)
+        self._dither(monitor, 5.0)
+        self._stall_at_end(monitor)
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_STALL_NN)
+        self.assertTrue(result.arm_travel_ok)
+        self.assertLessEqual(result.nn_dist, self.params.end_pose_tol_rad)
+
+    # ------------------------------------------- what the rule must NOT touch
+
+    def test_a_file_without_the_key_keeps_the_old_behaviour(self) -> None:
+        """A pre-10/08 file must still complete, not refuse everything: manip is
+        the DEFAULT kind, so failing closed would stop the chain dead."""
+        import dataclasses
+
+        self.params = dataclasses.replace(
+            self.params, arm_travel_total_rad=None, arm_travel_p10_rad=None
+        )
+        monitor = self._monitor(has_progress=True)
+        self._depart_manip(monitor, progress=0.99)
+        self._stall_at_end(monitor, progress=0.99)
+        self.assertTrue(self.events["exit_early"], "the old, undefended behaviour")
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_PROGRESS)
+        self.assertIsNone(result.arm_travel_ok, "not applicable is not False")
+        self.assertAlmostEqual(result.arm_travel_rad, self.travel, places=6)
+        self.assertIsNone(monitor.last_departure.arm_travel_required_rad)
+
+    def test_a_stage_whose_demonstrations_barely_move_the_arm_is_not_gated(self) -> None:
+        """p10 under `departure_arm_rad`: more than a tenth of the correct
+        performances leave the arm still, so requiring travel would make a
+        correct one uncompletable. The task09 argument, for the arm."""
+        import dataclasses
+
+        self.params = dataclasses.replace(
+            self.params, arm_travel_total_rad=2.0, arm_travel_p10_rad=0.05
+        )
+        monitor = self._monitor(has_progress=True)
+        self._depart_manip(monitor, progress=0.99)
+        self._stall_at_end(monitor, progress=0.99)
+        self.assertTrue(self.events["exit_early"])
+        self.assertIsNone(monitor.end_stage().arm_travel_ok)
+
+    def test_a_move_stage_is_judged_by_its_base_and_not_by_this(self) -> None:
+        """The two rules are exclusive: a move stage's arm barely moves in the
+        demonstrations too, which is why 10/07 took the arm out of its latch."""
+        import dataclasses
+
+        self.params = dataclasses.replace(
+            self.params,
+            kind="move",
+            arm_travel_total_rad=self.MEDIAN,
+            base_rot_total_rad=1.4,
+            base_rot_p10_rad=1.3,
+        )
+        monitor = self._monitor(has_progress=True)
+        self._go(monitor, 0.0, progress=0.0)
+        for _ in range(16):  # theta 1.0 rad/s for 16 ticks of 1/21 s: ~0.76 rad
+            self._tick(monitor, progress=0.5, theta=1.0, offset=0.0)
+        self._stall_at_end(monitor, progress=1.0)
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_PROGRESS)
+        self.assertTrue(result.base_travel_ok)
+        self.assertIsNone(result.arm_travel_ok, "the arm rule does not apply to a move stage")
+        self.assertGreater(result.arm_travel_rad, 0.0, "but it is still measured")
+        self.assertIsNone(monitor.last_departure.arm_travel_required_rad)
+
+    def test_an_unreadable_tick_does_not_bridge_the_travel(self) -> None:
+        """A tick whose ARM or BASE is non-finite costs the interval around it:
+        under-counting refuses completion for longer, the safe direction.
+
+        A NaN in the PROGRESS slot alone does not, and must not: the arm was
+        perfectly readable on that tick, and dropping its motion would be
+        inventing a reason to refuse. The two are different facts, which is why
+        `_update_departure` is gated on `arm_base_finite` and not on `finite`.
+        """
+        monitor = self._monitor(has_progress=True)
+        self._depart_manip(monitor, progress=0.99)
+        before = monitor._stage.arm_travel_rad
+
+        # Progress NaN: the arm is still measured, so the move is counted.
+        self._tick(monitor, progress=float("nan"), offset=0.4)
+        self.assertAlmostEqual(
+            monitor._stage.arm_travel_rad, before + 0.2 * self.SPAN, places=6
+        )
+        self.offset = 0.4
+        bridged = monitor._stage.arm_travel_rad
+
+        # x.vel NaN: the tick carries no usable arm/base measurement at all.
+        self._tick(monitor, progress=0.99, offset=0.4, base=float("nan"))
+        self._go(monitor, 1.2, progress=0.99)  # a 0.8 rad jump ACROSS the gap
+        self.assertAlmostEqual(monitor._stage.arm_travel_rad, bridged, places=9)
+        self._go(monitor, 1.4, progress=0.99)
+        self.assertAlmostEqual(
+            monitor._stage.arm_travel_rad, bridged + 0.2 * self.SPAN, places=6
+        )
+
+
+class ManipStageParamsLoaderTest(NoRobotSdkMixin, unittest.TestCase):
+    def _document(self):
+        import json
+
+        return json.loads(Path(MOCK_PARAMS).read_text())
+
+    def test_a_file_without_the_key_loads_with_none(self) -> None:
+        stage = load_params().stage(1)
+        self.assertEqual(stage.kind, "manip")
+        self.assertIsNone(stage.arm_travel_total_rad)
+        self.assertIsNone(stage.arm_travel_p10_rad)
+
+    def test_a_manip_stage_without_the_key_is_a_warning_not_an_error(self) -> None:
+        # A pre-10/08 file still runs -- it just runs without this defence --
+        # and the warning is ONE line for the whole file, not one per stage.
+        with self.assertLogs("stage_runner.chain_params", level="WARNING") as caught:
+            cp.parse_chain_params(self._document(), expected_fps=21)
+        lines = [line for line in caught.output if "arm_travel_total_rad" in line]
+        self.assertEqual(len(lines), 1, caught.output)
+        self.assertIn("1128", lines[0])
+
+    def test_objects_and_numbers_are_both_accepted(self) -> None:
+        document = self._document()
+        document["stages"]["1"]["arm_travel_total_rad"] = {
+            "median": 9.515, "p10": 8.434, "p90": 10.966
+        }
+        document["stages"]["2"]["arm_travel_total_rad"] = 3.79
+        params = cp.parse_chain_params(document, expected_fps=21)
+        self.assertAlmostEqual(params.stage(1).arm_travel_total_rad, 9.515)
+        self.assertAlmostEqual(params.stage(1).arm_travel_p10_rad, 8.434)
+        self.assertAlmostEqual(params.stage(2).arm_travel_total_rad, 3.79)
+        self.assertAlmostEqual(
+            params.stage(2).arm_travel_p10_rad, 3.79, msg="a bare number is its own p10"
+        )
+
+    def test_a_negative_nan_or_inverted_p10_is_refused(self) -> None:
+        for value, needle in (
+            (-1.0, "non-negative"),
+            (float("nan"), "non-negative"),
+            ({"median": 1.0, "p10": 1.5}, "p10"),
+        ):
+            document = self._document()
+            document["stages"]["1"]["arm_travel_total_rad"] = value
+            with self.assertRaises(cp.ChainParamsError) as caught:
+                cp.parse_chain_params(document, expected_fps=21)
+            self.assertIn(needle, str(caught.exception))
+            self.assertIn("arm_travel_total_rad", str(caught.exception))
+
+
 class CompletionMonitorTest(_MonitorHarness, unittest.TestCase):
     """The conjunction's four synthetic sequences, departure held satisfied.
 

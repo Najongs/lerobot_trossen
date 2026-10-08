@@ -202,6 +202,25 @@ def main(argv: list[str]) -> int:
         f"move={[n for n, s in sorted(params.stages.items()) if s.kind == 'move']}",
         file=sys.stderr,
     )
+    # 10/08: 조작 단계에 팔 누적 이동량 기준이 있나. 없는 단계가 있으면 그 단계는 팔이 거의 안 움직여도 완료될 수 있다(1128).
+    arm_missing = [
+        n for n, s in sorted(params.stages.items())
+        if s.kind == "manip" and s.arm_travel_total_rad is None
+    ]
+    print(
+        "   조작 단계 팔 누적 기준: "
+        + (
+            f"**없는 단계 {arm_missing}** -- 옛 파일이다(1128 거짓 완료 재현). stage_params.json 재생성 필요"
+            if arm_missing
+            else "전 단계 있음 · 중앙 [rad] "
+            + " ".join(
+                f"t{n:02d} {s.arm_travel_total_rad:.1f}"
+                for n, s in sorted(params.stages.items())
+                if s.kind == "manip"
+            )
+        ),
+        file=sys.stderr,
+    )
 
     # 셸이 다시 읽는 줄. 원핫 모델이면 `set_stage` 가 이 체크아웃에 있는지 보게 한다.
     if onehot_k:

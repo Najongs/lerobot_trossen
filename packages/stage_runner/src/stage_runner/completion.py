@@ -19,10 +19,23 @@ computes:
           AND p held >= p_done for p_hold_s      (17-D models only)
           AND the command has stopped for stall_s
           AND the elapsed time has passed p10_s
+          AND THE STAGE HAS COVERED ITS DEMONSTRATED TRAVEL
+              -- a "move" stage: the commanded base, per axis (10/07)
+              -- a "manip" stage: the measured arm's path length (10/08)
 
 and for a 16-D model with no progress output, the second clause is replaced by
 "the measured arm is within end_pose_tol_rad of one of the demonstrated end
 poses".
+
+WHY THE TRAVEL CLAUSE IS NOT REDUNDANT WITH THE DEPARTURE LATCH. The latch asks
+"did this stage move AT ALL", once, and 0.10 rad of arm wiggle answers it. The
+travel clause asks "did it move AS MUCH AS THE DEMONSTRATIONS DO", which is the
+only one of these terms that is a function of the WHOLE STAGE rather than of the
+current scene. Every other term -- the progress scalar, the end-pose NN, the
+stall -- reads the scene the robot is in right now, and for t03/t04/t10 the
+scene the stage BEGINS in is indistinguishable from the one it should end in.
+Robot PC runs 1756 (10/07, base) and 1128 (10/08, arm) are the two halves of
+that same failure, measured.
 
 WHY THE DEPARTURE LATCH IS A PREMISE OF BOTH. Without it the 16-D rule fires on
 a stage that never started. In ``configs/chain/stage_params.json`` the
@@ -216,6 +229,40 @@ class CompletionSettings:
     # a chain that turns half of -81 deg has clearly started the turn, and the
     # p10 floor + stall still decide WHEN.
     move_base_fraction: float = 0.5
+    # The mirror image, for a "manip" stage: it must have moved the ARM this
+    # fraction of the demonstrations' median cumulative travel
+    # (StageParams.arm_travel_total_rad) before it may complete. Robot PC run
+    # 1128 (10/08): the 4th-round checkpoint read p 0.976 out of the t04 START
+    # scene -- which looks like the t04 END scene, tubes held over the beaker --
+    # held it 0.95 s, stopped for 2.96 s, and was declared complete the moment
+    # elapsed passed p10_s (13.1 s). The human said it had not poured.
+    #
+    # WHY 0.4 AND NOT THE SPEC'S 0.3. Both bounds are measured (DGX 10/08):
+    #
+    # * BELOW, 1128 must be refused. Its stage ran 275 ticks. The only measured
+    #   arm rate for that checkpoint on t04 is run 1123's 0.0076 rad/tick
+    #   (whole-run mean), which puts 1128 at about 2.1 rad = 0.22 of the 9.52
+    #   median; its per-chunk-phase profile (0.0177/0.0069/0.0064 over the first
+    #   three five-tick phases, EXEC 15 so only those three occur) puts the
+    #   ceiling of the estimate at 0.30. 0.3 therefore sits ON the estimate and
+    #   might not refuse it; 0.4 refuses it with a third to spare. [추정 -- the
+    #   eval dataset of 1128 is on the robot PC, so this is not yet a direct
+    #   measurement of its travel; see docs/eval_najy_results_1008.md.]
+    # * ABOVE, a CORRECT performance must never be refused. The smallest
+    #   p10/median among the manip stages is t09's 0.49 and the smallest
+    #   p5/median is t09's 0.43, so any fraction under 0.43 asks for less than
+    #   19 demonstrations in 20 already deliver. 0.4 clears that; 0.5 (the base
+    #   rule's number) would not.
+    #
+    # And it costs a real run nothing: at M1's measured t04 rate (0.0195
+    # rad/tick, robot PC 1735) 0.4 of the median is crossed at 9.3 s, before the
+    # p10_s floor of 13.1 s this gate is conjoined with.
+    #
+    # WHAT IT DOES NOT DO: the travel is CUMULATIVE, so a run that dithers long
+    # enough still crosses it -- at 1123's rate, at about 24 s of a 35 s
+    # ceiling. This delays a 1128-style false completion and refuses the fast
+    # ones; it is not a proof that the stage was performed.
+    manip_arm_fraction: float = 0.4
 
 
 @dataclass(frozen=True)
@@ -246,6 +293,14 @@ class CompletionResult:
     base_fwd_m: float | None = None
     base_rot_rad: float | None = None
     base_travel_ok: bool | None = None
+    # MEASURED arm travel over the stage (Σ‖Δmeasured‖₂ since the first finite
+    # tick), always recorded -- it is the number that told 1123 and 1128 apart
+    # from a real performance, and it costs nothing on a move stage. `*_ok` is
+    # the fraction-of-median check: None on a move stage and on a file that
+    # carries no median, True otherwise (a False never reaches a result -- the
+    # completion is refused instead).
+    arm_travel_rad: float | None = None
+    arm_travel_ok: bool | None = None
 
     def as_detail(self) -> dict[str, Any]:
         return {
@@ -253,6 +308,10 @@ class CompletionResult:
             "base_fwd_m": None if self.base_fwd_m is None else round(self.base_fwd_m, 4),
             "base_rot_rad": None if self.base_rot_rad is None else round(self.base_rot_rad, 4),
             "base_travel_ok": self.base_travel_ok,
+            "arm_travel_rad": (
+                None if self.arm_travel_rad is None else round(self.arm_travel_rad, 4)
+            ),
+            "arm_travel_ok": self.arm_travel_ok,
             "elapsed_s": round(self.elapsed_s, 3),
             "ticks": self.ticks,
             "stall_s": round(self.stall_s, 3),
@@ -282,6 +341,15 @@ class Departure:
     arm_rad: float
     base_rot_rad: float
     base_fwd_m: float
+    # The MEASURED arm's cumulative travel over the stage (Σ‖Δmeasured‖₂), and
+    # the demonstration median it was being compared against, or None on a file
+    # that carries no median. Recorded HERE as well as on CompletionResult
+    # because the interesting case is again the one with no result: a manip
+    # stage that the arm-travel rule REFUSED ends as an ordinary timeout, and
+    # without these two numbers in the report there is no way to tell that
+    # refusal from a stage the progress head simply never fired on.
+    arm_travel_rad: float = 0.0
+    arm_travel_required_rad: float | None = None
     # Why the monitor went blind, or "". A blind stage that did not latch is
     # "unknown", NOT "did not depart": the arm may never have been readable at
     # all, and reporting `arm_rad: 0.000` as if it had been measured sends the
@@ -308,6 +376,17 @@ class Departure:
             "departure_meas_arm_rad": round(self.arm_rad, 4),
             "departure_meas_base_rot_rad": round(self.base_rot_rad, 4),
             "departure_meas_base_fwd_m": round(self.base_fwd_m, 4),
+            # `departure_meas_` for the measurement and a bare name for the
+            # threshold, the rule this dict already follows -- and NOT the bare
+            # `arm_travel_rad` CompletionResult.as_detail() uses, because both
+            # dicts are merged into ONE flat `reason_detail` and two keys of the
+            # same name in one record is how a number gets read as the other one.
+            "departure_meas_arm_travel_rad": round(self.arm_travel_rad, 4),
+            "arm_travel_required_rad": (
+                None
+                if self.arm_travel_required_rad is None
+                else round(self.arm_travel_required_rad, 4)
+            ),
             "start_pose_offset_rad": (
                 None
                 if self.start_pose_offset_rad is None
@@ -378,6 +457,21 @@ class _Stage:
     # standing where it started.
     base_rot_rad: float = 0.0
     base_fwd_m: float = 0.0
+    # PATH LENGTH of the measured arm since the stage's first finite tick: the
+    # running sum of ‖measured[t] - measured[t-1]‖₂ over the 12 joints. Not a
+    # displacement and deliberately so -- a manipulation goes out and comes
+    # back, and run 1128's arm ended 0.315 rad (inf-norm) from where it started
+    # while travelling many times that. NOT derived from `samples`, for the same
+    # reason the base integrals are not: _prune drops everything older than the
+    # longest window, so by the time a stage could complete the ticks that
+    # proved it moved are gone.
+    arm_travel_rad: float = 0.0
+    # The previous FINITE tick's measurement, for the increment above. None on
+    # the first tick and reset to None by a non-finite one, so the interval
+    # spanning a glitch contributes nothing: under-counting the travel refuses
+    # completion for longer, which is the safe direction -- the same choice the
+    # base integrals make about a skipped tick.
+    last_measured: tuple[float, ...] | None = None
     # Clock reading of the previous tick, for dt. None on the first tick, which
     # therefore integrates nothing.
     last_t: float | None = None
@@ -498,6 +592,15 @@ class CompletionMonitorStep(ProcessorStep):
             arm_rad=stage.worst_arm_rad,
             base_rot_rad=stage.base_rot_rad,
             base_fwd_m=stage.base_fwd_m,
+            arm_travel_rad=stage.arm_travel_rad,
+            # None on a move stage as well as on an old file: nothing was
+            # required of the arm either way, and a number here would read as a
+            # threshold the stage had been judged against.
+            arm_travel_required_rad=(
+                None
+                if getattr(stage.params, "kind", "manip") == "move"
+                else self._arm_required_rad(stage)
+            ),
             blind=stage.blind,
             start_pose_offset_rad=stage.start_pose_offset_rad,
         )
@@ -570,6 +673,12 @@ class CompletionMonitorStep(ProcessorStep):
             "departure_arm_rad": self.settings.departure_arm_rad,
             "departure_base_rot_rad": self.settings.departure_base_rot_rad,
             "departure_base_fwd_m": self.settings.departure_base_fwd_m,
+            # The two fractions decide completions, so they belong in the config
+            # the run records. (`move_base_fraction` was missing here from
+            # 10/07; a knob that is not in the dump is a knob nobody can check
+            # months later against the completions it produced.)
+            "move_base_fraction": self.settings.move_base_fraction,
+            "manip_arm_fraction": self.settings.manip_arm_fraction,
         }
 
     # ------------------------------------------------------------------ internals
@@ -631,6 +740,9 @@ class CompletionMonitorStep(ProcessorStep):
             # A glitched tick is not evidence that the arm stood still, so the
             # consecutive-tick streak restarts rather than carrying across the gap.
             stage.arm_departure_ticks = 0
+            # And the travel does not bridge the gap either: the pose on the far
+            # side of a NaN is not a pose this stage measured moving to.
+            stage.last_measured = None
         # Always, finite or not: the interval spanning a skipped tick is then
         # simply not integrated, which under-counts the base and therefore
         # latches LATER. Refusing completion for longer is the safe direction.
@@ -765,6 +877,18 @@ class CompletionMonitorStep(ProcessorStep):
         stage.base_fwd_m += x_velocity * delta
         stage.base_rot_rad += theta_velocity * delta
 
+        # Path length, accumulated here rather than measured from `samples`:
+        # see `_Stage.arm_travel_rad`. One tick's increment, from the previous
+        # FINITE tick, so a glitch costs the interval around it and nothing else.
+        if stage.last_measured is not None:
+            stage.arm_travel_rad += math.sqrt(
+                math.fsum(
+                    (value - previous) ** 2
+                    for value, previous in zip(measured, stage.last_measured)
+                )
+            )
+        stage.last_measured = tuple(measured)
+
         worst = 0.0
         for value, origin in zip(measured, stage.start_pose):
             worst = max(worst, abs(value - origin))
@@ -857,10 +981,27 @@ class CompletionMonitorStep(ProcessorStep):
             travel_ok = self._base_travel_ok(stage)
             if not travel_ok:
                 return None
-        base_fields = dict(
+        # And the mirror image for a "manip" stage: it must have MOVED THE ARM.
+        # Robot PC run 1128 (10/08) read p 0.976 out of the t04 start scene --
+        # which is the t04 end scene but for the liquid -- held it, stopped, and
+        # was declared complete at 13.1 s with the arm having dithered in place.
+        # The progress head and the end-pose NN are both blind to that, because
+        # both are functions of the CURRENT scene and the current scene is the
+        # one the stage began in. The travel is the only term that is a function
+        # of the whole stage. Applies to BOTH models (progress and stall_nn) for
+        # the same reason the base rule does: whichever sensor says "done", it
+        # says it about a scene, not about a performance.
+        arm_ok: bool | None = None
+        if not is_move:
+            arm_ok = self._arm_travel_ok(stage)
+            if arm_ok is False:
+                return None
+        travel_fields = dict(
             base_fwd_m=stage.base_fwd_m if is_move else None,
             base_rot_rad=stage.base_rot_rad if is_move else None,
             base_travel_ok=travel_ok,
+            arm_travel_rad=stage.arm_travel_rad,
+            arm_travel_ok=arm_ok,
         )
 
         if stage.has_progress:
@@ -875,7 +1016,7 @@ class CompletionMonitorStep(ProcessorStep):
                 p_last=stage.samples[-1].progress,
                 p_hold_s=held,
                 departed_s=stage.departed_at_s,
-                **base_fields,
+                **travel_fields,
             )
 
         # 16-D model: no progress output exists, so "stopped" has to be
@@ -895,7 +1036,7 @@ class CompletionMonitorStep(ProcessorStep):
                 nn_dist=distance,
                 nn_index=index,
                 departed_s=stage.departed_at_s,
-                **base_fields,
+                **travel_fields,
             )
         if distance is None or distance > stage.params.end_pose_tol_rad:
             return None
@@ -907,7 +1048,7 @@ class CompletionMonitorStep(ProcessorStep):
             nn_dist=distance,
             nn_index=index,
             departed_s=stage.departed_at_s,
-            **base_fields,
+            **travel_fields,
         )
 
     def _base_travel_ok(self, stage: _Stage) -> bool:
@@ -940,6 +1081,48 @@ class CompletionMonitorStep(ProcessorStep):
             if gate >= settings.departure_base_rot_rad:
                 checks.append(abs(stage.base_rot_rad) >= fraction * rot_median)
         return bool(checks) and all(checks)
+
+    def _arm_required_rad(self, stage: _Stage) -> float | None:
+        """How much arm travel this stage must show, or None if none is required.
+
+        None in two cases, and they are different kinds of none:
+
+        * the file carries no ``arm_travel_total_rad`` -- it predates 10/08, so
+          the rule does not exist for it and the stage is judged exactly as it
+          was before (the loader warns once for the whole file). FAILING OPEN is
+          deliberate here, unlike the move rule which fails closed: the move
+          rule's absence is refused by the loader outright, while a manip stage
+          is the DEFAULT kind and refusing every old file would take the chain
+          from "runs without this defence" to "does not run";
+        * the demonstrations themselves barely move the arm on this stage
+          (p10 under ``departure_arm_rad``, i.e. more than one demonstration in
+          ten leaves the arm inside the departure threshold). Requiring travel
+          there would make a CORRECT performance uncompletable -- the same
+          argument that keeps task09's 0.22 m median drive out of the base rule.
+          No manip stage in the 10/08 file is in this case (the smallest manip
+          p10 is task11's 2.66 rad), so this is a guard on a future file.
+        """
+        median = getattr(stage.params, "arm_travel_total_rad", None)
+        if median is None:
+            return None
+        p10 = getattr(stage.params, "arm_travel_p10_rad", None)
+        gate = median if p10 is None else p10
+        if gate < self.settings.departure_arm_rad:
+            return None
+        return float(self.settings.manip_arm_fraction) * float(median)
+
+    def _arm_travel_ok(self, stage: _Stage) -> bool | None:
+        """Has a "manip" stage moved the arm far enough to have performed?
+
+        None means NOT REQUIRED (see :meth:`_arm_required_rad`) and is NOT the
+        same as False: `arm_ok is False` is the only thing that refuses a
+        completion, so a None passes through to the report as "this file cannot
+        tell" rather than silently blocking every pre-10/08 chain.
+        """
+        required = self._arm_required_rad(stage)
+        if required is None:
+            return None
+        return stage.arm_travel_rad >= required
 
     def _stalled(self, stage: _Stage, now: float) -> float | None:
         """Length of the trailing window in which nothing moved, or None.

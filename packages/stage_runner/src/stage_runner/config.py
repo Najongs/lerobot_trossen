@@ -209,6 +209,15 @@ class CompletionConfig:
     departure_arm_rad: float = 0.10
     departure_base_rot_rad: float = 0.17
     departure_base_fwd_m: float = 0.10
+    # The share of the demonstrations' median travel a stage must cover before
+    # it may complete: the commanded base on a `move` stage (10/07), the
+    # measured arm's path length on a `manip` one (10/08). Both were code-only
+    # defaults until 10/08; they are here now because they decide completions
+    # and an operator who has to loosen one in the field should not need a
+    # source edit. See completion.CompletionSettings for where the numbers
+    # come from.
+    move_base_fraction: float = 0.5
+    manip_arm_fraction: float = 0.4
     # control_time_s = stage p90_s * this. Reaching it is a chain failure.
     timeout_factor: float = 1.3
     # The right arrow means "this stage is done, go on". ON for BOTH models by
@@ -236,6 +245,8 @@ class CompletionConfig:
             departure_arm_rad=self.departure_arm_rad,
             departure_base_rot_rad=self.departure_base_rot_rad,
             departure_base_fwd_m=self.departure_base_fwd_m,
+            move_base_fraction=self.move_base_fraction,
+            manip_arm_fraction=self.manip_arm_fraction,
         )
 
 

@@ -122,6 +122,24 @@ class StageParams:
     # median when the file carries no p10.
     base_fwd_p10_m: float | None = None
     base_rot_p10_rad: float | None = None
+    # Demonstration median of the ARM's cumulative travel over the stage:
+    # Σ over ticks of ‖Δ(the 12 arm joints)‖₂, in radians. A PATH LENGTH, not a
+    # displacement -- a manipulation goes out and comes back, so a displacement
+    # cannot tell a performance from a return to the start. (The widest
+    # EXCURSION robot PC run 1128 ever made was 0.315 rad, inf-norm; its path
+    # was an estimated 2.1-2.9 rad, and the demonstrations' is 9.5.) The
+    # monitor requires a "manip" stage to cover
+    # `manip_arm_fraction` of this before it may complete: 1128 (10/08) read
+    # p 0.976 out of the t04 START scene, held it, stopped, and was declared
+    # complete at 13.1 s having never poured. None when the file predates the
+    # key, and then the requirement is simply not applied (the loader warns).
+    arm_travel_total_rad: float | None = None
+    # The demonstrations' p10 of the same travel. Used the way the base p10 is:
+    # the requirement is only imposed when at least nine demonstrations in ten
+    # move the arm at all (p10 past `departure_arm_rad`), so a future stage whose
+    # correct performance leaves the arm still cannot become uncompletable.
+    # Falls back to the median when the file carries no p10.
+    arm_travel_p10_rad: float | None = None
 
     def timeout_s(self, factor: float) -> float:
         """The stage's ``control_time_s``: p90 times the configured factor.
@@ -296,16 +314,18 @@ def _stage(
             f"{raw['end_pose_tol_rad']!r}"
         )
 
-    # Optional (10/07): stage kind and the base-travel medians a "move" stage is
-    # judged by. `base_*_total_*` may be a number or an object {median, p10, p90}
-    # as export_chain_params.py writes it; the median is what the monitor uses.
+    # Optional (10/07, 10/08): stage kind, the base-travel medians a "move" stage
+    # is judged by, and the arm-travel median a "manip" stage is judged by. Each
+    # may be a number or an object {median, p10, p90} as export_chain_params.py
+    # writes it; the median is what the monitor requires a fraction of, the p10
+    # is what decides WHETHER it is required at all.
     kind = raw.get("kind", "manip")
     if kind not in ("move", "manip"):
         problems.append(f"{where}.kind: expected 'move' or 'manip', got {kind!r}")
         kind = "manip"
     totals: dict[str, float | None] = {}
     p10s: dict[str, float | None] = {}
-    for key in ("base_fwd_total_m", "base_rot_total_rad"):
+    for key in ("base_fwd_total_m", "base_rot_total_rad", "arm_travel_total_rad"):
         value = raw.get(key)
         p10_value = None
         if isinstance(value, dict):
@@ -360,6 +380,8 @@ def _stage(
         kind=kind,
         base_fwd_total_m=totals["base_fwd_total_m"],
         base_rot_total_rad=totals["base_rot_total_rad"],
+        arm_travel_total_rad=totals["arm_travel_total_rad"],
+        arm_travel_p10_rad=p10s["arm_travel_total_rad"],
         base_fwd_p10_m=p10s["base_fwd_total_m"],
         base_rot_p10_rad=p10s["base_rot_total_rad"],
     )
@@ -479,6 +501,28 @@ def parse_chain_params(
             f"{location}: no stage is marked kind='move' -- the file predates the "
             "base-travel completion rule, so stages 1/3/6/10 can be declared "
             "complete without the base moving. Regenerate stage_params.json."
+        )
+
+    # The same thing for the ARM, and for the other kind of stage (10/08). ONE
+    # line for the whole file, not one per stage: it is a property of the file's
+    # vintage, and eleven identical warnings in the start-up log are eleven
+    # things the operator stops reading. Not an error, for the same reason as
+    # above -- a file from before 10/08 still runs, it just runs without this
+    # defence, and robot PC run 1128 is what that costs.
+    missing = sorted(
+        number
+        for number, stage in stages.items()
+        if stage.kind == "manip" and stage.arm_travel_total_rad is None
+    )
+    if missing:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            f"{location}: {len(missing)} manip stage(s) {missing} carry no "
+            "arm_travel_total_rad -- the file predates the arm-travel completion "
+            "rule, so a manipulation stage can be declared complete with the arm "
+            "having barely moved (robot PC run 1128, 10/08: t04 'complete' at "
+            "13.1 s without pouring). Regenerate stage_params.json."
         )
 
     return ChainParams(

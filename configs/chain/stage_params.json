@@ -4,8 +4,8 @@
  "note": "시연 길이는 표기 30 fps 가 아니라 실제 ~21 Hz 로 환산(§90). 자세는 팔 12관절 rad, 그리퍼·베이스 제외.",
  "source": {
   "sim_repo": "Najongs/trossen-ai-simulation",
-  "sim_commit": "71ffbbe",
-  "generated": "2026-10-07",
+  "sim_commit": "47d057b",
+  "generated": "2026-10-08",
   "scripts": [
    "scripts/export_chain_params.py",
    "scripts/reset_designate.py",
@@ -16,7 +16,9 @@
   "dense": {
    "radius_rad": 0.3,
    "min_neighbors": 5
-  }
+  },
+  "base_total_norm": "|∫v dt| (명령 x.vel·theta.vel, 21 Hz 환산, 축별 순적분)",
+  "arm_travel_norm": "Σ_t ‖Δaction[arm12]‖₂ (틱 간 L2 의 합 = 경로 길이, 21 Hz 환산 없음, 그리퍼·베이스 제외)"
  },
  "arm_joint_order": [
   "left_joint_0",
@@ -355,6 +357,11 @@
     "median": 1.431,
     "p10": 1.378,
     "p90": 1.482
+   },
+   "arm_travel_total_rad": {
+    "median": 0.294,
+    "p10": 0.214,
+    "p90": 0.518
    }
   },
   "2": {
@@ -680,6 +687,11 @@
     "median": 0.002,
     "p10": 0.001,
     "p90": 0.006
+   },
+   "arm_travel_total_rad": {
+    "median": 8.325,
+    "p10": 6.3,
+    "p90": 11.545
    }
   },
   "3": {
@@ -1005,6 +1017,11 @@
     "median": 1.42,
     "p10": 1.332,
     "p90": 1.516
+   },
+   "arm_travel_total_rad": {
+    "median": 2.387,
+    "p10": 0.122,
+    "p90": 4.857
    }
   },
   "4": {
@@ -1330,6 +1347,11 @@
     "median": 0.002,
     "p10": 0.0,
     "p90": 0.006
+   },
+   "arm_travel_total_rad": {
+    "median": 9.515,
+    "p10": 8.434,
+    "p90": 10.966
    }
   },
   "5": {
@@ -1654,6 +1676,11 @@
     "median": 0.002,
     "p10": 0.0,
     "p90": 0.004
+   },
+   "arm_travel_total_rad": {
+    "median": 6.954,
+    "p10": 5.314,
+    "p90": 8.657
    }
   },
   "6": {
@@ -1979,6 +2006,11 @@
     "median": 0.017,
     "p10": 0.003,
     "p90": 0.04
+   },
+   "arm_travel_total_rad": {
+    "median": 9.601,
+    "p10": 8.526,
+    "p90": 10.749
    }
   },
   "7": {
@@ -2304,6 +2336,11 @@
     "median": 0.003,
     "p10": 0.0,
     "p90": 0.015
+   },
+   "arm_travel_total_rad": {
+    "median": 12.648,
+    "p10": 8.879,
+    "p90": 16.294
    }
   },
   "8": {
@@ -2629,6 +2666,11 @@
     "median": 0.0,
     "p10": 0.0,
     "p90": 0.004
+   },
+   "arm_travel_total_rad": {
+    "median": 10.581,
+    "p10": 8.564,
+    "p90": 11.594
    }
   },
   "9": {
@@ -2954,6 +2996,11 @@
     "median": 0.008,
     "p10": 0.001,
     "p90": 0.022
+   },
+   "arm_travel_total_rad": {
+    "median": 9.678,
+    "p10": 4.774,
+    "p90": 11.518
    }
   },
   "10": {
@@ -3279,6 +3326,11 @@
     "median": 0.013,
     "p10": 0.002,
     "p90": 0.034
+   },
+   "arm_travel_total_rad": {
+    "median": 0.169,
+    "p10": 0.109,
+    "p90": 2.134
    }
   },
   "11": {
@@ -3604,6 +3656,11 @@
     "median": 0.003,
     "p10": 0.0,
     "p90": 0.072
+   },
+   "arm_travel_total_rad": {
+    "median": 3.793,
+    "p10": 2.66,
+    "p90": 5.281
    }
   }
  }
