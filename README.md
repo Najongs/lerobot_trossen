@@ -849,7 +849,7 @@ where a prefetched chunk takes over. Use them together with the prefetch:
 | ------ | ------------ |
 | `LEROBOT_CHUNK_RTC=1` | Steers the prefetched inference with LeRobot's Real-Time Chunking so that the new chunk's first `k` steps (dropped at the swap) follow the `k` actions the old chunk sends while it infers; step `k`, the first one executed, follows them through the model's conditioning (LeRobot 0.4.4 guides only the first `k`), so the jump shrinks but need not vanish. Needs `LEROBOT_CHUNK_PREFETCH_TICKS`; flow-matching policies only (pi0, pi0.5, SmolVLA). `LEROBOT_CHUNK_RTC_MAX_GUIDANCE=<w>` overrides LeRobot's guidance clip (default 10). |
 | `LEROBOT_CHUNK_SEAM_BLEND_TICKS=<m>` | At every swap, adds to the arm joints of the new chunk an offset that starts at the gap to the last sent command (position and per-tick velocity) and fades out along a quintic over at least `m` ticks — longer when the gap is large, up to 20 ticks (or `m` if larger), aiming to move no joint more than 0.1 rad per tick; a gap too large for that window exceeds it. Grippers and base are untouched. |
-- `LEROBOT_CHUNK_SMOOTH_TICKS=<w>` (odd, >= 3): centred moving average over `w` steps on the arm joints of every chunk as it arrives, ends fixed, grippers and base untouched. For chunk-100 ACT checkpoints whose predicted trajectories jitter 3-5x more than the demonstrations; `w=3` brings them to the demonstrations' level with the L1 unchanged (offline, 2026-10-08). Logged per swap as `arm_smooth_max` (rad).
+| `LEROBOT_CHUNK_SMOOTH_TICKS=<w>` | Odd `w` >= 3: centred moving average over `w` steps on the arm joints of every chunk as it arrives (ends fixed; grippers and base untouched), before the seam blend. For chunk-100 ACT checkpoints whose predicted trajectories flip direction 3-5x more often than the demonstrations; `w=3` brings them to the demonstrations' level with the L1 to the demonstration unchanged (offline, 2026-10-08). Logged per swap as `arm_smooth_max` (rad). |
 
 ```bash
 LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4 \
@@ -1186,6 +1186,7 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_CHUNK_RTC` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: steer the prefetched chunk toward the old chunk's remaining actions → [Chunk Seam Smoothing](#chunk-seam-smoothing) |
 | `LEROBOT_CHUNK_RTC_MAX_GUIDANCE` | unset (10) | RTC guidance clip |
 | `LEROBOT_CHUNK_SEAM_BLEND_TICKS` | unset (off) | Integer `m`: fade the arm jump at each swap over at least `m` ticks |
+| `LEROBOT_CHUNK_SMOOTH_TICKS` | unset (off) | Odd integer `w` >= 3: moving-average the arm joints of each chunk over `w` steps, ends fixed |
 | `LEROBOT_TASK_ONEHOT` | unset (off) | `<stage>/<K>` (1-based, e.g. `2/11`): widens the policy state to `[arms, 0, 0, one_hot]` for multi-stage ACT checkpoints whose `observation.state` is `16+K` wide → [Stage One-Hot for Multi-Stage ACT](#stage-one-hot-for-multi-stage-act) |
 
 **`LEROBOT_FAST_OBS`** — lerobot's `prepare_observation_for_inference` converts and permutes
