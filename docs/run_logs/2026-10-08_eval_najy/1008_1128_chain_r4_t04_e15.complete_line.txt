@@ -1,0 +1,1 @@
+INFO 2026-10-08 11:30:20 mpletion.py:699 stage 4 (task04_pour_liquid_from_tubes_to_beaker) complete by progress: {'completion_reason': 'progress', 'base_fwd_m': None, 'base_rot_rad': None, 'base_travel_ok': None, 'elapsed_s': 13.104, 'ticks': 275, 'stall_s': 2.961, 'p_last': 0.9761, 'p_hold_s': 0.951, 'nn_dist': None, 'nn_index': None, 'departed': True, 'departed_s': 3.124}
