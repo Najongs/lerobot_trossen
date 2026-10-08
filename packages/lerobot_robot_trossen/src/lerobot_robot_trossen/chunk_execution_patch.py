@@ -557,9 +557,27 @@ class ExecutionLog:
         self.path = Path(path).expanduser()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         is_new = not self.path.exists() or self.path.stat().st_size == 0
+        header = ",".join(self.COLUMNS)
+        if not is_new:
+            with open(self.path, "r") as existing:
+                first = existing.readline().rstrip("\n")
+            if first != header:
+                # A file written by an earlier schema (e.g. before `arm_smooth_max`):
+                # appending rows of a different width would corrupt it for every
+                # reader, so the old file is set aside and a fresh one started.
+                legacy = self.path.with_name(
+                    f"{self.path.name}.legacy-{time.strftime('%Y%m%dT%H%M%S')}"
+                )
+                self.path.rename(legacy)
+                logger.warning(
+                    f"{EXECUTION_LOG_VARIABLE}: {self.path} has an older column set; "
+                    f"moved it to {legacy.name} and starting a new file with the "
+                    "current columns."
+                )
+                is_new = True
         self._file = open(self.path, "a", buffering=1)
         if is_new:
-            self._file.write(",".join(self.COLUMNS) + "\n")
+            self._file.write(header + "\n")
         else:
             logger.warning(
                 f"{EXECUTION_LOG_VARIABLE}: appending to the existing {self.path}; "

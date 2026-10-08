@@ -119,3 +119,22 @@ def test_settings_reject_even_or_small_window():
             os.environ.pop(m.SMOOTH_TICKS_VARIABLE, None)
         assert settings.smooth_ticks == 0
         assert any("odd" in p for p in settings.problems), settings.problems
+
+
+def test_execution_log_rotates_a_legacy_schema_file(tmp_path):
+    from lerobot_robot_trossen.chunk_execution_patch import ExecutionLog
+
+    path = tmp_path / "chunks.csv"
+    old_header = ",".join(ExecutionLog.COLUMNS[:-1])  # the pre-`arm_smooth_max` schema
+    path.write_text(old_header + "\n1,2,3\n")
+    log = ExecutionLog(str(path))
+    log.write_row({"loop": 0, "arm_smooth_max": 0.01})
+    log.flush()
+    legacy = [p for p in tmp_path.iterdir() if p.name.startswith("chunks.csv.legacy-")]
+    assert len(legacy) == 1 and legacy[0].read_text().startswith(old_header)
+    lines = path.read_text().splitlines()
+    assert lines[0] == ",".join(ExecutionLog.COLUMNS)
+    assert lines[-1].count(",") == len(ExecutionLog.COLUMNS) - 1
+    # Same schema: appended, not rotated.
+    log2 = ExecutionLog(str(path)); log2.flush()
+    assert len([p for p in tmp_path.iterdir() if "legacy" in p.name]) == 1

@@ -244,6 +244,7 @@ def test_csv_header_is_pinned():
         "arm_seam_sent",
         "blend_ticks",
         "prefix_gap",
+        "arm_smooth_max",
     )
 
 
