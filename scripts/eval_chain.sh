@@ -35,7 +35,7 @@
 #                 팔을 끌어 물체를 쥐게 하고 시작 자세를 잡은 뒤 `→` 로 첫 리셋에 넘긴다.
 #                 `←` 는 구간을 다시(타이머 리셋), ESC 는 중단. 녹화되지 않는다.
 #   TELEOP_S=300  텔레옵 구간 한 번의 상한(초). 넘기면 **중단**이다(램프가 혼자 시작되지 않게)
-#   EXEC=30       청크 중 실행하는 스텝 수 (`--chain.model.n_action_steps`, 1~30). 10/02 에 단일 단계에서 30 으로 확정했지만
+#   EXEC=30       청크 중 실행하는 스텝 수 (`--chain.model.n_action_steps`, 1~chunk). 10/02 에 단일 단계에서 30 으로 확정했지만 (청크 100 모델은 60 — sim §94.31)
 #                 4라운드(pad_hold)는 청크 안에서 감속해 「뚝뚝」 끊긴다(10/08 1123) — 러너 검증용 A/B 노브. 본선은 30
 #   TIMEOUT_FACTOR=1.3  정책 단계 상한 = p90 × 이 값 (`--chain.completion.timeout_factor`). M1 참조군처럼
 #                 끝을 스스로 못 알리고 느린 모델을 러너 검증용으로 돌릴 때만 올린다 — 10/07 1743: task01 상한
@@ -102,7 +102,7 @@ _norm_flag DRY_RUN    "$DRY_RUN";    DRY_RUN=$NORM_FLAG
 _norm_flag RESET_ONLY "$RESET_ONLY"; RESET_ONLY=$NORM_FLAG
 _norm_flag TELEOP     "$TELEOP";     TELEOP=$NORM_FLAG
 _norm_flag TELEOP_BASE "$TELEOP_BASE"; TELEOP_BASE=$NORM_FLAG
-[[ "$EXEC" =~ ^[0-9]+$ ]] && (( EXEC >= 1 && EXEC <= 30 )) || { echo "!! EXEC=$EXEC — 1~30 정수 (체크포인트 chunk 30)" >&2; exit 2; }
+[[ "$EXEC" =~ ^[0-9]+$ ]] && (( EXEC >= 1 && EXEC <= 100 )) || { echo "!! EXEC=$EXEC — 1~100 정수 (체크포인트 chunk 이하; 청크 30 모델은 30, 청크 100 모델은 60 권장 — 넘으면 lerobot ACTConfig 가 연결 전에 거부한다)" >&2; exit 2; }
 [[ -z "$TIMEOUT_FACTOR" ]] || [[ "$TIMEOUT_FACTOR" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v v="${TIMEOUT_FACTOR:-1}" 'BEGIN{exit !(v+0 >= 1)}' \
   || { echo "!! TIMEOUT_FACTOR=$TIMEOUT_FACTOR — 1 이상의 수여야 한다 (기본 1.3 = YAML)" >&2; exit 2; }
 [[ "$TELEOP_S" =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v v="$TELEOP_S" 'BEGIN{exit !(v+0 > 0)}' \
@@ -175,7 +175,7 @@ ARGS=(uv run python -m stage_runner
   "--dataset.repo_id=kiroaiseoul/eval_${RUN}"
   "--output.run_id=$RUN")
 [[ "$MANUAL" == 1 ]] || ARGS+=("--chain.completion.allow_manual_complete=false")
-[[ "$EXEC" == 30 ]] || { ARGS+=("--chain.model.n_action_steps=$EXEC"); echo "   ⚠️ EXEC=$EXEC: 청크 30 중 $EXEC 스텝만 실행하고 재추론 (러너 검증용 A/B — 본선은 30)"; }
+[[ "$EXEC" == 30 ]] || { ARGS+=("--chain.model.n_action_steps=$EXEC"); echo "   ⚠️ EXEC=$EXEC: 청크 중 $EXEC 스텝만 실행하고 재추론 (러너 검증용 A/B — 본선은 30)"; }
 if [[ -n "$TIMEOUT_FACTOR" ]]; then
   ARGS+=("--chain.completion.timeout_factor=$TIMEOUT_FACTOR")
   echo "   ⚠️ TIMEOUT_FACTOR=$TIMEOUT_FACTOR: 정책 단계 상한 = p90 × $TIMEOUT_FACTOR (러너 검증용 — 본선 판정은 기본 1.3)"
