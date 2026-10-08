@@ -224,6 +224,8 @@ HUP 은 `reset_to_02` 램프 도중(14프레임, 0.9 s)에 들어갔다 — 베�
 
 ## 다음
 
+**→ 10/08: 새 모델(4라운드 60K s1000)로 돌릴 Eval 은 [`eval_najy_results_1008.md`](eval_najy_results_1008.md) 「DGX_1 → Trossen PC1 (10/08)」. 아래는 10/07 기록.**
+
 0. **(10/07 저녁) 위 「DGX_1 → Trossen PC1 (10/07 저녁)」 표 1→9 순.** 1(②' Hz 역검증)이 먼저다 — 아래 1~3 은 그 표의 2·3·4 와 같다.
 0. ~~②' Hz 역검증~~ ✅ 통과(10/07 15:32, 위 절). 1호기 목록의 1번 닫힘.
 1. ~~④' 시그널 실증~~ ✅ 통과(10/07 15:51, 위 절). HUP → `SIGHUP received` → stop_base primary → disconnect. 자식 프로세스 이름은 `.venv/bin/python3` — pgrep 패턴 주의.
