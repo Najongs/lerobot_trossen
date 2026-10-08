@@ -387,15 +387,16 @@ exec 30 = 추론 한 번에 30스텝 청크를 받아 **30틱(21 Hz 에서 1.43 
 | t11 | 0% / 20% | 0.89 / 0.17 |
 흐름 모델이라 같은 입력에서도 출력이 질의마다 다르고(noise_floor 0.03~0.34 rad) 그것이 「기다림 평균 = 정지」 를 깬 것으로 본다 [추정]. 끝 정지는 혼재(t01 90%, t02 30%). 그리퍼 state 복사는 ACT 와 같은 지름길이 있을 수 있다 — 미측정.
 
-**스크립트.** `scripts/eval_smolvla.sh` 를 일반화했다 — **codex 교차 검토 뒤 push 한다(이 글을 올리는 시점엔 아직 옛 스크립트다; 새 인자를 받으면 `task 는 t02 | t06` 로 거부된다). §8 이동 단계 요청이 먼저라 문서만 먼저 올린다.** 새 스크립트: `scripts/eval_smolvla.sh <단계 1-11> <rec|long|cur> [ep]`. 지시문과 `include_base_in_state` 를 **체크포인트의 `multi_manifest.json` 에서 읽는다**(지시문 한 글자 차이·베이스 칸 규약 차이가 조용히 틀리는 두 함정). `--dataset.fps=21` 추가(rearm). 데이터셋 이름은 회차마다 고유(옛 `rm -rf` 없음). 로그 `~/eval_logs/<MMDD_HHMM>_sv_tNN_<variant>.log`. `DRY_RUN=1` 지원. 옛 80k kirogist 는 `POLICY=… INCLUDE_BASE=true PROMPT="…"` 로 그대로 돌릴 수 있다.
-- `long` = commit 45 + fade 5: 청크 50 의 대부분(21 Hz 에서 약 2.1 s)을 열린 루프로 실행 — 시연의 시작 기다림(40~56틱)을 한 청크로 지나는지 보는 설정. ACT exec 100 과 같은 질문이다(§6).
-- 플러그인: `fast_obs`(8/10 추가)·루프 Hz 로그는 9월 SmolVLA 런에서도 켜져 있었다(같은 조건). 원핫 패치·청크 실행 패치는 환경변수가 없으면 비활성 — SmolVLA 경로엔 안 걸린다.
+**스크립트.** `scripts/eval_smolvla.sh` 를 일반화했다(codex 2회 검토 뒤 push). codex 1차의 차단 지적 — `include_base_in_state=false` 면 로봇 state 가 **14D** 라 16D 체크포인트의 정규화에서 죽는다 — 를 원핫 패치의 새 모드 `LEROBOT_TASK_ONEHOT=0/0`(14D → `[arms, 0, 0]`, 원핫 없음)으로 풀었다. 스크립트가 base_state=zero 면 자동으로 붙인다. 새 스크립트: `scripts/eval_smolvla.sh <단계 1-11> <rec|long|cur> [ep]`. 지시문과 `include_base_in_state` 를 **체크포인트의 `multi_manifest.json` 에서 읽는다**(지시문 한 글자 차이·베이스 칸 규약 차이가 조용히 틀리는 두 함정). `--dataset.fps=21` 추가(rearm). 데이터셋 이름은 회차마다 고유(옛 `rm -rf` 없음). 로그 `~/eval_logs/<MMDD_HHMM>_sv_tNN_<variant>.log`. `DRY_RUN=1` 지원. 옛 80k kirogist 는 `POLICY=… INCLUDE_BASE=true PROMPT="…"` 로 그대로 돌릴 수 있다.
+- **codex 교차 검토 2회(10/08)** — 1차 [차단] 14D→16D 0 채움 없음 → 원핫 패치 `0/0` 모드로 수용; base-state allowlist·PROMPT 불일치 거부·`long` commit 40·DRY_RUN 0|1·인자 검증·헬퍼 강화·run 이름 충돌 방지 전부 수용. 2차: `cur` 가 불변식에 막힘 → commit 45 로(옛 50 과 같지 않음 명시)·매니페스트 빈 task 거부·빈 배열 확장 회피·테스트는 패키지 `__init__` 우회 + 로그 assert·MAX_REL 0 거부·문서 2줄 — 전부 수용, 기각 없음. 단위 테스트 4개 DGX 에서 통과(로봇 SDK 없이).
+- `long` = commit 40 + fade 5(비동기 도착 지연 4~5스텝을 빼야 fade 가 남는다, codex): 청크 50 의 대부분(21 Hz 에서 약 1.9 s)을 열린 루프로 실행 — 시연의 시작 기다림(40~56틱)을 한 청크로 지나는지 보는 설정. ACT exec 100 과 같은 질문이다(§6).
+- 플러그인: `fast_obs`(8/10 추가)·루프 Hz 로그는 9월 SmolVLA 런에서도 켜져 있었다(같은 조건). 청크 실행 패치는 환경변수가 없으면 비활성. 원핫 패치는 **`LEROBOT_TASK_ONEHOT=0/0` 로 0 채움 전용**으로 걸린다(스크립트가 붙임) — 로그의 `0/0 installed`·`zero-pad only` 줄이 증거.
 
 **요청 (사람 실행, 매번 DRY_RUN 먼저, 1 에피소드씩)** — §6 의 ACT 전문가 A/B 와 **같은 날·같은 장면·같은 시작 자세**로:
 | # | 명령 | 볼 것 |
 |---|---|---|
 | S1 | `scripts/eval_smolvla.sh 5 rec 1` ×2 | t05: 정지 시작에서 출발하나 · 버리기 성공(사람) · 떨림(방향 바뀜/s, 10/02 전문가 1.46 대비) |
-| S2 | `scripts/eval_smolvla.sh 5 long 1` ×1 | commit 45 가 출발·떨림·점프를 바꾸나 |
+| S2 | `scripts/eval_smolvla.sh 5 long 1` ×1 | commit 40 이 출발·떨림·점프를 바꾸나 |
 | S3 | `scripts/eval_smolvla.sh 4 rec 1` ×2 | t04 붓기 — ACT 전문가 e100(§6 B)과 나란히 |
 | S4 (선택) | 시작을 **10 cm 뒤·10° 틀어서** S1·S3 각 1회 | 흔들린 시작 — 목표 조건의 첫 실측. ACT 전문가도 같은 어긋남으로 1회 |
 - 기록: 출발 시각 · 첫 2 s 팔 이동 · 성공(사람) · `grep 추론` 의 평균 추론 ms 와 지연 스텝 · `phase=policy` 루프 Hz · clamped 수 · 관찰 한 줄. 시작 자세 오차(pose_guide 줄)도.

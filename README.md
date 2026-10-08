@@ -915,6 +915,13 @@ normalizer that builds `[arms 0..13, 0, 0, one_hot(stage, K)]` from the robot's 
 state. The base slots are always exact zeros -- measured base velocity never reaches the policy.
 The eval dataset keeps the robot's own state.
 
+`LEROBOT_TASK_ONEHOT=0/0` is the **zero-pad only** form (2026-10-08): `[arms 0..13, 0, 0]` with no
+one-hot, for a plain 16-D checkpoint trained with `base_state: zero` and run with
+`include_base_in_state=false` (the SmolVLA 11-stage checkpoint is the first user, via
+`scripts/eval_smolvla.sh`). It refuses a checkpoint whose state is not 16 wide or that declares an
+env token, and the chain runner's `set_stage` refuses it. The log shows `LEROBOT_TASK_ONEHOT=0/0
+installed` and `zero-pad only (no one-hot)`.
+
 ```shell
 LEROBOT_TASK_ONEHOT=2/11 uv run lerobot-record ... --policy.path=<11-stage ckpt> --dataset.fps=21
 ```

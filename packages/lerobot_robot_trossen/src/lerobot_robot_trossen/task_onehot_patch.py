@@ -49,6 +49,8 @@ Usage
 One stage per ``lerobot-record`` run. The stage number is 1-based as in the
 dataset names (task01 = 1)::
 
+    LEROBOT_TASK_ONEHOT=0/0  uv run ...  # zero-pad only: 14-D robot state -> [arms, 0, 0] for a 16-D
+                                         # checkpoint trained with base_state: zero (no one-hot; SmolVLA 11-stage)
     LEROBOT_TASK_ONEHOT=2/11 uv run lerobot-record ... --policy.path=<all11 ckpt> \\
         --policy.n_action_steps=5
 
@@ -109,8 +111,13 @@ def _parse(value: str) -> tuple[int, int]:
             f"{_ENV_VAR}={value!r}: expected '<stage>/<K>', e.g. '2/11' (1-based stage)"
         )
     stage, k = int(m.group(1)), int(m.group(2))
+    if (stage, k) == (0, 0):
+        # Zero-pad only: ``[arms, 0, 0]`` with NO one-hot, for a 16-D checkpoint trained
+        # with ``base_state: zero`` and run with ``include_base_in_state=false`` (14-D robot
+        # state). SmolVLA 11-stage (language-conditioned) is the first user (10/08).
+        return 0, 0
     if not 1 <= stage <= k:
-        raise RuntimeError(f"{_ENV_VAR}={value!r}: stage must be in 1..{k}")
+        raise RuntimeError(f"{_ENV_VAR}={value!r}: stage must be in 1..{k} (or '0/0' for zero-pad only)")
     return stage, k
 
 
@@ -128,6 +135,9 @@ class TaskOneHotStep(ProcessorStep):
                 f"{_ENV_VAR}: {_ENV_STATE_KEY} is {env_k} wide but the one-hot is "
                 f"K={k}; the env token IS the one-hot, so the widths must match"
             )
+        if k == 0 and stage != 0:
+            raise RuntimeError(f"{_ENV_VAR}: K=0 (zero-pad only) takes stage 0, got {stage}")
+        # k == 0: zero-pad only, index -1 is never used (``__call__`` skips the one-hot write).
         self.index = stage - 1
         self.k = k
         self.expected_dim = expected_dim
@@ -161,6 +171,8 @@ class TaskOneHotStep(ProcessorStep):
         reset that re-pointed the index would undo the caller's choice right
         after it was made. ``reset()`` stays a no-op.
         """
+        if self.k == 0:
+            raise RuntimeError(f"{_ENV_VAR}: zero-pad only step (K=0) has no stage to set")
         if not 1 <= stage <= self.k:
             raise RuntimeError(
                 f"{_ENV_VAR}: stage must be in 1..{self.k}, got {stage}"
@@ -188,7 +200,8 @@ class TaskOneHotStep(ProcessorStep):
         hot = torch.zeros(
             *state.shape[:-1], self.k, dtype=state.dtype, device=state.device
         )
-        hot[..., self.index] = 1.0
+        if self.k > 0:
+            hot[..., self.index] = 1.0
         new_state = torch.cat([arms, base, hot], dim=-1)
         if new_state.shape[-1] != self.expected_dim:
             raise RuntimeError(
@@ -196,11 +209,17 @@ class TaskOneHotStep(ProcessorStep):
                 f"{self.expected_dim}"
             )
         if not self._announced:
-            logger.info(
-                f"{_ENV_VAR}: stage {self.index + 1}/{self.k} active -- policy state "
-                f"{width} -> {new_state.shape[-1]} (base slots zeroed)"
-                + (" (+env token)" if self.env_k is not None else "")
-            )
+            if self.k == 0:
+                logger.info(
+                    f"{_ENV_VAR}: zero-pad only (no one-hot) -- policy state "
+                    f"{width} -> {new_state.shape[-1]} (base slots zeroed)"
+                )
+            else:
+                logger.info(
+                    f"{_ENV_VAR}: stage {self.index + 1}/{self.k} active -- policy state "
+                    f"{width} -> {new_state.shape[-1]} (base slots zeroed)"
+                    + (" (+env token)" if self.env_k is not None else "")
+                )
             self._announced = True
         obs = dict(obs)
         obs[_STATE_KEY] = new_state
@@ -318,9 +337,14 @@ def _build_step(policy_cfg, stage: int, k: int) -> "TaskOneHotStep":
             f"{_ENV_VAR}: checkpoint declares observation.state={expected}, "
             f"but stage one-hot needs 16+{k}={16 + k}. Wrong checkpoint or wrong K."
         )
-    if not 1 <= stage <= k:
-        raise RuntimeError(f"{_ENV_VAR}: stage must be in 1..{k}")
+    if (stage, k) != (0, 0) and not 1 <= stage <= k:
+        raise RuntimeError(f"{_ENV_VAR}: stage must be in 1..{k} (or 0/0 for zero-pad only)")
     env_k = _env_state_dim(policy_cfg)
+    if k == 0 and env_k is not None:
+        raise RuntimeError(
+            f"{_ENV_VAR}=0/0 (zero-pad only) but the checkpoint declares {_ENV_STATE_KEY}={env_k}: "
+            "an env-token checkpoint needs a real stage one-hot"
+        )
     if env_k is not None and env_k != k:
         raise RuntimeError(
             f"{_ENV_VAR}: checkpoint declares {_ENV_STATE_KEY}={env_k} but the "
