@@ -66,6 +66,16 @@ one tick, none without the prefetch).
    it. Grippers and base are left alone. This
    is bumpless transfer: it removes the jump but still arrives on the new
    chunk's path, so it complements RTC rather than replacing it.
+6. **Chunk smoothing** (``LEROBOT_CHUNK_SMOOTH_TICKS=<w>``, odd, >= 3). Every
+   chunk, as it arrives and before anything else, gets its arm joints replaced by
+   a centred moving average over ``w`` steps (the window shrinks at the ends; the
+   first and the last step are kept as predicted). Grippers and base are left
+   alone. Chunk-100 ACT checkpoints predict trajectories whose direction flips
+   3-5x more often than the demonstrations (jitter in the prediction itself,
+   not in execution); ``w=3`` brings that to the demonstrations' level with the
+   L1 to the demonstration unchanged and the end pose untouched (offline,
+   2026-10-08, experts and 11-stage chunk-100 alike). The seam blend (5) then
+   sees the smoothed chunk.
 
 The switches change nothing unless set: with none of the variables set this
 module is not installed at all. When the chunk executor is installed with the
@@ -120,6 +130,7 @@ EXECUTION_LOG_VARIABLE = "LEROBOT_CHUNK_EXECUTION_LOG"
 RTC_VARIABLE = "LEROBOT_CHUNK_RTC"
 RTC_MAX_GUIDANCE_VARIABLE = "LEROBOT_CHUNK_RTC_MAX_GUIDANCE"
 SEAM_BLEND_TICKS_VARIABLE = "LEROBOT_CHUNK_SEAM_BLEND_TICKS"
+SMOOTH_TICKS_VARIABLE = "LEROBOT_CHUNK_SMOOTH_TICKS"
 
 SWITCH_VARIABLES = (
     PREFETCH_TICKS_VARIABLE,
@@ -128,6 +139,7 @@ SWITCH_VARIABLES = (
     RTC_VARIABLE,
     RTC_MAX_GUIDANCE_VARIABLE,
     SEAM_BLEND_TICKS_VARIABLE,
+    SMOOTH_TICKS_VARIABLE,
     replay_policy.DATASET_ENVIRONMENT_VARIABLE,
     replay_policy.EPISODES_ENVIRONMENT_VARIABLE,
     replay_policy.RUN_POLICY_ENVIRONMENT_VARIABLE,
@@ -214,6 +226,7 @@ class ChunkExecutionSettings:
     rtc: bool = False
     rtc_max_guidance: float | None = None
     seam_blend_ticks: int = 0
+    smooth_ticks: int = 0
 
     @property
     def wants_executor(self) -> bool:
@@ -221,6 +234,7 @@ class ChunkExecutionSettings:
             self.prefetch_ticks > 0
             or self.base_lead_ticks > 0
             or self.seam_blend_ticks > 0
+            or self.smooth_ticks > 0
             or self.execution_log_path is not None
         )
 
@@ -246,6 +260,13 @@ def read_settings() -> ChunkExecutionSettings:
             f"{RTC_MAX_GUIDANCE_VARIABLE} does nothing without {RTC_VARIABLE}"
         )
     seam_blend_ticks = _read_tick_count(SEAM_BLEND_TICKS_VARIABLE, problems)
+    smooth_ticks = _read_tick_count(SMOOTH_TICKS_VARIABLE, problems)
+    if smooth_ticks and (smooth_ticks < 3 or smooth_ticks % 2 == 0):
+        problems.append(
+            f"{SMOOTH_TICKS_VARIABLE}={smooth_ticks} must be an odd number >= 3 "
+            "(a centred window); smoothing kept off"
+        )
+        smooth_ticks = 0
     execution_log_path = os.getenv(EXECUTION_LOG_VARIABLE, "").strip() or None
     if replay_policy.EPISODES_PROBLEM:
         problems.append(replay_policy.EPISODES_PROBLEM)
@@ -266,6 +287,7 @@ def read_settings() -> ChunkExecutionSettings:
         rtc=rtc and prefetch_ticks > 0,
         rtc_max_guidance=rtc_max_guidance,
         seam_blend_ticks=seam_blend_ticks,
+        smooth_ticks=smooth_ticks,
     )
 
 
@@ -303,6 +325,40 @@ def shift_base_channels(chunk, lead_ticks: int, base_indices: tuple[int, ...]):
     base = list(base_indices)
     shifted[:, :, base] = chunk[:, source_steps][:, :, base]
     return shifted
+
+
+def smooth_arm_chunk(chunk, arm_indices, ticks: int):
+    """Centred moving average over ``ticks`` steps on the arm joints of ``chunk``.
+
+    ``chunk`` is ``[batch, steps, action_dim]`` (any device, any dtype).
+    Returns ``(smoothed, max_abs_change)`` where ``max_abs_change`` is the largest
+    change applied to any arm joint at any step, in the chunk's own units.
+
+    The window is centred and shrinks symmetrically near the ends, and the
+    first and the last step are kept exactly as predicted (``--fix-ends`` in the
+    offline study): the seam blend reads the first step, and the end pose is what
+    the next chunk continues from. ``ticks`` must be odd and >= 3; 1 or less
+    returns the chunk unchanged. Grippers and base are untouched because they
+    are not in ``arm_indices``.
+    """
+    if ticks is None or ticks <= 1 or not arm_indices:
+        return chunk, 0.0
+    if ticks % 2 == 0:
+        raise ValueError(f"smoothing window must be odd, got {ticks}")
+    steps = chunk.shape[1]
+    if steps < 3:
+        return chunk, 0.0
+    half = ticks // 2
+    arm = list(arm_indices)
+    raw = chunk[:, :, arm]
+    out = raw.clone()
+    for step in range(1, steps - 1):
+        reach = min(half, step, steps - 1 - step)
+        out[:, step] = raw[:, step - reach : step + reach + 1].mean(dim=1)
+    smoothed = chunk.clone()
+    smoothed[:, :, arm] = out
+    change = float((out - raw).abs().max().item()) if raw.numel() else 0.0
+    return smoothed, change
 
 
 def seam_blend_offsets(gap_position, gap_velocity, ticks: int):
@@ -494,6 +550,7 @@ class ExecutionLog:
         # (dropped at the swap) and what the old chunk sent at those ticks. Without
         # RTC it measures how far the two plans disagree; RTC steers it to zero.
         "prefix_gap",
+        "arm_smooth_max",
     )
 
     def __init__(self, path: str):
@@ -572,6 +629,7 @@ class ChunkExecutor:
         base_lead_ticks: int,
         rtc: bool = False,
         seam_blend_ticks: int = 0,
+        smooth_ticks: int = 0,
     ):
         self.policy = policy
         self.prefetch_ticks = prefetch_ticks
@@ -579,6 +637,7 @@ class ChunkExecutor:
         self.base_lead_ticks = base_lead_ticks
         self.rtc = rtc and prefetch_ticks > 0
         self.seam_blend_ticks = seam_blend_ticks
+        self.smooth_ticks = smooth_ticks
         self.action_steps = policy.config.n_action_steps
         self._original_reset = policy.reset
         self._passes_observation_tick = isinstance(policy, replay_policy.ReplayPolicy)
@@ -626,6 +685,14 @@ class ChunkExecutor:
                 )
             else:
                 parts.append("seam blend OFF (no arm joints in the action names)")
+        if self.smooth_ticks:
+            if self.arm_indices:
+                parts.append(
+                    f"chunk smoothing {self.smooth_ticks}-tick moving average on "
+                    f"{len(self.arm_indices)} arm joints (ends fixed)"
+                )
+            else:
+                parts.append("chunk smoothing OFF (no arm joints in the action names)")
         if not parts:
             parts.append("synchronous (same schedule as select_action)")
         return ", ".join(parts)
@@ -929,11 +996,19 @@ class ChunkExecutor:
                 "arm_seam_sent": arm_seam.get("arm_seam_sent"),
                 "blend_ticks": arm_seam.get("blend_ticks"),
                 "prefix_gap": tick_record.get("prefix_gap"),
+                "arm_smooth_max": arm_seam.get("arm_smooth_max"),
             }
         )
 
     def _install(self, chunk, observation_tick: int, elapsed: int) -> dict:
         """Make ``chunk`` the executing one; return the arm seam for the log."""
+        smooth_max = None
+        if self.smooth_ticks and self.arm_indices:
+            # Before anything else: the seam blend, the overlap prefix and the
+            # execution all read the smoothed chunk, so the log and the robot agree.
+            raw = chunk
+            chunk, _ = smooth_arm_chunk(chunk, self.arm_indices, self.smooth_ticks)
+            smooth_max = self._arm_gap(chunk, raw)
         shifted = shift_base_channels(chunk, self.base_lead_ticks, self.base_indices)
         executing = shifted[:, : self.action_steps]
         if elapsed >= executing.shape[1]:
@@ -946,6 +1021,8 @@ class ChunkExecutor:
         arm_seam = {}
         if self._last_sent is not None and self.arm_indices:
             executing, arm_seam = self._blend_seam(executing)
+        if smooth_max is not None:
+            arm_seam = dict(arm_seam, arm_smooth_max=smooth_max)
         self._executing = executing
         self._current_chunk = chunk
         self._current_observation_tick = observation_tick
@@ -1297,6 +1374,7 @@ def attach_chunk_executor(policy, settings: ChunkExecutionSettings | None = None
         base_lead_ticks=settings.base_lead_ticks,
         rtc=rtc,
         seam_blend_ticks=settings.seam_blend_ticks,
+        smooth_ticks=settings.smooth_ticks,
     )
     # Instance attributes shadow the class methods; the class is left untouched.
     policy.select_action = executor.select_action
