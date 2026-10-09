@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | O1 | **레버 사다리**(§1 요청, 10/08 02:48) | `NAJY_act_all11_tph_27D_120k_s1000`(1라운드) · `NAJY_act_all11_r3_27D_60k_s1000` | 1128·1135 프레임에서 p 와 첫 청크 팔 이동 — 어느 레버가 p≈1 머물기를 만드나 | 대기 |
 | O2 | **5라운드 4변형 + 같은 스텝 대조** | `r5_{bh_nopad,nopad,bh_aff}_27D_15k_s1000` · `r5_bh_nopad_27D_15k_s2000` · 대조 `r4_27D_15k_s1000` (전부 `kiroaiseoul/NAJY_act_all11_…`) | 같은 프레임에서 p·첫 청크·머물기. DGX 홀드아웃(sim §94.30.2): 시작을 끝으로 읽는 건 bh, t04 출발 붕괴는 pad+bh | 대기 |
-| O3 | **청크 100 — 60K 넷 (public, sim §94.37)**: **1순위 J10 `kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000`**(M1 레시피, 홀드아웃 10/10) · A `…c100_m1_27D_60k_s1000`(같은 레시피 s1000, 8/10+경계 2) · **체인용 B `…c100_drop_prog_27D_60k_s1000`**(M1+드롭아웃+진행도 17D, 9/10, 진행도 재현율 80%·오검출 0%) · J9 `…c100_m1_aff_27D_60k_s1000`(M1+증강, 8/10 — 장면 강건성만 실기 프레임에서) | 위 이름 | 실기 프레임(1128·1135·1123)에서 100스텝 청크가 시연 크기로 가나. **실기**: `LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000 5 60 1` → 되면 `… 4 60 1` → A 로 같은 둘. 첫 회차는 다듬기 없이 1회 대조. 체인용 B 는 `LEROBOT_CHUNK_SMOOTH_TICKS=3 EXEC=60 FROM_STAGE=5 TO_STAGE=5 scripts/eval_chain.sh kiroaiseoul/NAJY_act_all11_c100_drop_prog_27D_60k_s1000 b60_t05` (단일 단계; 체인 금지는 R1·R2 뒤) | **가능** |
+| O3 | **청크 100 — 60K 넷 (public, sim §94.37)**: **1순위 J10 `kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000`**(M1 레시피, 홀드아웃 10/10) · A `…c100_m1_27D_60k_s1000`(같은 레시피 s1000, 8/10+경계 2) · **체인용 B `…c100_drop_prog_27D_60k_s1000`**(M1+드롭아웃+진행도 17D, 9/10, 진행도 재현율 80%·오검출 0%) · J9 `…c100_m1_aff_27D_60k_s1000`(M1+증강, 8/10 — 장면 강건성만 실기 프레임에서) | 위 이름 | 실기 프레임(1128·1135·1123)에서 100스텝 청크가 시연 크기로 가나. **실기**: `HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000 5 60 1` → 되면 `HOT=4/11 … 4 60 1`(27D 를 repo id 로 부를 때 `HOT=<단계>/11` 이 없으면 `eval_najy.sh:121` 에서 「원핫 모델이면 M1/M2/M3 로」 로 멈춘다 — 10/09 codex 검토) → A 로 같은 둘. 첫 회차는 다듬기 없이 1회 대조. 체인용 B 는 `LEROBOT_CHUNK_SMOOTH_TICKS=3 EXEC=60 FROM_STAGE=5 TO_STAGE=5 scripts/eval_chain.sh kiroaiseoul/NAJY_act_all11_c100_drop_prog_27D_60k_s1000 b60_t05` (단일 단계; 체인 금지는 R1·R2 뒤) | **가능** |
 | O4 | **SmolVLA 30K** 같은 프레임 | `kiroaiseoul/NAJY_smolvla_all11_30000` (지시문 = 매니페스트 문장, state 16D 베이스 0) | 첫 청크 50 의 팔 이동·방향. 흐름 모델이라 노이즈 4개 평균 | 대기 |
 | O5 | **t03 로봇 PC 정의 재계산** (§2) | TPH 120K · R3 60K · R4 60K | 「첫 1 s 누적 경로」 로 1110 프레임 | 대기 |
 | O6 | **GIST 혼합 후보** (sim §94.38.1 — 같은 프로토콜을 다른 현장에서 찍은 GIST 데이터를 30% 가중치로 섞은 M1+청크 100). **15K 에서 우리 홀드아웃은 그대로(9·8/10)이고 GIST 현장의 안 본 시작에서 7~8/10 — 우리 데이터만 본 A 60K 는 3/10.** 60K 두 시드가 1호기에서 도는 중(≈22:30 UTC public) | `NAJY_act_all11_c100_gist30_27D_15k_s{1000,2000}` (**public 됨**, 06:04 UTC) → 60K `…_60k_*` | **장면 변화 강건성이 질문** — 같은 실기 프레임(특히 1040·1046·1047 t01 어긋난 자리, 1101·1102 t02 거리)에서 J10 보다 첫 청크가 시연 방향·크기로 가나. 홀드아웃에선 안 가른다 | 업로드 뒤 |
@@ -23,7 +23,7 @@
 | A2 | `scripts/eval_najy.sh kiroaiseoul/act_task05_tube_disposal_60000 5 100 1` | 2 | exec 100: 약 2 s 기다렸다 출발하나 · 성공 · 「너무 빠르다」 가 (a) 시작 자세 따라잡기 (b) 시연 자체 (c) 잔떨림 중 무엇인지 — `CHUNK_LOG=1`, 첫 2 s 와 그 뒤 `\|action−state\|` 따로 | 대기 |
 | A3 | `scripts/eval_najy.sh kiroaiseoul/act_task05_tube_disposal_60000 5 60 1` | 1 | exec 60: 기다림(40~56틱)은 지나고 열린 루프는 2.9 s — 「빠르다」 가 줄어드나 | 선택 |
 | A4 | `scripts/eval_najy.sh kiroaiseoul/act_task04_pour_liquid_from_tubes_to_beaker_60000 4 100 1` | 2 | 둘째 태스크에서도 기다렸다 출발하나 · 붓기 성공 | 대기 |
-| A5 | **같은 체크포인트로 exec A/B** — `kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000` 을 t05 에서 `… 5 30 1` → `… 5 60 1` → `… 5 100 1` (각 1, `LEROBOT_CHUNK_SMOOTH_TICKS=3`) | 3 | 청크 100 11단계 모델에서 「exec 이 작으면 못 벗어난다」 가 재현되나 — exec 30 머물기 / 60 출발 / 100 과속 여부. A1·A2(전문가)의 11단계판 | 대기 (10/09 추가) |
+| A5 | **같은 체크포인트로 exec A/B** — `kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000` 을 t05 에서 `… 5 30 1` → `… 5 60 1` → `… 5 100 1` (각 1, `HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3`) | 3 | 청크 100 11단계 모델에서 「exec 이 작으면 못 벗어난다」 가 재현되나 — exec 30 머물기 / 60 출발 / 100 과속 여부. A1·A2(전문가)의 11단계판 | 대기 (10/09 추가) |
 | A6 | **다듬기 on/off** — A5 의 exec 60 을 `LEROBOT_CHUNK_SMOOTH_TICKS` 없이 1회 | 1 | 떨림 체감·clamped 수 차이 (sim §94.32·§94.37: 60K 예측 청크는 시연의 1.6~2.5배 떨림, w=3 이면 시연 수준) | 대기 (10/09 추가) |
 | R1 | `FROM_STAGE=4 TO_STAGE=4 scripts/eval_chain.sh kiroaiseoul/NAJY_act_all11_r4_27D_60k_s1000 r4_t04_travel` (1128 조건 재현) | 1 | 러너 가드용 `arm_travel_rad` 실측 — 거짓 완료를 0.4 가 거부하나 | 대기 |
 | R2 | 위 A4 중 **사람이 성공으로 판정한 1건**의 `arm_travel_rad ÷ arm_travel_required_rad` | — | 가드 위 경계(롤아웃 경로 ÷ 시연 중앙). R1·R2 가 오면 체인 금지 해제 | 대기 |
@@ -71,6 +71,13 @@ DGX 기대치(sim §94.33): M3 는 첫 프레임 출발에서 11단계와 같은
 > 10/09 갱신: 60K 후보 넷이 public(O3). 1절은 전문가 A1~A4 뒤 **A5(c100 60K exec A/B)** 를 바로 이어서 — 이 한 회차 묶음이 청크 100 결론을 실기로 닫는다. O6(GIST 혼합)은 올라오는 대로 O 절에.
 0 절(GPU) → 1 절 t05 장면(A1·A2·A3·1135 재현) → t04 장면(A4·R1·R2) → 2 절(스크립트 오면 t05·t04 장면 그대로) → 3 절 → 4 절 → 5 절.
 장면 바꾸는 횟수를 줄이려고 같은 장면끼리 묶었다. 하루에 다 못 하면 **1 절·0 절이 먼저**다 — 다음 레시피(청크 100 exec 60·머물기 감독 제거)가 거기서 갈린다.
+
+## 8. 정책 선정 맞대기 — ACT vs SmolVLA (10/09 추가, **두 체크포인트가 public 되면 1 절보다 먼저**)
+회차·명령 정본은 [`model_selection_1009.md`](model_selection_1009.md) §3, 판정은 사용자가 결과를 보고 정한다. 같은 데이터(GIST 30% 혼합)·같은 배치·같은 step 으로 구운 한 쌍을 **같은 장면에서 번갈아** 돈다.
+| # | 무엇 | 회수(모델당) | 상태 |
+|---|---|---|---|
+| M1~M5 | t05 A·B · t04 A·B · t03 A — ACT `NAJY_act_all11_c100_gist30_27D_60k_s1000` vs SmolVLA `NAJY_smolvla_all11_gist30_60k_s1000` | 14 | 체크포인트 대기 (ACT ≈10/10 02:20 UTC, SmolVLA 는 그 뒤 학습) |
+| (추가) | 1차를 보고 사용자가 정한다 | — | — |
 
 ## 9. 상시 세트 — 새 후보가 올 때마다·세션마다 반복 (짧게, 늘 같은 조건)
 누적 표는 [`eval_scoreboard.md`](eval_scoreboard.md) 한 장이다. 아래는 그 표를 채우는 고정 절차.

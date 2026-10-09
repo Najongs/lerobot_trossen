@@ -1,5 +1,7 @@
 # NAJY 다단계 ACT — 인계 (2026-10-09 저녁, DGX_1 세션 → 다음 세션)
 
+> **10/09 저녁 추가 — 정책 선정(ACT vs SmolVLA) 진행 중**: 설계·굽는 순서·실기 회차·다음 할 일은 [`model_selection_1009.md`](model_selection_1009.md)(§10 이 다음 세션 순서). 학습 큐 J18(SmolVLA gist30 60K)이 J14 뒤 1호기 8장에 대기, J15 는 그 뒤로 밀렸다.
+>
 > **새 세션이 처음 읽는 문서.** 서버 이름: **1호기 = DGX1**(`kiro-dgx1`, `/home/kiro-ai/NAJY`, 이 문서를 쓴 쪽) · **2호기 = sandia**(`/home/sandia/NAJY`, RTX 3090 ×4) · 로봇 PC = Trossen PC1. 10/08~09 이틀의 결론·현재 돌아가는 것·다음 할 일을 한 장에 모았다. 세부는 각 정본으로 간다.
 > 읽는 순서: 이 문서 → [`najy_plan_1008.md`](najy_plan_1008.md)(목표·관문·결정) → [`eval_queue_1008.md`](eval_queue_1008.md)(로봇 PC 가 돌릴 회차 전부) → sim 레포 `docs/mobile_base_investigation.md` §94.27~§94.38(측정 원문) → `docs/multi_server_setup.md`(2호기(sandia) 루프 큐).
 > 머신 사정은 `claude-dotfiles/hosts/DGX_1/host.md` 가 정본이다. 10/06 이전 인계는 [`HANDOFF_najy_1006.md`](HANDOFF_najy_1006.md).
@@ -32,7 +34,7 @@
 ## 4. 후보 체크포인트 (전부 public `kiroaiseoul/…`)
 | 용도 | 이름 | 홀드아웃 출발(10단계) | 비고 |
 |---|---|---|---|
-| **실기 1순위** | `NAJY_act_all11_c100_m1_27D_60k_s2000` (J10) | 10 | M1 레시피 + 청크 100. 실기는 `LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh <id> 5 60 1` |
+| **실기 1순위** | `NAJY_act_all11_c100_m1_27D_60k_s2000` (J10) | 10 | M1 레시피 + 청크 100. 실기는 `HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh <id> 5 60 1` (repo id 로 부르면 `HOT=<단계>/11` 필수) |
 | 같은 레시피 둘째 | `…c100_m1_27D_60k_s1000` (A) | 8(+경계 2) | GIST 홀드아웃 3/10 — 시드 복권 |
 | **체인용 17D** | `…c100_drop_prog_27D_60k_s1000` (B) · `…_s2000` (J12) | 9 · 8 | 러너 `EXEC=60`, 진행도 재현율 80%·오검출 0% |
 | 장면 강건성 후보 | `…c100_gist30_27D_15k_s{1000,2000}` → 60K 진행 중 | 9·8 / GIST 7·8 | 실기 프레임(큐 O6)이 판정 |
