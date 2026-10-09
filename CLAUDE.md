@@ -6,7 +6,8 @@
 > 전역 규칙·MCP(vaultgraph·arxiv 등)·레포 메모리가 안 보인다. 세션을 닫고 다시 열어라.
 
 > **DGX_1(`/home/kiro-ai/NAJY/lerobot_trossen`)에서 열었다면** 위 머리말은 로봇 PC 기준이다 — 먼저
-> `docs/najy_overview.md`(현황 정본) → `docs/HANDOFF_najy_1006.md`(DGX 경로·오프라인 도구·DGX 가 맡을 일·주의사항).
+> `docs/HANDOFF_najy_1009.md`(**새 세션 진입점** — 목표·확정 교훈·돌아가는 런·후보 체크포인트·다음 순서) → `docs/najy_overview.md`(현황 정본) →
+> `docs/HANDOFF_najy_1006.md`(DGX 경로·오프라인 도구·주의사항).
 > DGX 에서는 이 레포 패키지를 import 하지 마라(로봇 SDK 를 끌어온다), push 는 `najongs` 원격(fork)으로.
 
 Trossen Mobile AI(WidowX AI 팔 4대 + SLATE 베이스 + RealSense 3대)용 lerobot 플러그인 fork.
