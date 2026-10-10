@@ -115,6 +115,7 @@ task05 는 「11단계 모델 + 원핫으로는 안 됨」 으로 두고 **D(이
 | [`data_layout_traps.md`](data_layout_traps.md) | 16D/14D/27D 차원·베이스 칸 함정 |
 | [`offline_eval_findings_act.md`](offline_eval_findings_act.md) | 오프라인 판정 요약 (ACT) |
 | [`offline_eval_2026-09-22.md`](offline_eval_2026-09-22.md) · `smolvla_*.md` | SmolVLA 쪽 기록 (현재 주력 아님) |
+| [`eval_real_list.md`](eval_real_list.md) | **(10/10) 모델별 실기 Eval 목록 한 표** — 학습한 것 전부, 오프라인은 참고만, 우선·상태·큐 번호 |
 | [`HANDOFF_najy_1009.md`](HANDOFF_najy_1009.md) | **새 세션 진입점(10/09)** — 목표·확정 교훈 8·돌아가는 런과 상태 파일·후보 체크포인트·로봇 PC 큐 상태·두 서버 루프 규칙·열린 결정·다음 순서·어디에 무엇이 |
 | [`HANDOFF_najy_1006.md`](HANDOFF_najy_1006.md) | DGX_1 에서 이 레포를 열 때 — DGX 경로·오프라인 도구·DGX 가 맡을 일(원핫이 단계를 고르게 하는 학습 대책)·주의. 10/06 기준 |
 | sim `scripts/dgx/` (README) | 1호기(DGX1) 자동화 — fork 감시(`fork_watch.sh`)·체크포인트 채점(`score_c100.sh`)·학습 후처리 템플릿·GIST 기준선 |

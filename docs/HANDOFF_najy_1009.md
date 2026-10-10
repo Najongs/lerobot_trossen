@@ -45,6 +45,7 @@
 | SmolVLA | `NAJY_smolvla_all11_30000` | 출발 M1 보다 좋음(§94.11) | `scripts/eval_smolvla.sh <단계> rec` (0 채움 자동) |
 
 ## 5. 로봇 PC (Trossen PC1) — 받은 회신 없음 (10/08 11:43 KST 이후)
+- **(10/10) 모델별 실기 목록 표 [`eval_real_list.md`](eval_real_list.md)** — 사용자: 「오프라인 평가를 너무 신뢰하지 말고 Eval 실제로 다 돌려보게」. 학습한 60K 전부 + SmolVLA + M3 + 전문가, 우선순위·상태·큐 번호.
 - 돌릴 것은 전부 [`eval_queue_1008.md`](eval_queue_1008.md): 무접촉 O1~O6 → 실행 층 A1~A6(전문가 exec A/B, **c100 60K exec 30/60/100**, 다듬기 on/off) → 러너 가드 R1·R2(**체인 금지 해제 조건**) → SmolVLA S1~S3 → 이동 단계 첫 실기 V1~V4 → 미실기 조작 N1~N4 → 천장·반경 C1~C3 → 백로그 §10.
 - 누적 성공률은 [`eval_scoreboard.md`](eval_scoreboard.md) 한 장(사람 판정만). 상시 세트는 큐 §9.
 - 러너·스크립트 변경(전부 codex 검토·push 됨): 조작 단계 거짓 완료 가드(`configs/chain/README.md`), `LEROBOT_CHUNK_SMOOTH_TICKS`, 원핫 패치 `0/0`, `scripts/eval_smolvla.sh` 일반화, `eval_chain.sh` EXEC 상한 100.
