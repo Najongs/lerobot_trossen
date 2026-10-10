@@ -19,12 +19,12 @@
 |---|---|---|---|
 | 런 | **J14** `exp_all11_c100_gist30_long_s1000` (진행 중) | **J18** `sv_all11_gist30_s1000` (신규) | — |
 | 출발 가중치 | 처음부터(비전 백본만 ResNet18 ImageNet — lerobot 0.4.1 기본) | `lerobot/smolvla_base` (비전 동결·expert 만 학습 = 기본값) | 다름 — 이것이 비교 대상 |
-| 데이터 | `all11_tr_hot_gist30.json` (우리 11항목 1.0 + GIST 합 0.43) | 같은 파일에서 `task_onehot` 만 뺀 `all11_tr_nohot_gist30.json` | **같음** (분할·에피소드·가중치·`base_state=zero`·`balance`) |
+| 데이터 | `all11_tr_hot_gist30.json` (우리 11항목 1.0 + GIST 태스크별 합 0.43 → 전체 ≈30%) | 같은 파일에서 `task_onehot` 만 뺀 `all11_tr_nohot_gist30.json` | **같음** (분할·에피소드·가중치·`base_state=zero`·`balance`) |
 | 단계 조건 | 원핫 11 (state 27D) | 지시문 — 매니페스트 `task` 문장(GIST 항목도 우리 문장으로 고정돼 있다) | 다름 — 비교 대상 |
 | 유효 배치 · step | 4장 × 8 = 32 · 60K (= 1.92M 샘플) | 8장 × 4 = 32 · 60K | **같음** |
 | LR | 상수 3e-5 | SmolVLA 기본(peak 1e-4, warmup 1K, 코사인) — **decay 를 60K 로 늘림**(기본 30K 면 뒤 절반이 바닥 lr) | 각 모델 권장값 |
 | 증강 | 끔(`image_transforms.enable=false`) | 끔 | **같음** (sv_all11 은 켰었다) |
-| 정밀도 | fp32 | fp32 (`--mixed_precision=no` — V100 은 fp16 에서 죽고 bf16 은 에뮬레이션) | **같음** (sv_all11 은 bf16) |
+| 정밀도 | fp32 | **혼합 — 학습되는 expert 96.6M 은 bf16 가중치, 나머지 3.3M 만 fp32** (`--policy.type=smolvla --policy.pretrained_path` 경로의 lerobot 기본, `from_config` 가 `torch_dtype=bfloat16` 을 따른다; `--mixed_precision=no` 는 autocast 만 끈다 — codex 10/10 CPU 측정) | **다름** — 「fp32 같음」 은 10/09 서술 오류. (a) 기본 레시피로 두고 차이로 명시 / (b) `policy.float()` 로 fp32 맞춤(train_multi 변경·재스모크) 중 **사용자 결정 대기**; 결정 전까지 (a) 로 간다 |
 | 청크 · 실행 | 100 · exec 60 + `LEROBOT_CHUNK_SMOOTH_TICKS=3` | 50 · `rec`(commit 30 + fade 5, 샘플 4 평균) | 각 모델의 현재 권장 실행 — 다름(§6) |
 | 시드 | 1000 | 1000 | 시드 1개씩(사용자 10/09). **ACT 는 s1000 을 미리 정한다** — s2000 이 나중에 더 좋아 보여도 바꾸지 않는다(사후 선택 편향) |
 | 공개 이름 | `kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000` | `kiroaiseoul/NAJY_smolvla_all11_gist30_60k_s1000` | — |
