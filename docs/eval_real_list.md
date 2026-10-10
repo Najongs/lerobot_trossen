@@ -25,6 +25,7 @@
 | 11 | `NAJY_act_all11_c150_drop_prog_27D_60k_s1000` | drop+prog + 청크 150, sandia(J21) | 조작 7/8 (t06 .08 출발 붕괴) · 진행도 59% | t01(w=5) → ②~③, 단일 단계 | 3 | public | E5 |
 | 20 | `NAJY_act_all11_c150_drop_prog_27D_60k_s2000` | drop+prog + 청크 150 둘째 시드, sandia(J22) | 조작 7/8 (t06 .85·t11 .38) · 진행도 62% | #11 과 같은 회차 — t06 은 이쪽이 정상 | 3 | public | E6 |
 | 21 | `NAJY_act_all11_c100_drop_27D_60k_s1000` | M1 + 영상 드롭아웃 .3, **진행도 없음**, 청크 100, 60K, sandia(J23) | 조작 8/8 (t11 .85·t08 .54) · 원핫 경로 열림 · w=5 권장 | 상시 세트 ①~③(#1 과 번갈아) — 진행도 칸의 득실을 B(#3)와 가름 | 3 | public | E7 |
+| 22 | `NAJY_act_all11_c100_drop_27D_60k_s2000` | 드롭아웃만 둘째 시드, sandia(J25) | 조작 6/8 (t08 .37·t11 .35) | #21 과 같은 회차 — 드롭아웃 레시피의 시드 폭 | 3 | public | E8 |
 | 12 | `NAJY_smolvla_all11_gist30_60k_s1000` | **SmolVLA** smolvla_base → GIST 30%, 60K, DGX1(J18) | (h50 만 의미) | **선정 맞대기 VLA 팔** — M1~M5(t05 A/B 3+3, t04 A/B 3+3, t03 A 2), #2 와 같은 시작 짝으로 번갈아 | **1** | **public(11:31 UTC)** — 바로 가능 | §8 |
 | 13 | `NAJY_smolvla_all11_30000` | SmolVLA 11단계 언어 조건, 30K, 우리 데이터만 | 출발 M1 보다 좋음(§94.11) | S1~S3: t05·t04 `rec` 1ep, 떨림 `rec/long/cur` 비교 | 2 | 미실기 | S1~S3 |
 | 14 | M3 — 이동 4단계 묶음 ACT (`scripts/eval_najy.sh M3 <단계> 30 1` 별칭, 원핫 {1:1,3:2,6:3,10:4}) | 이동 단계만 묶은 ACT(원핫 1/4) | 미채점 | V1~V4: t01·t03·t06·t10 각 1ep(∫θ·∫x, 과회전 배수) | 2 | 미실기 | V1~V4 |
