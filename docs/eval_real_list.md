@@ -21,7 +21,7 @@
 | 7 | `NAJY_act_all11_c100_m1_aff_27D_60k_s1000` | M1 + cam_high 기하 증강, 60K, sandia(J9) | 조작 7/8 | ① 무접촉 프레임(장면 강건성) → 좋으면 ②~④ | 3 | 미실기 | O3 |
 | 8 | `NAJY_act_all11_c100_drop_prog_27D_60k_s2000` | drop+prog 둘째 시드, 60K, sandia(J12) | 조작 7/8 | 상시 세트 ①~③(#3 과 번갈아, 단일 단계) | 3 | 미실기 | E4 |
 | 9 | `NAJY_act_all11_c150_m1_27D_60k_s1000` | M1 + **청크 150**, 60K, sandia(J19) | 조작 7/8 (t11 .39) · t01 h150 1.08 · 떨림 1.2~1.5× | **t01 먼저**(w=5, ∫θ·∫x) → ②~④ | 2 | 미실기 | E2 |
-| 10 | `NAJY_act_all11_c150_m1_27D_60k_s2000` | 청크 150 둘째 시드, sandia(J20) | 45K 조작 6/8 (t08 .47·t11 .36) | #9 와 같은 회차 | 3 | 60K ≈04:10 UTC 뒤 public | E3 |
+| 10 | `NAJY_act_all11_c150_m1_27D_60k_s2000` | 청크 150 둘째 시드, sandia(J20) | 조작 6/8 (t08 .27·t11 .41) · w=5 떨림 시연 아래 | #9 와 같은 회차 | 3 | public | E3 |
 | 11 | `NAJY_act_all11_c150_drop_prog_27D_60k_s1000` | drop+prog + 청크 150, sandia(J21) | 15K 8/10 · 진행도 50% | t01(w=5) → ②~③, 단일 단계 | 3 | 60K ≈06:00 UTC 뒤 public | E5 |
 | 12 | `NAJY_smolvla_all11_gist30_60k_s1000` | **SmolVLA** smolvla_base → GIST 30%, 60K, DGX1(J18) | (h50 만 의미) | **선정 맞대기 VLA 팔** — M1~M5(t05 A/B 3+3, t04 A/B 3+3, t03 A 2), #2 와 같은 시작 짝으로 번갈아 | **1** | 학습 중 ≈11:30 UTC → public 뒤 | §8 |
 | 13 | `NAJY_smolvla_all11_30000` | SmolVLA 11단계 언어 조건, 30K, 우리 데이터만 | 출발 M1 보다 좋음(§94.11) | S1~S3: t05·t04 `rec` 1ep, 떨림 `rec/long/cur` 비교 | 2 | 미실기 | S1~S3 |
