@@ -61,11 +61,14 @@
 3. 이동 단계 스크립트화(G3) · 팀 묶음 전문가(`act_task06_task07_261006` 등) 출처.
 4. 볼트 브랜치 `session/DGX_1-20261008-1654-mcp`(교훈 6, 커밋 2) push.
 
-## 8. 다음 세션이 할 일 (순서)
-1. `/raid/kiro-ai/eval/c100_gist_long_status.txt` → GIST 60K 둘의 우리/GIST 홀드아웃 표를 §94.38.1 아래에 적고 큐 O6 갱신 → **GPU 가 비면 바로 J18(SmolVLA 팔) 투입**(`SMOKE=1` 뒤 본 런, 역검증·waiter·public 이름 `NAJY_smolvla_all11_gist30_60k_s1000`). sandia J17(s3000 60K, ≈10/10 01:00 UTC)·J19(c150 60K) 결과를 받아 §94.37 표에 더한다. J16 결과는 받음(위 §2-1).
-2. 로봇 PC 회신이 오면 — 실기 프레임 표(O3·O6)로 레시피를 가른다(M1 vs GIST30 vs B). 실기 회차(A5 exec A/B)가 청크 100 결론을 닫는다. scoreboard 갱신.
-3. 그 결과로 J6(60K 후보 확정)·J15(GIST 50%)·청크 150 60K 중 다음 런을 큐에 적고 1호기(DGX1)에서 직접 띄운다(규칙대로).
-4. 볼트: 새 사실이 생기면 `create_node`(DGX_1 은 커밋까지, push 는 사람). MCP 가 파일만 쓰고 멈추는 일이 있었다 — `git status graph/` 로 미추적 파일을 확인하고 `project: "[[ACT_Trossen]]"` 이중 괄호·`machine: [DGX_1]`·`brief:` 를 손봐 커밋.
+## 8. 다음 세션이 할 일 (순서) — 정책 선정이 먼저. 진행 상태는 sim `docs/loop_board.md` 「할 일 S1~S11」 표가 정본
+1. **J14 끝 처리(S1·S2)**: `/raid/kiro-ai/eval/c100_gist_long_status.txt` → GIST 60K 둘의 우리/GIST 홀드아웃 표를 sim §94.38.1 아래에 적고 종합 표 J14 행·실기 큐 O6 갱신.
+2. **J18 SmolVLA 팔 투입(S3~S6)**: `/preflight` + codex 검토(새 레시피·60K, host.md ④) → `SMOKE=1 MIN_FREE_MIB=15000 scripts/launch_sv_gist30.sh`(20스텝, 로그 4줄 확인, `_smoke` 삭제) → 본런 → 역검증(smolvla·chunk 50·steps 60000·decay 60000·`num_frames=6,461,644`·`Weighted sampling active`·`multi_manifest.json` 에 `task_onehot` 0건·state 16) → Monitor. 명령·확인 항목 원문은 [`model_selection_1009.md`](model_selection_1009.md) §2.
+3. **J18 60K(S7)**: 자동 public 아님 — `hub_upload_ckpt.py … --name NAJY_smolvla_all11_gist30_60k_s1000 --public` 수동, 스냅샷 `multi_manifest.json` 확인 → `model_selection_1009.md` §3·`eval_queue_1008.md` §8 을 「가능」 → 로봇 PC 에 알림.
+4. **실기 결과(S8~S10)**: 로봇 PC 가 M1~M5(같은 시작 짝, ACT `HOT=<단계>/11` 필수)를 돌리면 모델별 A·B 성공·짝·실패 분류·출발 s·Hz 표를 `eval_najy_results_<MMDD>.md` 에, scoreboard 에 열 둘. **판정은 사용자**(문턱 없음·모델 혼합 없음).
+5. 그 밖의 로봇 PC 회신(O3·O6·A5·R1·R2)은 그대로 처리 — 실기 프레임 표로 레시피를 가르고 scoreboard 갱신. 체인 금지는 R1·R2 뒤.
+6. sandia 결과(J20 c150 s2000 ≈04:10 UTC · J21 c150 drop_prog ≈06:00 UTC)는 종합 표 행 갱신 + 빈 GPU 에 표의 「다음 빈 GPU 후보」 순서로 큐. J15(GIST 50%)는 선정 뒤.
+7. 볼트: 새 사실이 생기면 `create_node`(DGX_1 은 커밋까지, push 는 사람). MCP 가 파일만 쓰고 멈추는 일이 있었다 — `git status graph/` 로 미추적 파일을 확인하고 `project: "[[ACT_Trossen]]"` 이중 괄호·`machine: [DGX_1]`·`brief:` 를 손봐 커밋.
 
 ## 9. 어디에 무엇이
 | 무엇 | 위치 |
