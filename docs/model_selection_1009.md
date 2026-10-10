@@ -24,7 +24,7 @@
 | 유효 배치 · step | 4장 × 8 = 32 · 60K (= 1.92M 샘플) | 8장 × 4 = 32 · 60K | **같음** |
 | LR | 상수 3e-5 | SmolVLA 기본(peak 1e-4, warmup 1K, 코사인) — **decay 를 60K 로 늘림**(기본 30K 면 뒤 절반이 바닥 lr) | 각 모델 권장값 |
 | 증강 | 끔(`image_transforms.enable=false`) | 끔 | **같음** (sv_all11 은 켰었다) |
-| 정밀도 | fp32 | **혼합 — 학습되는 expert 96.6M 은 bf16 가중치, 나머지 3.3M 만 fp32** (`--policy.type=smolvla --policy.pretrained_path` 경로의 lerobot 기본, `from_config` 가 `torch_dtype=bfloat16` 을 따른다; `--mixed_precision=no` 는 autocast 만 끈다 — codex 10/10 CPU 측정) | **다름** — 「fp32 같음」 은 10/09 서술 오류. (a) 기본 레시피로 두고 차이로 명시 / (b) `policy.float()` 로 fp32 맞춤(train_multi 변경·재스모크) 중 **사용자 결정 대기**; 결정 전까지 (a) 로 간다 |
+| 정밀도 | fp32 | **혼합 — 학습되는 expert 96.6M 은 bf16 가중치, 나머지 3.3M 만 fp32** (`--policy.type=smolvla --policy.pretrained_path` 경로의 lerobot 기본, `from_config` 가 `torch_dtype=bfloat16` 을 따른다; `--mixed_precision=no` 는 autocast 만 끈다 — codex 10/10 CPU 측정) | **다름이지만 상관없는 변수** — 사용자 결정(10/10): 「V100 에서 bf16 학습이 어려워 fp32 로 간 것뿐, 가능하면 bf16 으로 맞추고 어차피 성능 차이는 거의 없다」 → (a) lerobot 기본 레시피 그대로(expert bf16), 통제 변수에서 뺀다. 「fp32 같음」 은 10/09 서술 오류 |
 | 청크 · 실행 | 100 · exec 60 + `LEROBOT_CHUNK_SMOOTH_TICKS=3` | 50 · `rec`(commit 30 + fade 5, 샘플 4 평균) | 각 모델의 현재 권장 실행 — 다름(§6) |
 | 시드 | 1000 | 1000 | 시드 1개씩(사용자 10/09). **ACT 는 s1000 을 미리 정한다** — s2000 이 나중에 더 좋아 보여도 바꾸지 않는다(사후 선택 편향) |
 | 공개 이름 | `kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000` | `kiroaiseoul/NAJY_smolvla_all11_gist30_60k_s1000` | — |
@@ -91,6 +91,7 @@
 2. 흔든 자리: 두 모델에 최대한 같게 맞추는 것까지.
 3. 모델 혼합: 하지 않는다.
 4. VLA 후보: SmolVLA 만 (pi0·VLA-Adapter 제외). 시드 1개.
+5. (10/10) 정밀도는 통제 변수가 아니다 — SmolVLA 는 lerobot 기본(expert bf16)으로, ACT 는 fp32 로. 가능하면 bf16 으로 맞추되 성능 차이는 거의 없다고 본다. J18 은 그대로 간다.
 
 ## 9. codex 설계 검토 처리 (10/09, gpt-5.6-sol · plan 모드)
 | 지적 | 처리 | 근거·반영 |
