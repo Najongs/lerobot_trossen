@@ -30,7 +30,7 @@
 | 1호기(DGX1) GPU 0~7 | `exp_all11_c100_gist30_long_s{1000,2000}` (J14) | GIST 30% + M1 + 청크 100, 60K, 두 시드 — **Claude 가 직접 투입**(허용 규칙). s1000 이 선정 맞대기의 ACT 팔 | ≈10/10 02:20 UTC (0.64 s/step 실측) | public `NAJY_act_all11_c100_gist30_27D_60k_s*` + 우리/GIST 홀드아웃 출발 표 → `/raid/kiro-ai/eval/c100_gist_long_status.txt` |
 | 2호기(sandia) GPU 0·1 | `t24_all11_c100_m1_60k_s3000` (J17) | 배포 후보 셋째 시드 60K | ≈22:50 UTC | 2호기(sandia)가 push |
 | 2호기(sandia) GPU 2·3 | ~~J16 청크 150 15K~~ **끝(17:50 UTC)** → public `…c150_m1_27D_15k_s1000`, t01 h150 1.02 · 나머지 h100 8/10. 다음 **J19 = 청크 150 M1 60K s1000**(큐에 적음, sandia 가 잡는다) | — | sandia 가 push |
-| 1호기(DGX1) 다음 | **J18** `sv_all11_gist30_s1000` — SmolVLA 팔(`smolvla_base` → `all11_tr_nohot_gist30.json`, 8장×4·60K·fp32). 런처 `scripts/launch_sv_gist30.sh`(먼저 `SMOKE=1`) — 병렬 세션이 준비, J14 끝난 뒤 8장 | J14 뒤 | 자동 후처리는 아직 없음 — 띄우는 세션이 waiter 를 만든다 |
+| 1호기(DGX1) GPU 0~7 | **J18** `sv_all11_gist30_s1000` — SmolVLA 팔(`smolvla_base` → `all11_tr_nohot_gist30.json`, 8장×4·60K, expert 는 bf16(lerobot 기본 — 정밀도 (a)/(b) 사용자 결정 대기)). **10/10 02:20 UTC 투입**(스모크·codex 뒤), 0.544 s/step | ≈10/10 11:30 UTC | waiter `sim scripts/dgx/sv_gist30_after.sh` → public `NAJY_smolvla_all11_gist30_60k_s1000` → `/raid/kiro-ai/eval/sv_gist30_status.txt` |
 감시: `scripts/dgx/fork_watch.sh`(sim 레포, 3분 간격, 2 h 상한 → 다시 건다). 새 세션은 먼저 `/raid/kiro-ai/eval/*_status.txt` 와 두 fork 의 `git log najongs/main` 을 본다.
 
 ## 4. 후보 체크포인트 (전부 public `kiroaiseoul/…`)
