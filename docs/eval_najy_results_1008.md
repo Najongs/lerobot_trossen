@@ -418,3 +418,8 @@ exec 30 = 추론 한 번에 30스텝 청크를 받아 **30틱(21 Hz 에서 1.43 
 - 이동 단계 기록은 베이스 쪽이 핵심: `basevel.csv` 의 ∫θ(°)·∫x(m) 명령/실측, 시연 기준값은 `eval_najy.md` 의 21 Hz 환산 표(t01 +82°·1.64 m, t03 −81°). 팔은 부수.
 - 주의: M3 는 `eval_najy.sh` 가 원핫 {1:1,3:2,6:3,10:4} 로 붙인다 — 로그의 `stage i/4 active` 를 확인. 20D 폭 검사가 스크립트에 있다.
 - 팀의 묶음 전문가 `act_task06_task07_261006`(14D·청크 100·200K, 데이터셋 516ep·4 task)·`…_task08_261006`(767ep)은 우리 문서에 기록이 없다 — **누가 왜 만들었는지** 아는 사람이 적어 달라. 우리 것이면 V3 옆에 1회 넣는다.
+
+## 9. DGX_1 → Trossen PC1 (10/10 11:35 UTC) — 정책 선정 맞대기 두 체크포인트 준비됨
+- **ACT 팔** `kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000` · **SmolVLA 팔** `kiroaiseoul/NAJY_smolvla_all11_gist30_60k_s1000` — 둘 다 public. 회차·명령은 [`model_selection_1009.md`](model_selection_1009.md) §3(M1~M5, 같은 시작 짝으로 번갈아; ACT 는 `HOT=<단계>/11` 필수, SmolVLA 는 `POLICY=… scripts/eval_smolvla.sh <단계> rec 1`, `DRY_RUN=1` 출력에서 지시문·`0/0 installed` 확인).
+- 전체 실기 목록은 [`eval_real_list.md`](eval_real_list.md)(#1~#21). 판정은 사용자.
+

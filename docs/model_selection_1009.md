@@ -36,14 +36,14 @@
 | 순서 | 런 | 언제 | 산출 |
 |---|---|---|---|
 | 1 | J14 (ACT gist30 60K, 두 시드) | **진행 중** — 10/09 17:05 UTC 에 8K, step 0.64 s → 끝 ≈ 10/10 02:20 UTC [계산] | 자동 public + 홀드아웃 출발 표 |
-| 2 | **J18 SmolVLA gist30 60K s1000** | J14 끝난 뒤 8장 | public. 15K·30K·45K 체크포인트도 남긴다(save 15K) |
+| 2 | **J18 SmolVLA gist30 60K s1000** | **끝 — 10/10 02:20 → 11:29 UTC**(0.51 s/step), **public `kiroaiseoul/NAJY_smolvla_all11_gist30_60k_s1000`**(스냅샷에 `multi_manifest.json` 27항목·task_onehot 0 확인), loss 0.85 → 0.029 | 15K·30K·45K 도 로컬에 있음(`/raid/kiro-ai/outputs/smolvla/sv_all11_gist30_s1000`) |
 - J15(ACT GIST 50%)는 이 선정 뒤로 민다 — 선정이 먼저다.
 - J18 은 **새 레시피 + 60K** 라 host.md 조건 ④ 에 따라 `/preflight` · codex 검토 뒤 띄운다. 띄우기 전 20 스텝 스모크로 메모리·step 시간을 잰다(V100 fp32 SmolVLA 8장은 안 재 봤다).
 - J18 역검증: 로그의 `Weighted sampling active`(우리 1.0 · GIST 0.43 분할) · `num_frames=6,461,644`(J14 와 같아야 한다) · policy type smolvla · chunk 50 · steps 60000 · `scheduler_decay_steps=60000` · 런 디렉터리 `multi_manifest.json` 에 `task_onehot` 0건 · 저장 `config.json` 의 state shape 16. (`train_config.json` 에는 매니페스트 키가 안 남는다 — `train_multi.py:1745`)
 - **J18 은 자동 public 이 아니다**(런처가 `push_to_hub=false`, J14 처럼 감시자가 올리지 않는다). 60K 뒤 직접: `uv run python scripts/hub_upload_ckpt.py sv_all11_gist30_s1000 60000 --root /raid/kiro-ai/outputs/smolvla --name NAJY_smolvla_all11_gist30_60k_s1000 --public` → 스냅샷에 `multi_manifest.json` 이 있는지 확인(`eval_smolvla.sh` 가 지시문·`base_state` 를 거기서 읽는다). 업로더의 README 문구(ACT)·launch 줄 검색 경로(`/raid/kiro-ai/logs/act`)는 ACT 고정이라 SmolVLA 에선 틀리게 나온다 — 알려진 오표기.
 - 본런 초반은 Monitor 로 step 시간·NaN·OOM 을 본다 — 20스텝 스모크는 recycle(8프로세스×bs4 라 약 250 step 마다 워커 재생성, foundation SmolVLA 런과 같은 설정)·15K 저장·V100 fp32 60K 완주를 대표하지 않는다.
 
-## 3. 실기 회차 — Trossen PC 가 돌릴 목록 (두 체크포인트가 public 된 뒤)
+## 3. 실기 회차 — Trossen PC 가 돌릴 목록 — **가능(10/10 11:31 UTC): 두 체크포인트 모두 public** (`NAJY_act_all11_c100_gist30_27D_60k_s1000` · `NAJY_smolvla_all11_gist30_60k_s1000`)
 공통: [`eval_queue_1008.md`](eval_queue_1008.md) 머리말 그대로(1 에피소드씩 · `DRY_RUN=1` 먼저 · 장면 대조 · e-stop). **같은 장면·같은 시작에서 두 모델을 번갈아**(ACT → SmolVLA → SmolVLA → ACT …) 돌려 시간에 따른 장면·배터리 변화를 상쇄한다.
 - ACT: `HOT=<단계>/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 <단계> 60 1` — **`HOT` 필수**(27D 를 repo id 로 부르면 없을 때 `eval_najy.sh:121` 에서 멈춘다). 로그에 `<단계>/11 installed` 확인
 - SmolVLA: `POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_60k_s1000 scripts/eval_smolvla.sh <단계> rec 1` (지시문·`INCLUDE_BASE` 는 체크포인트 매니페스트에서 자동 — `DRY_RUN=1` 출력에서 지시문이 그 단계 문장인지, `0/0 installed` 가 있는지 확인)
