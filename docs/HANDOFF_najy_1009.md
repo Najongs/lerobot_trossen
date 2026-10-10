@@ -24,7 +24,7 @@
 | 7 | 60K 에서 **레시피 차이보다 시드 폭이 크다**(M1 두 시드 10/10 vs 8/10). 증강(J4/J9)은 60K 에서 이득 없음. t11 약함은 첫 프레임 지표의 성질(출발 52틱·끝 자세 분산), 레시피 레버 아님 | §94.37, 2호기(sandia) J13 |
 | 8 | [함정] 16D state 체크포인트를 `include_base_in_state=false` 로 돌리면 로봇 관측이 14D 라 정규화 첫 프레임에서 죽는다 → 원핫 패치 `LEROBOT_TASK_ONEHOT=0/0`(0 채움 전용). `train_multi` 매니페스트 사본은 `steps == save_freq` 런에서 경쟁으로 안 남던 것을 고쳤다(414c371) | README §Stage One-Hot |
 
-## 3. 지금 돌아가는 것 (10/09 16:40 UTC)
+## 3. 지금 돌아가는 것 (10/09 16:40 UTC — **최신은 sim `docs/loop_board.md` 종합 표**: 결과·큐·실기 이관 한 장, 알림마다 거기를 갱신한다)
 | 머신 | 런 | 무엇 | 끝 | 그 뒤 자동 |
 |---|---|---|---|---|
 | 1호기(DGX1) GPU 0~7 | `exp_all11_c100_gist30_long_s{1000,2000}` (J14) | GIST 30% + M1 + 청크 100, 60K, 두 시드 — **Claude 가 직접 투입**(허용 규칙). s1000 이 선정 맞대기의 ACT 팔 | ≈10/10 02:20 UTC (0.64 s/step 실측) | public `NAJY_act_all11_c100_gist30_27D_60k_s*` + 우리/GIST 홀드아웃 출발 표 → `/raid/kiro-ai/eval/c100_gist_long_status.txt` |
