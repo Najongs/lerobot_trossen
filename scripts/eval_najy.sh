@@ -64,7 +64,7 @@ case "$MODEL" in
       *) echo "M3 는 이동 단계(1·3·6·10)만 학습했다" >&2; exit 2 ;; esac ;;
   TPH) REPO=kiroaiseoul/NAJY_act_all11_tph_27D_120k_s1000; ONEHOT="$STAGE/11"; TAG=tph ;;   # 1라운드 재학습(17D 진행도) — 허브 업로드 뒤 유효
   ENV) REPO=kiroaiseoul/NAJY_act_all11_tph_env_27D_120k_s1000; ONEHOT="$STAGE/11"; TAG=env ;; # 2라운드(env 단계 토큰) — 허브 업로드 뒤 유효
-  */*) REPO=$MODEL; TAG=base; [ -n "${HOT:-}" ] && ONEHOT="$HOT" ;;   # 맨 repo id: HOT=<i>/<K> 를 주면 원핫 패치 켬(ENV 모델도 같은 패치)
+  */*) REPO=$MODEL; TAG=base; [ -n "${HOT:-}" ] && { ONEHOT="$HOT"; TAG=hot; } ;;   # 맨 repo id: HOT=<i>/<K> 를 주면 원핫 패치 켬(ENV 모델도 같은 패치). 태그 base=16D 전문가 · hot=원핫 다단계(10/11 로봇 PC 오표기 지적)
   *) echo "모델은 M1|M2|M3|TPH|ENV|<허브 repo id>" >&2; exit 2 ;;
 esac
 

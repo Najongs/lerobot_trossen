@@ -14,7 +14,7 @@ import re
 import sys
 
 LOGDIR = os.path.expanduser("~/eval_logs")
-MODEL_NAME = {"m1": "M1 all11 s1000", "m2": "M2 all11 s2000", "m3": "M3 move4", "base": "단계 전문가(B*)"}
+MODEL_NAME = {"m1": "M1 all11 s1000", "m2": "M2 all11 s2000", "m3": "M3 move4", "base": "단계 전문가(B*)", "hot": "원핫 다단계 ACT(repo id)"}
 
 
 def read(path: str) -> str | None:
@@ -45,6 +45,9 @@ def main(run: str) -> int:
         return 2
     mm, dd, hh, mi, tag, stage, ex = m.groups()
     model = MODEL_NAME.get(tag, tag)
+    if tag in ("base", "hot"):  # repo id 로 부른 회차 — 로그 머리말의 실제 모델을 붙인다 (10/11 로봇 PC: 태그만으론 어느 모델인지 안 보임)
+        repo = grab(r"== 모델 (\S+)", log, default="")
+        model = f"{model} `{repo}`" if repo else model
 
     # --- 로그
     onehot = grab(r"LEROBOT_TASK_ONEHOT=(\S+) installed", log, default="없음(원핫 모델 아님)" if tag == "base" else "**없음 — 무효**")
