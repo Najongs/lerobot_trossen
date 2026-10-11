@@ -69,8 +69,11 @@ Trossen Mobile AI(WidowX AI 팔 4대 + SLATE 베이스 + RealSense 3대)용 lero
 - 학습은 lerobot 0.4.1, 로봇 PC 는 0.4.4 — 전처리기 호환은 문서 기록 없음
 
 ## git
-- remote: 이 체크아웃은 `origin = Najongs/lerobot_trossen`(HTTPS) 하나. **public 레포**다 — 토큰·비밀번호를 넣지 마라
-- `main` 에 직접 커밋·push (레포 메모리 commit-straight-to-main). upstream 은 kiro-ai-division [추정 — 이 체크아웃엔 remote 없음]
+- **push 전에 `git remote -v` 로 대상을 확인하고, 원격 이름을 명시해서 push 한다** — 체크아웃마다 원격 구성이 다르다:
+  로봇 PC 는 `origin = Najongs/lerobot_trossen`(HTTPS) 하나 · **DGX1 은 `origin = kiro-ai-division/lerobot_trossen`(조직, push 금지) + `najongs = Najongs/lerobot_trossen`(fork)**.
+  push 대상은 항상 **Najongs fork** (`git push najongs main` / 로봇 PC 는 `git push origin main`). 2026-10-11 DGX1 에서 `git push origin main` 으로 조직 main 에 167 커밋이 올라간 사고가 있었다.
+  **public 레포**다 — 토큰·비밀번호를 넣지 마라
+- `main` 에 직접 커밋·push (레포 메모리 commit-straight-to-main). upstream 은 kiro-ai-division (조직 레포 PR 은 사용자가)
 - 커밋 메시지: 영어 `Feat:/Fix:/Docs:` 와 한국어 `feat(eval):/docs:` 혼재 — 본인 커밋은 한국어 `타입(범위): 제목` 관례
 - 커밋 전 `git config user.name/user.email` 확인 (공용 계정)
 - `.pre-commit-config.yaml` 에 `no-commit-to-branch` 가 있으나 훅은 미설치
