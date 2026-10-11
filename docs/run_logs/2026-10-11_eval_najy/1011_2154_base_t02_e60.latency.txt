@@ -1,0 +1,4 @@
+== 1011_2154_base_t02_e60
+베이스: /home/trossen-ai/eval_logs/1011_2154_base_t02_e60.basevel.csv 없음
+팔: eval 데이터셋 eval_najy_1011_2154_base_t02_e60 이 로컬에 없다
+추론: policy 구간 루프 요약줄이 없다
