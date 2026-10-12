@@ -714,6 +714,25 @@ def threshold_problems(chain) -> list[str]:
                 "it is the share of the demonstrated travel a stage must cover before it may "
                 "complete, and 0 or less turns the false-completion guard off."
             )
+    # The gripper hold guard (10/12). A threshold at or below 0 passes an empty
+    # grip (0.000) and silently turns the guard off; one at or above an open
+    # hand (~0.025) refuses every correct performance. A stage number outside
+    # 1..11 is a typo that disables the guard on the stage it meant.
+    grip_min = getattr(completion, "grip_hold_min", None)
+    if grip_min is not None and not (
+        math.isfinite(float(grip_min)) and 0.0 < float(grip_min) < 0.02
+    ):
+        problems.append(
+            f"`chain.completion.grip_hold_min: {grip_min}` must be a finite number in "
+            "(0, 0.02) -- an empty grip reads 0.000 and an open hand ~0.025, and the "
+            "demonstrations of t02-t04 hold at 0.0054 or more."
+        )
+    for number in getattr(completion, "grip_hold_stages", None) or ():
+        if isinstance(number, bool) or not isinstance(number, int) or not 1 <= number <= 11:
+            problems.append(
+                f"`chain.completion.grip_hold_stages` has {number!r} -- every entry "
+                "must be a stage number 1..11."
+            )
     if not (0.0 < float(completion.p_done) <= 1.0):
         problems.append(
             f"`chain.completion.p_done: {completion.p_done}` must be in (0, 1]: "

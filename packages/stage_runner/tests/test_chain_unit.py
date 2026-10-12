@@ -1020,11 +1020,13 @@ class _MonitorHarness(NoRobotSdkMixin):
         theta=0.0,
         track=0.0,
         dt=1 / 21.0,
+        grips=None,
     ):
         """One transition. ``offset`` moves BOTH command and measurement.
 
         ``track`` separates them: the measurement lags the command by that much,
         which is a tracking error and not motion. ``offset`` is motion.
+        ``grips`` is the MEASURED (left, right) gripper pair, omitted when None.
         """
         from lerobot.processor import create_transition
 
@@ -1033,6 +1035,9 @@ class _MonitorHarness(NoRobotSdkMixin):
             f"{name}.pos": self.params.start_pose[name] + offset for name in self.names
         }
         observation = {key: value - track for key, value in action.items()}
+        if grips is not None:
+            for key, value in zip(comp.GRIPPER_KEYS, grips):
+                observation[key] = value
         action["x.vel"] = base
         action["theta.vel"] = theta
         if progress is not None:
@@ -1137,6 +1142,149 @@ class MoveStageCompletionTest(_MonitorHarness, unittest.TestCase):
         self.assertEqual(result.reason, comp.REASON_STALL_NN)
         self.assertIsNone(result.base_travel_ok)
         self.assertIsNone(result.as_detail()["base_rot_rad"])
+
+
+class GripperHoldGuardTest(_MonitorHarness, unittest.TestCase):
+    """t02·t03·t04 may complete only with BOTH grippers holding (10/12).
+
+    Robot PC run 1011_2203 (B, t02): progress rose like a clock to 0.95 at
+    14.0 s, the arm stopped, and the stage was declared complete with the left
+    gripper on a tube (0.007) and the right one closed on nothing (0.000). The
+    mock stage 1 is put on the guarded list here; the rest of the monitor is the
+    ordinary 16-D/17-D manip path of ``test_a_manip_stage_is_unchanged``."""
+
+    HOLD = (0.0062, 0.0058)  # what every t02-t04 demonstration ends at (>= 0.0054)
+    MISSED = (0.007, 0.000)  # 1011_2203's last frame
+
+    def setUp(self) -> None:
+        super().setUp()
+        import dataclasses
+
+        self.params = dataclasses.replace(self.params, kind="manip")
+        self.settings = dataclasses.replace(self.settings, grip_hold_stages=(1,))
+
+    def _run(self, monitor, grips, *, progress=None, ticks: int = 40) -> None:
+        value = None if progress is None else 0.0
+        self._tick(monitor, progress=value, offset=0.0, grips=grips)
+        for _ in range(comp.DEPARTURE_ARM_TICKS):
+            self._tick(monitor, progress=value, offset=self.DEPARTED, grips=grips)
+        for _ in range(ticks):
+            self._tick(monitor, progress=progress, offset=0.05, grips=grips)
+            if self.events["exit_early"]:
+                break
+
+    def test_the_shipped_defaults_guard_t02_t03_t04_at_0_004(self) -> None:
+        from stage_runner import config as cfg_module
+
+        defaults = comp.CompletionSettings()
+        self.assertEqual(defaults.grip_hold_stages, (2, 3, 4))
+        self.assertEqual(defaults.grip_hold_min, 0.004)
+        settings = cfg_module.CompletionConfig().to_settings()
+        self.assertEqual(settings.grip_hold_stages, (2, 3, 4))
+        self.assertEqual(settings.grip_hold_min, 0.004)
+
+    def test_an_empty_right_grip_is_refused_and_reported(self) -> None:
+        """1011_2203: every other rule passes, the right hand is empty."""
+        monitor = self._monitor(has_progress=False)
+        self._run(monitor, self.MISSED)
+        self.assertFalse(self.events["exit_early"], "the 1011_2203 false completion")
+        self.assertIsNone(monitor.end_stage())
+        detail = monitor.last_departure.as_detail()
+        self.assertGreater(detail["grip_refused_ticks"], 0)
+        self.assertEqual(detail["grip_hold_min"], 0.004)
+        self.assertEqual(detail["grip_meas_last_left"], 0.007)
+        self.assertEqual(detail["grip_meas_last_right"], 0.0)
+
+    def test_both_hands_holding_completes(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        self._run(monitor, self.HOLD)
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertEqual(result.reason, comp.REASON_STALL_NN)
+        self.assertAlmostEqual(result.grip_meas_min, 0.0058)
+        self.assertEqual(result.as_detail()["grip_meas_min"], 0.0058)
+        self.assertEqual(monitor.last_departure.grip_refused_ticks, 0)
+
+    def test_a_progress_model_needs_the_grip_too(self) -> None:
+        monitor = self._monitor(has_progress=True)
+        self._run(monitor, self.MISSED, progress=0.99)
+        self.assertFalse(self.events["exit_early"], "p 0.99 held + stall, right hand empty")
+        self.assertIsNone(monitor.end_stage())
+
+        monitor = self._monitor(has_progress=True)
+        self._run(monitor, self.HOLD, progress=0.99)
+        self.assertTrue(self.events["exit_early"])
+        self.assertEqual(monitor.end_stage().reason, comp.REASON_PROGRESS)
+
+    def test_a_move_stage_on_the_list_is_guarded_as_well(self) -> None:
+        """t03 turns while holding the tubes; the guard is not manip-only."""
+        import dataclasses
+
+        self.params = dataclasses.replace(
+            self.params,
+            kind="move",
+            base_rot_total_rad=1.4,
+            base_rot_p10_rad=1.3,
+            base_fwd_total_m=0.02,
+            base_fwd_p10_m=0.0,
+        )
+        for grips, fires in ((self.MISSED, False), (self.HOLD, True)):
+            with self.subTest(grips=grips):
+                self.events["exit_early"] = False
+                monitor = self._monitor(has_progress=False)
+                self._tick(monitor, offset=0.0, grips=grips)
+                for _ in range(16):
+                    self._tick(monitor, theta=1.0, grips=grips)
+                for _ in range(40):
+                    self._tick(monitor, offset=0.05, grips=grips)
+                    if self.events["exit_early"]:
+                        break
+                self.assertEqual(self.events["exit_early"], fires)
+                monitor.end_stage()
+
+    def test_one_empty_tick_inside_the_window_delays_completion(self) -> None:
+        """Every tick of the stall window must hold, not just the last one."""
+        monitor = self._monitor(has_progress=False)
+        self._tick(monitor, offset=0.0, grips=self.HOLD)
+        for _ in range(comp.DEPARTURE_ARM_TICKS):
+            self._tick(monitor, offset=self.DEPARTED, grips=self.HOLD)
+        fired_at = None
+        for index in range(60):
+            grips = self.MISSED if index == 8 else self.HOLD  # past the 0.4 s stall
+            self._tick(monitor, offset=0.05, grips=grips)
+            if self.events["exit_early"]:
+                fired_at = index
+                break
+        self.assertIsNotNone(fired_at)
+        # The stall window is 0.4 s = 8.4 ticks: it must have moved past index 8.
+        self.assertGreaterEqual(fired_at, 8 + 8)
+        monitor.end_stage()
+        self.assertGreater(monitor.last_departure.grip_refused_ticks, 0)
+
+    def test_a_nan_grip_is_not_a_hold(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        self._run(monitor, (float("nan"), 0.006))
+        self.assertFalse(self.events["exit_early"])
+        detail = (monitor.end_stage(), monitor.last_departure.as_detail())[1]
+        self.assertIsNone(detail["grip_meas_last_left"])
+
+    def test_a_missing_gripper_key_blinds_a_guarded_stage(self) -> None:
+        monitor = self._monitor(has_progress=False)
+        self._run(monitor, None)
+        self.assertFalse(self.events["exit_early"])
+        self.assertIsNone(monitor.end_stage())
+        self.assertIn("carriage_joint", monitor.last_departure.blind)
+
+    def test_an_unguarded_stage_never_reads_the_grippers(self) -> None:
+        import dataclasses
+
+        self.settings = dataclasses.replace(self.settings, grip_hold_stages=(2, 3, 4))
+        monitor = self._monitor(has_progress=False)
+        self._run(monitor, None)  # no gripper keys at all
+        self.assertTrue(self.events["exit_early"])
+        result = monitor.end_stage()
+        self.assertIsNone(result.grip_meas_min)
+        self.assertIsNone(monitor.last_departure.grip_hold_min)
 
 
 class MoveStageParamsLoaderTest(NoRobotSdkMixin, unittest.TestCase):
@@ -4521,6 +4669,16 @@ class ThresholdPreflightTest(NoRobotSdkMixin, unittest.TestCase):
             for bad in (0.0, -0.4, float("nan"), 1.5):
                 self.assertIn(name.split(".")[1], self._problems(**{name: bad}), (name, bad))
             self.assertEqual(self._problems(**{name: 0.4}), "", name)
+
+    def test_a_bad_gripper_guard_is_refused(self) -> None:
+        """0 passes an empty grip (guard off); 0.02+ refuses an open-or-holding hand."""
+        for bad in (0.0, -0.004, float("nan"), 0.025):
+            self.assertIn("grip_hold_min", self._problems(**{"completion.grip_hold_min": bad}), bad)
+        for bad in ([0], [12], [2, True]):
+            self.assertIn(
+                "grip_hold_stages", self._problems(**{"completion.grip_hold_stages": bad}), bad
+            )
+        self.assertEqual(self._problems(**{"completion.grip_hold_stages": []}), "")
 
     def test_a_nan_threshold_is_refused(self) -> None:
         """Written as ``not (x > 0)``: ``x <= 0`` is False for a NaN and PASSES."""

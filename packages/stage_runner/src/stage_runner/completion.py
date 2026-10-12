@@ -100,6 +100,7 @@ write one line later. The robot ignores the extra key by itself:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import time
@@ -184,6 +185,15 @@ NON_FINITE_BLIND_TICKS: int = 3
 # refusal message tells the operator to get the arms within by hand.
 START_POSE_WARN_RAD: float = 0.3
 
+# The two grippers' MEASURED carriage positions -- each arm's 7th value, the one
+# the reset never moves (chain_params.ARM_JOINT_NAMES). Read only on the stages
+# `CompletionSettings.grip_hold_stages` names, so a stage that does not need them
+# behaves exactly as before.
+GRIPPER_KEYS: tuple[str, ...] = (
+    "left_left_carriage_joint.pos",
+    "right_left_carriage_joint.pos",
+)
+
 
 @dataclass(frozen=True)
 class CompletionSettings:
@@ -266,6 +276,29 @@ class CompletionSettings:
     # ceiling. This delays a 1128-style false completion and refuses the fast
     # ones; it is not a proof that the stage was performed.
     manip_arm_fraction: float = 0.4
+    # GRIPPER HOLD GUARD (10/12). On these stages BOTH grippers' measured
+    # carriage position must be >= `grip_hold_min` on EVERY tick of the stall
+    # window before the stage may complete. Robot PC run 1011_2203 (B, t02): the
+    # progress head rose like a clock (≈0.07/s from 4 s, 0.95 at 14.0 s), the arm
+    # stopped, and the stage was declared complete with the LEFT gripper on a
+    # tube (0.007) and the RIGHT one closed on nothing (0.000) -- the human said
+    # it had missed. Neither progress nor travel can see that; the gripper can.
+    #
+    # WHY t02·t03·t04 AND 0.004 (sim docs/mobile_base_investigation.md §94.53,
+    # measured over EVERY recorded episode, train and holdout): in the last 3 s
+    # of t02 (133 ep), t03 (117) and t04 (130) both grippers never drop below
+    # 0.0054 -- 100% of demonstrations pass 0.004. An empty close reads 0.000
+    # and an open hand ~0.025, so the guard catches an EMPTY GRIP only; an open
+    # hand passes it (no upper bound: t02's last 3 s reach 0.0199 on the right
+    # in some demonstrations, so a bound would refuse correct performances).
+    # Other stages carry no gripper signal: t01 ends at 0.000 on both hands
+    # (nothing held) and t05 ends anywhere from -0.0007 to 0.027 (it disposes
+    # of the tubes).
+    #
+    # A refusal leaves the stage to the right arrow or the timeout -- it never
+    # completes it, never retries, never moves anything.
+    grip_hold_stages: tuple[int, ...] = (2, 3, 4)
+    grip_hold_min: float = 0.004
 
 
 @dataclass(frozen=True)
@@ -304,10 +337,16 @@ class CompletionResult:
     # completion is refused instead).
     arm_travel_rad: float | None = None
     arm_travel_ok: bool | None = None
+    # The smallest MEASURED gripper position (either hand) over the stall window
+    # that the gripper hold guard passed, or None on a stage it does not apply to.
+    grip_meas_min: float | None = None
 
     def as_detail(self) -> dict[str, Any]:
         return {
             "completion_reason": self.reason,
+            "grip_meas_min": (
+                None if self.grip_meas_min is None else round(self.grip_meas_min, 5)
+            ),
             "base_fwd_m": None if self.base_fwd_m is None else round(self.base_fwd_m, 4),
             "base_rot_rad": None if self.base_rot_rad is None else round(self.base_rot_rad, 4),
             "base_travel_ok": self.base_travel_ok,
@@ -362,6 +401,16 @@ class Departure:
     # start pose, or None when the file carried no comparable pose. Reported only:
     # the departure origin is the measurement, never the designated pose.
     start_pose_offset_rad: float | None = None
+    # The gripper hold guard (CompletionSettings.grip_hold_stages): the
+    # threshold, or None on a stage it does not apply to; how many ticks it
+    # REFUSED a completion every other rule had already granted; and the last
+    # measured (left, right) positions. Recorded here for the same reason as the
+    # arm travel: a refused stage ends as an ordinary timeout or a right arrow,
+    # and without these the report cannot tell "the gripper was empty" from
+    # "the progress head never fired".
+    grip_hold_min: float | None = None
+    grip_refused_ticks: int = 0
+    grip_last: tuple[float, ...] | None = None
 
     @property
     def unknown(self) -> bool:
@@ -395,6 +444,10 @@ class Departure:
                 if self.start_pose_offset_rad is None
                 else round(self.start_pose_offset_rad, 4)
             ),
+            "grip_hold_min": self.grip_hold_min,
+            "grip_refused_ticks": self.grip_refused_ticks,
+            "grip_meas_last_left": _round_or_none(self.grip_last, 0),
+            "grip_meas_last_right": _round_or_none(self.grip_last, 1),
         }
 
 
@@ -420,6 +473,11 @@ class _Sample:
     # is perfectly still, exactly on an end pose", which is the completion
     # condition itself.
     finite: bool = True
+    # Measured (left, right) gripper positions, read only on a guarded stage
+    # (CompletionSettings.grip_hold_stages); None elsewhere. NOT part of
+    # `finite`: a NaN gripper refuses the guard (see `_grip_held`) and nothing
+    # else, so it cannot blind a stage the guard does not apply to.
+    grips: tuple[float, ...] | None = None
 
 
 @dataclass
@@ -483,6 +541,9 @@ class _Stage:
     # the stage ends on the timeout or on the operator's right arrow -- it must
     # never guess "done" from data it could not read.
     blind: str = ""
+    # The gripper hold guard's bookkeeping, for Departure (see there).
+    grip_refused_ticks: int = 0
+    grip_last: tuple[float, ...] | None = None
 
 
 class CompletionMonitorStep(ProcessorStep):
@@ -606,6 +667,11 @@ class CompletionMonitorStep(ProcessorStep):
             ),
             blind=stage.blind,
             start_pose_offset_rad=stage.start_pose_offset_rad,
+            grip_hold_min=(
+                self.settings.grip_hold_min if self._grip_guarded(stage) else None
+            ),
+            grip_refused_ticks=stage.grip_refused_ticks,
+            grip_last=stage.grip_last,
         )
         if not stage.departed and stage.blind:
             logger.warning(
@@ -682,6 +748,8 @@ class CompletionMonitorStep(ProcessorStep):
             # months later against the completions it produced.)
             "move_base_fraction": self.settings.move_base_fraction,
             "manip_arm_fraction": self.settings.manip_arm_fraction,
+            "grip_hold_stages": list(self.settings.grip_hold_stages),
+            "grip_hold_min": self.settings.grip_hold_min,
         }
 
     # ------------------------------------------------------------------ internals
@@ -766,7 +834,22 @@ class CompletionMonitorStep(ProcessorStep):
                 return
             progress = _as_float(action[PROGRESS_KEY])
 
-        finite = arm_base_finite and (progress is None or math.isfinite(progress))
+        grips: tuple[float, ...] | None = None
+        if self._grip_guarded(stage):
+            missing = [key for key in GRIPPER_KEYS if key not in observation]
+            if missing:
+                # The guard cannot be checked, so the stage must not complete
+                # automatically -- the same fail-closed rule as a missing arm key.
+                self._blind(
+                    stage,
+                    f"{missing[0]!r} is missing from the observation, and stage "
+                    f"{stage.params.number} requires both grippers holding",
+                )
+                return
+            grips = tuple(_as_float(observation[key]) for key in GRIPPER_KEYS)
+            stage.grip_last = grips
+
+        finite =arm_base_finite and (progress is None or math.isfinite(progress))
         if finite:
             stage.non_finite_ticks = 0
         else:
@@ -803,6 +886,7 @@ class CompletionMonitorStep(ProcessorStep):
                 progress=progress,
                 measured=tuple(measured),
                 finite=finite,
+                grips=grips,
             )
         )
         self._prune(stage, now)
@@ -1016,11 +1100,12 @@ class CompletionMonitorStep(ProcessorStep):
             arm_travel_ok=arm_ok,
         )
 
+        result: CompletionResult | None = None
         if stage.has_progress:
             held = self._progress_held(stage, now)
             if held is None:
                 return None
-            return CompletionResult(
+            result = CompletionResult(
                 reason=REASON_PROGRESS,
                 elapsed_s=elapsed,
                 ticks=stage.ticks,
@@ -1030,38 +1115,87 @@ class CompletionMonitorStep(ProcessorStep):
                 departed_s=stage.departed_at_s,
                 **travel_fields,
             )
+        else:
+            # 16-D model: no progress output exists, so "stopped" has to be
+            # corroborated by WHERE it stopped. M1 does not stop at the end scene
+            # for every stage (§93, t04), so this is a weaker signal than progress
+            # and that is exactly why `allow_manual_complete` is on for M1 too.
+            distance, index = self._nearest_end_pose(stage)
+            if is_move:
+                # The arm's end pose says nothing about a move stage (its start
+                # pose IS one of its end poses to 0.001 rad for t03/t10); the base
+                # travel above is the corroboration. nn_dist is recorded, not
+                # required.
+                result = CompletionResult(
+                    reason=REASON_STALL_BASE,
+                    elapsed_s=elapsed,
+                    ticks=stage.ticks,
+                    stall_s=stalled,
+                    nn_dist=distance,
+                    nn_index=index,
+                    departed_s=stage.departed_at_s,
+                    **travel_fields,
+                )
+            else:
+                if distance is None or distance > stage.params.end_pose_tol_rad:
+                    return None
+                result = CompletionResult(
+                    reason=REASON_STALL_NN,
+                    elapsed_s=elapsed,
+                    ticks=stage.ticks,
+                    stall_s=stalled,
+                    nn_dist=distance,
+                    nn_index=index,
+                    departed_s=stage.departed_at_s,
+                    **travel_fields,
+                )
 
-        # 16-D model: no progress output exists, so "stopped" has to be
-        # corroborated by WHERE it stopped. M1 does not stop at the end scene for
-        # every stage (§93, t04), so this is a weaker signal than progress and
-        # that is exactly why `allow_manual_complete` is on for M1 too.
-        distance, index = self._nearest_end_pose(stage)
-        if is_move:
-            # The arm's end pose says nothing about a move stage (its start pose
-            # IS one of its end poses to 0.001 rad for t03/t10); the base travel
-            # above is the corroboration. nn_dist is recorded, not required.
-            return CompletionResult(
-                reason=REASON_STALL_BASE,
-                elapsed_s=elapsed,
-                ticks=stage.ticks,
-                stall_s=stalled,
-                nn_dist=distance,
-                nn_index=index,
-                departed_s=stage.departed_at_s,
-                **travel_fields,
-            )
-        if distance is None or distance > stage.params.end_pose_tol_rad:
+        # LAST, after every other rule has granted the completion, so
+        # `grip_refused_ticks` counts exactly the ticks on which the gripper was
+        # the only thing standing between the stage and "complete". Both models,
+        # move and manip alike (t03 turns while holding the tubes).
+        if not self._grip_guarded(stage):
+            return result
+        grip_min = self._grip_held(stage, now)
+        if grip_min is None:
+            if stage.grip_refused_ticks == 0:
+                logger.warning(
+                    f"stage {stage.params.number} ({stage.params.name}): every "
+                    "other completion rule passed, but the gripper hold guard "
+                    f"REFUSED -- both grippers must read >= "
+                    f"{self.settings.grip_hold_min} on every tick of the last "
+                    f"{self.settings.stall_s:.1f} s; last measured (left, right) = "
+                    f"{stage.grip_last}. An empty grip is not a finished stage. "
+                    "It ends on the right arrow or the timeout."
+                )
+            stage.grip_refused_ticks += 1
             return None
-        return CompletionResult(
-            reason=REASON_STALL_NN,
-            elapsed_s=elapsed,
-            ticks=stage.ticks,
-            stall_s=stalled,
-            nn_dist=distance,
-            nn_index=index,
-            departed_s=stage.departed_at_s,
-            **travel_fields,
-        )
+        return dataclasses.replace(result, grip_meas_min=grip_min)
+
+    def _grip_guarded(self, stage: _Stage) -> bool:
+        return int(stage.params.number) in self.settings.grip_hold_stages
+
+    def _grip_held(self, stage: _Stage, now: float) -> float | None:
+        """Smallest gripper reading over the stall window, or None if the guard refuses.
+
+        The SAME window ``_stalled`` judged (``stall_s``), and every tick in it:
+        a grip that let go and closed again inside the window is not a hold. A
+        tick with no reading or a non-finite one refuses outright -- ``nan <
+        x`` is False, so a NaN would otherwise have passed as "holding".
+        """
+        settings = self.settings
+        window = self._covered_window(stage, now, settings.stall_s)
+        if window is None:
+            return None
+        lowest = math.inf
+        for sample in window:
+            if sample.grips is None or len(sample.grips) != len(GRIPPER_KEYS):
+                return None
+            for value in sample.grips:
+                if not (math.isfinite(value) and value >= settings.grip_hold_min):
+                    return None
+                lowest = min(lowest, value)
+        return lowest
 
     def _base_travel_ok(self, stage: _Stage) -> bool:
         """Has a "move" stage covered `move_base_fraction` of the demonstrated
@@ -1249,6 +1383,12 @@ class CompletionMonitorStep(ProcessorStep):
             if best is None or distance < best:
                 best, best_index = distance, index
         return (best, best_index)
+
+
+def _round_or_none(values: Sequence[float] | None, index: int) -> float | None:
+    if values is None or index >= len(values) or not math.isfinite(values[index]):
+        return None
+    return round(values[index], 5)
 
 
 def _as_float(value: Any) -> float:

@@ -66,4 +66,5 @@
 - 진행도 p 는 4 s 부터 초당 ≈0.07 로 일정하게 올라 **14.0 s 에 0.95** 를 넘고 0.96~0.98 로 유지 → 러너 자동 완료. 잡았는지와 무관한 시계 모양.
 - 그리퍼 실측: **왼손 0.007 에서 멈춤(쥠) · 오른손 0.000 까지 닫힘(빈손)** — 「아깝게 놓침」 과 맞다. 시연 t02 106 ep 는 끝에서 양손 0.0060~0.0072(0.002 미만 0개).
 - 완료 가드 후보(구현은 codex 뒤, 사용자 결정): **t02·t03·t04 는 양손 그리퍼 실측 ≥ 0.004 일 때만 완료**(시연 100% 통과). 다른 단계엔 그리퍼 신호가 없다.
+- **구현됨 (10/12 22:40 UTC, 사용자 지시)**: 체인 러너 `completion.py` 그리퍼 쥠 가드 — `chain.completion.grip_hold_stages: [2, 3, 4]`·`grip_hold_min: 0.004`, 정지 창(3 s) **매 틱 양손**. 실기 1011_2203 프레임에 다시 대 보면 끝 3 s 오른손 최솟값 0.000 → **거부**(사람 판정 「놓침」 과 일치). 거부된 단계는 → 키·타임아웃으로 끝나고 `reason_detail` 에 `grip_refused_ticks`·`grip_meas_last_left/right` 가 남는다. codex 검토 지적 없음, stage_runner 테스트 308 통과(실패 1 `test_a_dead_camera_falls_back_to_the_direct_base_command` 는 변경 전에도 실패). 설명: `configs/chain/README.md` 「그리퍼 쥠 가드」. **로봇 PC 는 `git pull` 뒤 체인 러너를 쓰면 자동 적용** — 끄려면 YAML 에서 `grip_hold_stages: []`.
 - J10·J14 t02(2155·2157)는 허브에 없다 — 업로드 요청은 `eval_real_list.md` 「판정 토너먼트」 절.

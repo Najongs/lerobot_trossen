@@ -218,6 +218,12 @@ class CompletionConfig:
     # come from.
     move_base_fraction: float = 0.5
     manip_arm_fraction: float = 0.4
+    # The gripper hold guard (10/12, robot PC 1011_2203): on these stages both
+    # grippers must read >= grip_hold_min over the whole stall window before the
+    # stage may complete. See completion.CompletionSettings for the measurement
+    # behind t02·t03·t04 and 0.004. `[]` turns the guard off.
+    grip_hold_stages: list[int] = field(default_factory=lambda: [2, 3, 4])
+    grip_hold_min: float = 0.004
     # control_time_s = stage p90_s * this. Reaching it is a chain failure.
     timeout_factor: float = 1.3
     # The right arrow means "this stage is done, go on". ON for BOTH models by
@@ -247,6 +253,8 @@ class CompletionConfig:
             departure_base_fwd_m=self.departure_base_fwd_m,
             move_base_fraction=self.move_base_fraction,
             manip_arm_fraction=self.manip_arm_fraction,
+            grip_hold_stages=tuple(int(number) for number in self.grip_hold_stages),
+            grip_hold_min=self.grip_hold_min,
         )
 
 
