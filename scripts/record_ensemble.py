@@ -181,6 +181,19 @@ except ImportError:  # lerobot 0.4.0/0.4.1 spelling
     )
 import lerobot.scripts.lerobot_record as lerobot_record
 
+# SmolVLA ActionQuery(J38) — 이 프로세스와 **spawn 워커**(이 모듈을 다시 실행한다, `_proc_main`)에 load hook 을 건다.
+# 워커는 플러그인 등록(register_third_party_plugins)을 거치지 않아, 이것이 없으면 쿼리가 버려진 채 추론한다 (codex 10/12).
+# 로봇 SDK 를 끌어오지 않도록 패키지가 아니라 파일 경로로 연다. 쿼리 키가 없는 체크포인트에는 무동작.
+import importlib.util as _ilu
+
+_AQ_SPEC = _ilu.spec_from_file_location(
+    "smolvla_action_query",
+    _REPO_ROOT / "packages/lerobot_robot_trossen/src/lerobot_robot_trossen/smolvla_action_query.py",
+)
+_aq = _ilu.module_from_spec(_AQ_SPEC)
+_AQ_SPEC.loader.exec_module(_aq)
+_aq.install_load_hook()
+
 
 def _pop_arg(name: str, default: str) -> str:
     """Remove ``--name=value`` (or ``--name value``) from argv; draccus rejects unknowns."""
@@ -273,6 +286,7 @@ def _proc_main(
         if device.type == "cuda":
             torch.cuda.set_device(device)
         policy = SmolVLAPolicy.from_pretrained(path, config=config).to(device).eval()
+        _aq.verify(policy, path)  # 쿼리가 파일에 있는데 안 실렸으면 fatal 로 부모에 알린다
         shared: dict = {}
         results.put(("ready", None))
     except BaseException as exc:  # noqa: BLE001
