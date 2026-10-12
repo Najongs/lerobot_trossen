@@ -879,6 +879,10 @@ def install(
     def _state(self) -> _State:
         state = getattr(self, "_ens_state", None)
         if state is None:
+            # 첫 추론 전, 부모 프로세스의 정책도 확인한다 -- 플러그인 훅 설치가 실패해 lerobot 이 그 예외를 삼켰으면
+            # 여기서 멈춘다 (쿼리 키 없는 체크포인트는 무동작). 워커는 _proc_main 에서 따로 확인한다 (§94.50).
+            if self.config.pretrained_path:
+                _aq.verify(self, self.config.pretrained_path)
             state = _State(ACTTemporalEnsembler(coeff, self.config.chunk_size))
             state.ens.reset()
             state.pending = ACTTemporalEnsembler(coeff, self.config.chunk_size)
