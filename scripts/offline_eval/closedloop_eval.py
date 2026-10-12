@@ -164,7 +164,10 @@ def main() -> None:
     st_all = np.stack([np.asarray(x, dtype=np.float32) for x in ds.hf_dataset["observation.state"]])
     act_all = np.stack([np.asarray(x, dtype=np.float32) for x in ds.hf_dataset["action"]])
 
+    from _aq_guard import aq  # J38 쿼리를 싣고, 안 실렸으면 멈춘다
+
     policy = SmolVLAPolicy.from_pretrained(path).to(dev).eval()
+    aq.verify(policy, path)
     pre, post = make_pre_post_processors(policy.config, pretrained_path=path)
     C, D = policy.config.chunk_size, policy.config.max_action_dim
     std = st_all.std(0) + 1e-6

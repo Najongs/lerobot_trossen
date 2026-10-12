@@ -124,7 +124,10 @@ def main() -> None:
     if args.state_shift:
         state_all = torch.stack([torch.as_tensor(x) for x in ds.hf_dataset["observation.state"]]).float()
 
+    from _aq_guard import aq  # J38 쿼리를 싣고, 안 실렸으면 멈춘다
+
     policy = SmolVLAPolicy.from_pretrained(policy_path).to(dev).eval()
+    aq.verify(policy, policy_path)
     pre, post = make_pre_post_processors(policy.config, pretrained_path=policy_path)
     C, D = policy.config.chunk_size, policy.config.max_action_dim
     gen = torch.Generator(device=dev).manual_seed(args.seed)

@@ -36,7 +36,7 @@ def attach(flow, n: int) -> bool:
     if old is not None:
         if old.shape[0] != n:
             raise ValueError(f"이미 붙은 쿼리 {tuple(old.shape)} 와 n={n} 이 다르다")
-        if not _wrapped(flow):  # 파라미터만 남고 메서드가 원본으로 돌아간 경우(pickle 왕복 등) -- 다시 감싼다
+        if not _wrapped(flow):  # 파라미터만 남고 메서드가 원본인 경우 -- 다시 감싼다 (인스턴스 메서드라 정책 객체 pickle·torch.save 는 안 된다)
             _wrap(flow)
         return False
     emb = flow.vlm_with_expert.get_vlm_model().text_model.get_input_embeddings().weight  # (V, H)
