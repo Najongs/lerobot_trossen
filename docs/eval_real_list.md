@@ -3,6 +3,19 @@
 > **사용자(10/10)**: 「오프라인 평가를 너무 신뢰하지 말고 Eval 실제로 다 돌려보게 리스트에 표로 정리해둬」. 오프라인 열은 **순서를 정하는 참고**일 뿐이고 판정은 이 표의 실기 결과다. 회차 상세·명령 정본은 [`eval_queue_1008.md`](eval_queue_1008.md)(O·A·R·S·V·N·C·E 번호)와 [`model_selection_1009.md`](model_selection_1009.md) §3, 누적 성공률은 [`eval_scoreboard.md`](eval_scoreboard.md). 학습 쪽 종합 표는 sim `docs/loop_board.md`.
 > 서버: 1호기 = DGX1 · 2호기 = sandia · 실기 = Trossen PC1(사람이 실행, Claude 는 명령·기록).
 
+## ⭐ 판정 토너먼트 — t02 를 먼저 가른다 (DGX1 → Trossen PC1, 2026-10-12 11:00 UTC, 사용자 「그렇게 진행해」)
+> 학습 레버(시드·120K·드롭아웃·GIST 정제/비율·통계·이동만 GIST)는 오프라인에서 전부 #2(J14) 자리였고, 오프라인 지표 셋은 실기 t02 를 못 갈랐다(sim §94.43·§94.46.1·§94.52). 그래서 **아래 T1~T3 을 아래 S0~S11 보다 먼저** 돌린다 — 실기 회차를 「무엇이 t02 를 가르나」 에 집중한다. 10/11 실기에서 t02 루프 21 Hz·페이싱 FIRED 0 → 느림·튐은 안전 제한 탓이 아니다.
+
+| 순서 | 무엇을 가르나 | 회차 (t02, 자리 A, 1 ep 씩, 같은 시작 짝으로 번갈아) | 명령 |
+|---|---|---|---|
+| **T1** 시작 자세 vs 레시피 | 10/11 B(#3) 만 시연 속도·경계 튐 0.6×(J14 는 25×). 그런데 B 는 **러너로 지정 시작 자세에서** 출발했다 — 둘 중 무엇이 원인인가 | ① **#2 J14 를 러너로**(지정 시작 자세) ② **#3 B 를 일반 경로로**(eval_najy, 러너 없이) | ① `LEROBOT_CHUNK_SMOOTH_TICKS=3 EXEC=60 FROM_STAGE=2 TO_STAGE=2 scripts/eval_chain.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 j14run_t02` ② `HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_drop_prog_27D_60k_s1000 2 60 1` — **②는 17D 진행도 모델이라 eval_najy.sh 가 거부하면** 그 사실을 적고 ①만 |
+| **T2** 청크 경계 블렌딩 | J14 의 경계 점프 25× 가 실행 층(교체 순간) 문제인가 | #2 J14 를 블렌딩 **켬/끔** 짝 2회 (+ 여유 있으면 #29·#32 도 켬 1회씩) | 끔 = 위 T1 이전과 같은 `HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 2 60 1` · 켬 = 앞에 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10` 추가(교체 순간 이전 청크와의 차이를 5차식으로 10틱 이상에 걸쳐 0 으로) — 로그에 seam blend 활성 줄 확인 |
+| **T3** 조작에서 GIST 를 뺀 효과(사용자 가설) | 「이동은 GIST, 조작은 우리만」 | #32(J36) ↔ #2 번갈아 t02 2+2 (가능하면 t05 2+2) | `HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30mv_sw_27D_60k_s1000 2 60 1` ↔ #2 같은 명령 |
+
+- **판정 뒤**: T1 이 「시작 자세」 면 이후 전 모델을 러너 단일 단계(지정 시작 자세)로 돌린다 · T2 가 「블렌딩이 튐을 없앤다」 면 이후 기본값에 넣는다 · T1~T3 에서 t02 를 통과한 레시피만 다음 태스크로. 나머지 행(S0~S11)은 그 뒤.
+- **허브 업로드 요청 (DGX 재예측용)**: 10/11 의 **`eval_najy_1011_2155_base_t02_e60`(J10)·`eval_najy_1011_2157_base_t02_e60`(J14)** 이 허브에 없다(B 의 `eval_1011_2203_chain_b60_t02_e60` 은 있다 — DGX 가 분석 중). 로봇 PC 캐시 `~/.cache/huggingface/lerobot/kiroaiseoul/` 에 있으면 `huggingface-cli upload kiroaiseoul/<이름> <폴더> --repo-type dataset --private` 로 올려 달라. 이번 T1~T3 회차도 `push_to_hub` 기본값(true) 그대로 둔다.
+- 회차마다 맨 아래 「결과 기록」 에 한 줄 + `eval_najy_results_1012.md`(새로) 에 상세 → `origin main` push.
+
 ## 로봇 PC 전달 — 돌릴 순서 (DGX1 → Trossen PC1, 2026-10-11 12:30 UTC)
 > 로봇 PC 결과는 10/08 이후 없다. **아래 S0~S11 순서로 돌리고**, 회차마다 맨 아래 「결과 기록」 표에 한 줄 + 상세는 `eval_najy_results_1011.md`(§9 양식) → `origin main` push. 표의 모델 23개는 전부 `kiroaiseoul/…` **public 확인**(10/11 12:20 UTC, HF API). 사용자 지시(10/11): 「Eval 돌릴 거 리스트업 올려서 Trossen PC 에 전달」.
 
