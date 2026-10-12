@@ -1,3 +1,16 @@
+# SmolVLA ActionQuery load hook (trossen-ai-simulation J38) -- FIRST, before any robot
+# class is registered: if installing it fails, the whole plugin import fails, so
+# `--robot.type` is not found and the run dies loudly instead of silently running a J38
+# checkpoint without its queries (lerobot's attempt_import only logs plugin errors).
+# A no-op for checkpoints without `model.action_queries` (all ACT, J18/J37 SmolVLA).
+# lerobot loads with strict=False, so without it the queries are dropped with a single
+# "Unexpected key(s)" warning. After load the hook verifies the queries against the file.
+# scripts/record_ensemble.py installs it again for its spawn workers (they never import
+# this plugin). Byte-identical to trossen-ai-simulation/scripts/smolvla_action_query.py.
+from .smolvla_action_query import install_load_hook as _install_action_query_hook
+
+_install_action_query_hook()
+
 from .bi_widowxai_follower import BiWidowXAIFollowerRobot
 from .config_bi_widowxai_follower import BiWidowXAIFollowerRobotConfig
 from .config_widowxai_follower import WidowXAIFollowerConfig
@@ -8,7 +21,6 @@ from .fast_obs_patch import apply_fast_observation_patch
 from .loop_rate_log import apply_loop_rate_logging_patch
 from .chunk_execution_patch import apply_chunk_execution_patch
 from .task_onehot_patch import apply_task_onehot_patch
-from .smolvla_action_query import install_load_hook as _install_action_query_hook
 
 # On by default; set LEROBOT_FAST_OBS=0 to opt out. lerobot imports this package
 # on startup (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is
@@ -30,15 +42,3 @@ apply_chunk_execution_patch()
 # Widens the policy state to [arms, 0, 0, one_hot] for multi-stage ACT
 # checkpoints trained with a stage one-hot (trossen-ai-simulation train_multi.py).
 apply_task_onehot_patch()
-
-# Always installed; a no-op unless a checkpoint's model.safetensors contains
-# `model.action_queries` (SmolVLA + ActionQuery, trossen-ai-simulation J38).
-# lerobot loads policies with strict=False, so without this hook those query
-# weights would be dropped with a single "Unexpected key(s)" warning and the
-# policy would run without them. A J38 run must print
-# "[action_query] model.action_queries (64) ..." at load -- if it doesn't, stop.
-# The module is byte-identical to trossen-ai-simulation/scripts/smolvla_action_query.py.
-# Not wrapped in try/except on purpose (codex 10/12): a failed install must be loud.
-# The hook also verifies the loaded queries against the file; scripts/record_ensemble.py
-# installs it again for its spawn workers, which never import this plugin.
-_install_action_query_hook()

@@ -36,13 +36,24 @@ def attach(flow, n: int) -> bool:
     if old is not None:
         if old.shape[0] != n:
             raise ValueError(f"이미 붙은 쿼리 {tuple(old.shape)} 와 n={n} 이 다르다")
+        if not _wrapped(flow):  # 파라미터만 남고 메서드가 원본으로 돌아간 경우(pickle 왕복 등) -- 다시 감싼다
+            _wrap(flow)
         return False
     emb = flow.vlm_with_expert.get_vlm_model().text_model.get_input_embeddings().weight  # (V, H)
     h = emb.shape[1]
     g = torch.Generator().manual_seed(_SEED)
     idx = torch.randint(0, emb.shape[0], (n,), generator=g)
-    init = emb.detach().float().cpu()[idx] * math.sqrt(h)
-    flow.action_queries = nn.Parameter(init.to(emb.device))  # fp32 -- 학습 파라미터
+    init = emb.detach()[idx.to(emb.device)].float() * math.sqrt(h)  # 고른 행만 fp32 로
+    flow.action_queries = nn.Parameter(init)  # fp32 -- 학습 파라미터
+    _wrap(flow)
+    return True
+
+
+def _wrapped(flow) -> bool:
+    return bool(getattr(getattr(flow.embed_prefix, "__func__", None), "_aq_wrapper", False))
+
+
+def _wrap(flow) -> None:
 
     # 원본은 **클래스 함수**로 부른다 -- 인스턴스의 bound method 를 클로저로 잡으면 deepcopy 한 사본이 원본 인스턴스를 계속 쓴다
     def embed_prefix(self, *args, **kwargs):
@@ -55,8 +66,8 @@ def attach(flow, n: int) -> bool:
                 torch.cat([pad_masks, torch.ones(b, q.shape[1], dtype=pad_masks.dtype, device=pad_masks.device)], dim=1),
                 torch.cat([att_masks, qa], dim=1))
 
+    embed_prefix._aq_wrapper = True
     flow.embed_prefix = types.MethodType(embed_prefix, flow)
-    return True
 
 
 def install_load_hook(policy_base=None) -> None:
@@ -69,6 +80,7 @@ def install_load_hook(policy_base=None) -> None:
 
     def _load_as_safetensor(cls, model, model_file, *args, **kwargs):
         from safetensors import safe_open
+        model._aq_model_file = str(model_file)  # verify 가 허브를 다시 찾지 않고 **실제로 읽은 파일**과 대조하게
         with safe_open(str(model_file), "pt") as f:
             if KEY in f.keys():
                 n = int(f.get_slice(KEY).get_shape()[0])
@@ -97,10 +109,11 @@ def _model_file(checkpoint) -> str:
     return hf_hub_download(repo_id=str(checkpoint), filename="model.safetensors")
 
 
-def verify(policy, checkpoint) -> int:
-    """로드 **뒤** 확인: 파일의 쿼리 유무·값 == 모델. 어긋나면 RuntimeError. 쿼리 수(없으면 0)를 돌려준다."""
+def verify(policy, checkpoint=None) -> int:
+    """로드 **뒤** 확인: 파일의 쿼리 유무·값 == 모델, 그리고 embed_prefix 가 쿼리를 쓰는 래퍼인가. 어긋나면 RuntimeError.
+    쿼리 수(없으면 0)를 돌려준다. 훅을 거쳐 실렸으면 그때 읽은 파일을, 아니면 ``checkpoint`` 를 해석해 대조한다."""
     from safetensors import safe_open
-    f = _model_file(checkpoint)
+    f = getattr(policy, "_aq_model_file", None) or _model_file(checkpoint)
     with safe_open(f, "pt") as fh:
         want = fh.get_tensor(KEY) if KEY in fh.keys() else None
     flow = getattr(policy, "model", None)
@@ -114,4 +127,6 @@ def verify(policy, checkpoint) -> int:
                            f"load hook 이 이 프로세스에 없다. 쿼리 없이 돌리지 마라")
     if tuple(got.shape) != tuple(want.shape) or not torch.equal(got.detach().float().cpu(), want.float()):
         raise RuntimeError(f"[action_query] 실린 쿼리가 {f} 의 값과 다르다")
+    if not _wrapped(flow):
+        raise RuntimeError("[action_query] 쿼리 파라미터는 있는데 embed_prefix 가 쿼리를 쓰지 않는다(원본 메서드)")
     return int(want.shape[0])
