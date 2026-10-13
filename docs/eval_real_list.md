@@ -5,6 +5,7 @@
 
 ## ▶▶ 다음 회차 (DGX1 → Trossen PC1, 2026-10-13 04:00 UTC) — 아래 10/13 00:40 표(P0~P5)는 **끝났다**
 > 근거: [`eval_najy_results_1013.md`](eval_najy_results_1013.md) 「DGX1 답 (10/13 04:00 UTC)」. task02 실패는 **첫 닫힘이 「시연 튜브 자리」 에서 일어나는 것** 하나로 모인다(ACT·SmolVLA 12회차 전부). 오늘 튜브는 시연보다 랙 **안쪽(뒤) 구멍**에 꽂혀 있었다 [영상 판독, 사람 확인 필요]. 또 학습 task02 의 투명 튜브 장면은 6 ep 뿐이다(ep 0~99 는 빨간 튜브).
+> **DGX 쪽 진행**: J41(task02 학습/홀드아웃 재분할, 투명 튜브 6 → 27 ep)이 ≈10:00 UTC 에 투입돼 ≈20:00 UTC 에 끝난다. 그때 이 표에 #38 로 단다. 단 **task02 전용 ACT 두 개도 10/13 프레임에서 J14 와 같은 자리에서 닫았다** — 재분할만으로 바뀐 구멍을 따라갈 것은 기대하기 어렵다. 그래서 D2 와 아래 녹화가 본 처치다.
 > P0: `git pull origin main` (action 폭 검사가 `eval_najy.sh` 에 들어갔다 — **B(17D)는 이제 DRY_RUN 에서 거부**된다. 한 번 확인).
 
 | 순서 | 무엇 | 명령 | 볼 것 |
@@ -13,6 +14,7 @@
 | **D2 = R1** | task02 투명 튜브를 **시연 ep 100~132 와 같은 구멍** 에(`docs/run_logs/2026-10-13_eval_najy/dgx_t02_rack_real_vs_demo.png` 와 대조), 로봇 자리 그대로 | `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 2 60 1` | 잡는가 — 잡으면 원인은 튜브 자리 |
 | D3 = R2 (D2 실패 때만) | 같은 구멍에 **빨간 튜브** | D2 와 같은 명령 | 투명 튜브 학습 6 ep 가 원인인가 |
 | D4 | 그다음 task04 부터 태스크 순서대로, ACT 는 블렌딩 켬 | — | — |
+| **녹화 (사용자 10/13 「투명 튜브도 데이터가 있으면 좋긴 하겠다」)** | **task02 투명 튜브 시연 추가** — 목표 40 ep 이상. 매 ep 마다 **튜브를 꽂는 구멍을 바꾼다**(10/13 회차처럼 안쪽 구멍 포함, 좌우 튜브 따로). 로봇 정지 위치도 ±5 cm 범위에서 조금씩 바꾼다. 출발 자세는 지금 시연처럼 그대로 | `lerobot-record` 로 새 repo(`kiroaiseoul/task02_pickup_tubes_clear_<날짜>`). 기존 `task02_pickup_tubes` 를 덮어쓰지 않는다(`push_to_hub` 기본 true 주의) | ep 마다 꽂은 구멍(예: 「L 뒤2·R 뒤4」)을 `~/eval_logs` 메모나 결과 문서 표에 남긴다 — DGX 가 구멍별로 성능을 가른다 |
 | 올려 줄 것 | t03 회차 1139·1141·1143·114526 의 `basevel.csv` (베이스 저속 비선형을 속도 구간별로 잰다) | `docs/run_logs/2026-10-13_eval_najy/` 에 사본 | — |
 
 ## ▶ 지금 돌릴 것 — 한 장 (DGX1 → Trossen PC1, 2026-10-13 00:40 UTC, 사용자 「지금 Eval 돌려볼거 정리해서 Trossen PC 에 넘겨줘」)
