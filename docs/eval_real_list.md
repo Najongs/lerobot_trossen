@@ -3,6 +3,23 @@
 > **사용자(10/10)**: 「오프라인 평가를 너무 신뢰하지 말고 Eval 실제로 다 돌려보게 리스트에 표로 정리해둬」. 오프라인 열은 **순서를 정하는 참고**일 뿐이고 판정은 이 표의 실기 결과다. 회차 상세·명령 정본은 [`eval_queue_1008.md`](eval_queue_1008.md)(O·A·R·S·V·N·C·E 번호)와 [`model_selection_1009.md`](model_selection_1009.md) §3, 누적 성공률은 [`eval_scoreboard.md`](eval_scoreboard.md). 학습 쪽 종합 표는 sim `docs/loop_board.md`.
 > 서버: 1호기 = DGX1 · 2호기 = sandia · 실기 = Trossen PC1(사람이 실행, Claude 는 명령·기록).
 
+## ▶ 지금 돌릴 것 — 한 장 (DGX1 → Trossen PC1, 2026-10-13 00:40 UTC, 사용자 「지금 Eval 돌려볼거 정리해서 Trossen PC 에 넘겨줘」)
+> 10/11 뒤로 실기 결과가 없다. 그래서 **10/12 토너먼트 T1~T3(t02)이 그대로 1순위**다. 그 사이 새로 생긴 것은 둘이다. ⓐ 러너 **그리퍼 쥠 가드**(`b58a686`)가 생겼다 — t02·t03·t04 는 정지 창 3 초의 매 틱에 양손 그리퍼가 ≥ 0.004 여야 자동 완료된다. 10/11 B t02 의 거짓 완료(오른손 0.000)를 막는다. ⓑ **SmolVLA 짝 #35(J37)·#36(J37a)** 이 생겼다.
+> 아래 P0 → P5 순서로 돈다. 1 ep 씩, 매 회차 `DRY_RUN=1` 로 한 번 찍고, e-stop 을 대기한다. 자리 A(시연 자리)에서, 같은 장면·같은 시작 짝으로 번갈아 돈다. 회차 1개 ≈ 5~7 분이라 P1~P4 는 ≈ 2 h 다.
+
+| 순서 | 무엇을 가르나 | 명령 (`~/NAJY/lerobot_trossen` 에서) | 회차 | 볼 것 · 기록 |
+|---|---|---|---|---|
+| **P0** 준비 | 코드 받기 | `git pull origin main` → `git log --oneline \| grep -c b58a686` 이 1 | — | 러너(`eval_chain.sh`) 회차에서 빈손이면 이제 자동 완료가 안 된다 — `→` 키나 timeout 으로 끝난다(정상) |
+| **P1 = T1** | 시작 자세 vs 레시피 | ① #2 J14 를 러너로: `LEROBOT_CHUNK_SMOOTH_TICKS=3 EXEC=60 FROM_STAGE=2 TO_STAGE=2 scripts/eval_chain.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 j14run_t02` ② #3 B 를 일반 경로로: `HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_drop_prog_27D_60k_s1000 2 60 1` — 17D 라 거부되면 그 사실만 적고 ① 만 | 1 + 1 | 시연 속도·경계 튐. 로그에 `gripper hold guard REFUSED` 가 나오면 그 줄의 `(left, right)` 값을 적는다 |
+| **P2 = T2** | 청크 경계 블렌딩 | 끔: `HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 2 60 1` · 켬: 같은 명령 앞에 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10` | 2 + 2 (끔·켬·끔·켬) | 로그에 seam blend 활성 줄이 있는지, 경계 튐, 성공 여부 |
+| **P3 = T3** | 조작에서 GIST 를 뺀 효과 | #32: `HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30mv_sw_27D_60k_s1000 2 60 1` ↔ #2(P2 의 끔 명령) | t02 2 + 2 (여유 있으면 t05 2 + 2: `HOT=5/11 … 5 60 1`) | 성공·실패 분류 |
+| **P4** SmolVLA 셋 | fp32 원본 효과 · VLM 언프리즈 효과 | `POLICY=kiroaiseoul/<repo> scripts/eval_smolvla.sh 2 rec 1` 을 #12 `NAJY_smolvla_all11_gist30_60k_s1000` → #35 `NAJY_smolvla_all11_gist30_fp32_unfreeze_60k_s1000` → #36 `NAJY_smolvla_all11_gist30_fp32_60k_s1000` 순서로 번갈아 (여유 있으면 t01 도 같은 순서) | t02 3 (+ t01 3) | #12 의 실패(끝을 못 잡고 계속 감, 떨림)가 #36(fp32 만)·#35(+언프리즈)에서 줄어드나 |
+| **P5** | 허브 업로드 (DGX 재예측용) | `huggingface-cli upload kiroaiseoul/eval_najy_1011_2155_base_t02_e60 ~/.cache/huggingface/lerobot/kiroaiseoul/eval_najy_1011_2155_base_t02_e60 --repo-type dataset --private` · 같은 꼴로 `…_2157_base_t02_e60` | — | 10/13 00:05 UTC 에 허브에서 둘 다 없음을 확인했다 |
+
+- **판정 규칙**은 바로 아래 토너먼트 절 「판정 뒤」 그대로다. P1~P4 가 끝나면 그 아래 「로봇 PC 전달」 S0~S11 로 간다.
+- **기록**: 회차마다 맨 아래 「결과 기록」 에 한 줄을 쓰고, 상세는 `eval_najy_results_1013.md`(새로)에 쓴 뒤 `git push origin main`. 러너 회차는 `events.jsonl` 의 `stage_end` 에 `grip_refused_ticks`·`grip_meas_last_left/right` 가 남는다 — 지우지 마라.
+- **곧 추가된다**: #37 J38(SmolVLA + ActionQuery 64, VLA-Adapter 방식)이 ≈10/13 14:00 UTC 에 나온다. 그때 이 표에 행을 단다. 로드 로그에 `[action_query] model.action_queries (64) 를 붙여 싣는다` 가 없으면 **중단** — 쿼리 없이 도는 것이다.
+
 ## ⭐ 판정 토너먼트 — t02 를 먼저 가른다 (DGX1 → Trossen PC1, 2026-10-12 11:00 UTC, 사용자 「그렇게 진행해」)
 > 학습 레버(시드·120K·드롭아웃·GIST 정제/비율·통계·이동만 GIST)는 오프라인에서 전부 #2(J14) 자리였고, 오프라인 지표 셋은 실기 t02 를 못 갈랐다(sim §94.43·§94.46.1·§94.52). 그래서 **아래 T1~T3 을 아래 S0~S11 보다 먼저** 돌린다 — 실기 회차를 「무엇이 t02 를 가르나」 에 집중한다. 10/11 실기에서 t02 루프 21 Hz·페이싱 FIRED 0 → 느림·튐은 안전 제한 탓이 아니다.
 
@@ -94,6 +111,7 @@
 | 33 | `NAJY_act_all11_c100_gist30_sw_27D_60k_s1000` | J14 + 통계 가중(stats_by_weight), sandia(J36a) | 조작 7/8 (t11 .29) · GIST ho 8/8 | #2(J14 s1000)와 같은 시작 짝 — 통계만 다름(그리퍼 std .007→.005) | 2 | public | — |
 | 34 | `NAJY_act_all11_c100_gist30mv_sw_27D_60k_s2000` | GIST 이동 단계만 + 통계 가중, sandia(J36-s2000) | 조작 7/8 (t07 .39) · GIST ho 1/8(예상) · 원핫 0/10 | J36(DGX1 s1000)과 같은 회차 — 「이동은 GIST, 조작은 우리만」. 원핫 경로가 닫혀 단일 단계 HOT 결과 해석 주의 | 3 | public | — |
 | 35 | `NAJY_smolvla_all11_gist30_fp32_unfreeze_60k_s1000` | **SmolVLA** J18 + 학습 파라미터 fp32 원본(bf16 갱신 소실 수정) + **VLM 텍스트 언프리즈**(lr 1e-5), 60K, DGX1(J37) — 배포본은 J18 과 같은 dtype 배치(bf16), VLM 텍스트 61.7% 가 J18 과 다름 | 우리 ho 조작 7/8 (t08 .46) · GIST ho 조작 7/8 (t04 .46) = J18 과 같은 띠 — sim §94.56 | **#12(J18) 와 같은 시작 짝** — VLM 을 풀면 SmolVLA 가 「끝」 을 잡나(#12: 도달 뒤 계속 감·떨림 1.26/s); `scripts/eval_smolvla.sh` 를 #12 와 같은 설정으로, t01·t02 | 2 | **public(10/12 22:01 UTC)** | J37 |
+| 36 | `NAJY_smolvla_all11_gist30_fp32_60k_s1000` | **SmolVLA** J18 + 학습 파라미터 fp32 원본만(VLM 동결 — J18 과 같은 학습 범위), 60K, DGX1(J37a) — 배포본은 J18 과 같은 dtype 배치, vlm_text 0% 변경(동결 확인) | 채점 중 (sim §94.57) | **#12·#35 와 같은 시작 짝** — #12 → #35 → #36 을 번갈아: #36 vs #12 = 「fp32 원본 효과」, #35 vs #36 = 「언프리즈 효과」. t02(·t01) | 2 | **public(10/13 00:12 UTC)** | J37a |
 
 **순서 제안**(옛 요약 — 위 「로봇 PC 전달」 S0~S11 이 정본): 우선 1 → #1 exec A/B(1 h) → #2·#12 선정 맞대기(≈3 h, #12 public 뒤) → #3 R1·R2(1 h) → 우선 2(#4·#5·#6·#9·#13·#14·#15) → 우선 3 → 선정 뒤 #17·#18. 무접촉 ① 은 모델마다 10분이라 **먼저 전부 돌려 두면** 이후 순서를 바꿀 근거가 생긴다.
 
