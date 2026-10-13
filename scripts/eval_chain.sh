@@ -115,7 +115,9 @@ _norm_flag TELEOP_BASE "$TELEOP_BASE"; TELEOP_BASE=$NORM_FLAG
 case "$MODEL" in
   M1)  REPO=kiroaiseoul/NAJY_act_all11_hot_27D_120k_s1000; YAML=configs/chain/chain_m1_all11.yaml;  SHORT=m1 ;;
   TPH) REPO=kiroaiseoul/NAJY_act_all11_tph_27D_120k_s1000; YAML=configs/chain/chain_tph_all11.yaml; SHORT=tph ;;
-  */*) REPO=$MODEL; YAML=configs/chain/chain_tph_all11.yaml; SHORT=base ;;
+  # 16D action(진행도 없음) 체크포인트를 repo id 로 줄 때는 CHAIN_YAML=configs/chain/chain_m1_all11.yaml
+  # (has_progress: false). 폭과 안 맞으면 preflight 가 그대로 거부한다.
+  */*) REPO=$MODEL; YAML=${CHAIN_YAML:-configs/chain/chain_tph_all11.yaml}; SHORT=base ;;
   *)   echo "모델은 M1|TPH|<허브 repo id>" >&2; exit 2 ;;
 esac
 [[ -f "$YAML" ]] || { echo "!! $YAML 이 없다" >&2; exit 2; }

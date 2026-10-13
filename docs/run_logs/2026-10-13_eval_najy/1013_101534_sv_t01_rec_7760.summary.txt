@@ -1,0 +1,1 @@
+[lerobot_robot_trossen] LEROBOT_TASK_ONEHOT=0/0 installed
