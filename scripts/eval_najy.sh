@@ -94,6 +94,12 @@ if cfg.get("temporal_ensemble_coeff") is not None:
     sys.exit("체크포인트에 temporal_ensemble_coeff 가 박혀 있다 -- n_action_steps>1 과 같이 못 쓴다")
 if ex > chunk:
     sys.exit(f"exec {ex} > chunk {chunk}")
+# action 폭: lerobot-record 는 녹화 데이터셋의 action(16D)으로 정책 출력 차원을 덮어쓴다 --
+# 17D(진행도 칸) 체크포인트는 가중치 로드에서 size mismatch 로 죽는다(10/13 1050_hot, 로봇 미구동).
+# 진행도 모델은 러너(scripts/eval_chain.sh)만 싣는다.
+act_dim = cfg["output_features"]["action"]["shape"][0]
+if act_dim != 16:
+    sys.exit(f"체크포인트 action={act_dim}D -- 이 경로는 16D 만 싣는다. 17D(진행도) 모델은 scripts/eval_chain.sh <repo id> 로")
 # 2라운드 체크포인트는 같은 원핫을 ACT 인코더의 별도 토큰으로도 받는다:
 # observation.environment_state (type ENV, shape [K]) 가 추가로 선언되고 state 는 그대로 16+K 다.
 # 거부하지 않는다 -- 폭만 본다. 패치가 그 키를 전처리 단계에서 채운다.
