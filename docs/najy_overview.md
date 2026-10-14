@@ -1,5 +1,6 @@
 # NAJY 다단계 ACT — 전체 현황 한 장 (2026-10-09 저녁 갱신)
 
+> **10/14 갱신 — 최신 요약은 [`najy_attempts_insights_1014.md`](najy_attempts_insights_1014.md)(시도·성과·인사이트·정정 표)와 [`model_selection_1014.md`](model_selection_1014.md)(선정안)이 먼저다.** 아래 본문은 10/09 기준이라 일부 결정(SmolVLA 재개·외부 데이터·J10 1순위)이 그 뒤에 바뀌었다.
 > 새 세션은 [`HANDOFF_najy_1009.md`](HANDOFF_najy_1009.md) 부터 — 목표·확정 교훈 8·돌아가는 런·후보 체크포인트·두 서버 루프·열린 결정·다음 순서가 한 장에 있다. 이 문서는 그 뒤의 전체 맥락.
 
 학습(`trossen-ai-simulation`, private)과 실기 Eval(이 레포)로 나뉘어 있던 내용을 **이 레포에서 한 번에 볼 수 있게** 모은 것이다.
