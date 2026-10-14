@@ -52,3 +52,21 @@ ACT 배포 모델(M1·M2·M3)은 `kiroaiseoul/task01~11` 만 쓰므로 무관하
 - 좌측 그리퍼 단위가 라디안인 셋이 있다(미터와 ×0.017453 차이) — `corpus_distribution_audit.md` §1
 - `mrrl-emcnei` 의 열 회전: 매니페스트는 2칸, 실측 오프셋은 3칸 — **미해결 충돌**
 - 목록: sim 레포 `docs/trossen_16d_public_datasets.md`
+
+## 6. 베이스가 기록되지 않은 에피소드 — 에피소드 통째로 0 (2026-10-14 DGX1 실측)
+녹화 세션 단위로 베이스 속도가 안 잡혀 **에피소드 내내 x.vel·theta.vel 이 정확히 0** 인 구간이 있다. action 과 state 베이스 칸이 둘 다 0 이다(§2 — state 는 action 의 복사). 팔·영상은 정상이라 에러 없이 학습에 들어간다.
+- **GIST**: 라벨 `*_labels.csv` 의 `data_issue = mobile_base_not_captured(frozen_at=[0.0, 0.0])` 가 이것이다. `make_manifest.py:39` 가 `success==1 & data_issue 없음` 만 남겨 **학습 매니페스트에는 0 ep** 이다. task9 원본(`kiroaiseoul/task09_close_refrigerator_gist`, 1,897 ep)은 1,895 ep 가 플래그라 사실상 빠지고 `_0804`(정상 998 ep)만 쓴다.
+- **우리 데이터에는 라벨이 없어 걸러지지 않았다** — `all11_tr_hot_gist30.json`(#2 J14) 학습분 기준:
+
+| 데이터셋 | 내내 0 인 ep (학습분) | 번호 | 비고 |
+|---|---|---|---|
+| `task05_tube_disposal` | 5 / 59 | 0, 53~56 | 베이스 거의 정지 단계 |
+| `task06_pickup_beaker_and_move_to_refrigerator` | 5 / 160 | 48~52 | **이동 단계 — ep 50 영상은 냉장고 앞까지 이동, 명령은 0 → 라벨이 틀림** |
+| `task07_open_refrigerator` | 67 / 223 | 43~52, 125~181 | 움직임 p99 0.017 |
+| `task08_takeout_and_put_beaker` | 103 / 201 | 0~100, 200~204 | 움직임 p99 0.004 |
+| 그 밖의 우리 7셋 | 0 | — | — |
+
+- **14D 판은 같은 에피소드의 사본**이라 똑같이 물려받는다: `task05_tube_disposal_14D`(5)·`task06_…_14D`·`_14D_all`(48~52)·`task07_open_refrigerator_14D`(68)·`task08_…_14D`(109)·`_14D_333data`(106). 깨끗한 새 녹화는 `task08_takeout_and_put_beaker_0930`(90 ep, 0 없음 — `_14D_333data` 의 새 90 ep 와 같다)과 task06 `_14D_new_3` 계열(문구가 「shake」 로 다름).
+- 에피소드 **중간** 미기록은 찾지 못했다: 이동 단계에서 2 s 이상 내부 0 구간은 그동안 팔 변위도 0.02~0.13 rad 라 실제 정지로 판단 [중간 끊김을 영상으로 확인하지는 않음].
+- 홀드아웃 셋에도 이런 ep 가 섞여 있을 수 있다 — 오프라인 베이스 지표가 조금 흐려진다.
+- 찾는 법: 에피소드별 `max |action[14:16]| == 0`. 처치는 학습 매니페스트 `episodes` 에서 빼기 — sim `configs/datasets/all11_tr_hot_gist30_basefix.json`(J49).
