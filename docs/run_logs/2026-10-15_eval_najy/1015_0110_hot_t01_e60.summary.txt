@@ -1,0 +1,14 @@
+== 1015_0110_hot_t01_e60 종료 코드 0 · 팔 한 틱 상한 0.1
+[lerobot_robot_trossen] LEROBOT_TASK_ONEHOT=1/11 installed
+INFO 2026-10-15 01:11:05 ot_patch.py:455 LEROBOT_TASK_ONEHOT=1/11: one-hot step inserted before the normalizer
+INFO 2026-10-15 01:11:16 ot_patch.py:252 LEROBOT_TASK_ONEHOT: stage 1/11 active -- policy state 14 -> 27 (base slots zeroed)
+-- 루프 주기 (phase=policy 마지막 3줄 — mean 을 녹화 주기 20.9 Hz 와 비교)
+INFO 2026-10-15 01:11:30 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.1 Hz, min=19.1 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+INFO 2026-10-15 01:11:31 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=20.8 Hz, min=16.3 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=26ms
+INFO 2026-10-15 01:11:33 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.2 Hz, min=19.5 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+-- 팔 페이싱 발동 횟수: 0
+-- 팔 한 틱 상한에 잘린 arm-tick (policy): 12 (phase 끝 줄 합; 창 합 12; 필터 전 경고줄 0)
+-- 베이스 시리얼 재등록: WARNING 2026-10-15 01:11:16 al_rearm.py:174 LEROBOT_BASE_SERIAL_REARM: active for this policy loop at 21 fps (fd 51 -> /dev/ttyUSB0).
+-- 에피소드 시작 자세 (POSE-START = 첫 정책 틱, POSE = 리셋 마지막 줄):
+   INFO 2026-10-15 01:11:16 ls/utils.py:227 Recording episode 0
+   INFO 2026-10-15 01:11:17 se_guide.py:201 POSE-START task01 | 목표까지 0.21 rad | 가장 큰 차 L j3 -8° | L: j0 -1→+0 j1 +60→+60 j2 +30→+35 j3 +35→+27 j4 +0→+0 j5 -0→+0 | R: j0 +0→+0 j1 +59→+60 j2 +30→+32 j3 +35→+28 j4 -0→+0 j5 +0→+0
