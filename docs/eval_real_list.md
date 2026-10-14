@@ -7,6 +7,7 @@
 > **사용자(10/14)**: 「Eval 실험은 항상 태스크 순서로 정리해서 표로 만들고 뭘 검증하려고 하는건지도 잘 적어둬. 확인하기 쉽게」. 그래서 아래 표는 **task02 → task11 순서**이고, 행마다 「검증하려는 것」 을 질문 한 줄로 적었다. 위에서부터 돌면 된다.
 > **옛 지시 표는 전부 끝났거나 이 표로 대체됐다** — 10/13 D1~D4 · 10/13 P0~P5 · 10/12 T1~T3 · 10/11 S0~S11. 근거는 [`eval_najy_results_1013.md`](eval_najy_results_1013.md) 「DGX1 답」 · sim §94.63.
 > **지금까지**: 실기에 올린 모델 7개(#1·#2·#3·#12·#32·#35·#36). 성공은 #2 J14 의 t01(10/11)·t03(10/13) 둘뿐. **task02 는 10/11·10/13 전부 실패** — 모델이 시연에서 튜브가 있던 자리로 가서 닫는데, 10/13 튜브는 그보다 안쪽 구멍에 있었다. **t04~t11 은 청크 100 모델로 아직 한 번도 안 돌았다.**
+> **정정(DGX1, 10/14)**: 바로 위 「10/13 튜브는 그보다 안쪽 구멍」 은 틀렸다 — 사람 확인으로 구멍은 시연과 같았고, 어긋난 것은 **로봇 자리**다(10/14 재생 시험, [`eval_najy_results_1014.md`](eval_najy_results_1014.md)). 아래 순서 1~3 의 「구멍」 조건도 「로봇 자리」 로 읽는다.
 > **공통**: 1 ep 씩 · 회차마다 `DRY_RUN=1` 한 번 · e-stop 대기 · 회차 ≈ 5~7 분 · 먼저 `git pull origin main`. ACT 는 **블렌딩 켬 기본**, `HOT=<s>/11` 필수, exec 60, w=3. 17D 모델(#3 B)은 `eval_chain.sh` 단일 단계로만(`eval_najy.sh` 는 거부한다).
 > **ACT 명령** — 아래 `ACT(<s>, #n)` 은 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=<s>/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/<repo> <s> 60 1` 이다.
 > repo: **#2** `NAJY_act_all11_c100_gist30_27D_60k_s1000`(J14, 지금 기준 모델) · **#44** `NAJY_act_all11_c100_gist30_sdrop30_27D_60k_s1000`(J42, 팔 state 드롭아웃 .3) · **#43** `NAJY_act_all11_c100_gist30_sdrop30_27D_60k_s2000`(#44 시드 짝) · **#32** `NAJY_act_all11_c100_gist30mv_sw_27D_60k_s1000`(GIST 이동 단계만)
