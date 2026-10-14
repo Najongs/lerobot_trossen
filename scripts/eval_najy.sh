@@ -70,6 +70,12 @@ esac
 
 NN=$(printf "%02d" "$STAGE")
 RUN="$(date +%m%d_%H%M)_${TAG}_t${NN}_e${EXEC}"
+# RUN_SUFFIX: 회차 이름 끝에 붙인다 (영숫자·_ 만). 시연 재생(LEROBOT_REPLAY_DATASET)은 repo 이름에 'replay' 가
+# 있어야 켜지므로 RUN_SUFFIX=replay_ep102 처럼 **사람이 명시**한다 — 자동으로 붙이면 남은 export 가드가 무의미해진다.
+if [[ -n "${RUN_SUFFIX:-}" ]]; then
+  [[ "$RUN_SUFFIX" =~ ^[A-Za-z0-9_]+$ ]] || { echo "RUN_SUFFIX 는 영숫자·_ 만" >&2; exit 2; }
+  RUN="${RUN}_${RUN_SUFFIX}"
+fi
 LOGDIR=~/eval_logs; mkdir -p "$LOGDIR"
 
 echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL"
