@@ -37,9 +37,16 @@ A round-1 checkpoint (M1/M2/M3, ``tph``) declares no ENV feature and the key is
 then NOT added -- behaviour is bit-for-bit what it was. Nothing else changes:
 ``observation.state`` is still 16+K wide in both rounds.
 
-The base slots are always written as exact zeros -- measured base velocity is
+By default the base slots are written as exact zeros -- measured base velocity is
 never fed to the policy, because the training data had ``action == state`` on
 those slots (a teleop echo) and a policy that sees them learns to copy them.
+
+The one exception is a checkpoint trained with ``base_state: vel`` (J45, 2026-10-14,
+the real-robot comparison of exactly that choice). ``LEROBOT_TASK_ONEHOT_BASE=vel``
+then copies the robot's measured ``x.vel``/``theta.vel`` (state slots 14 and 15)
+into the policy input instead of zeros. It requires a 16-D robot state
+(``include_base_in_state=true``) and a real one-hot (not ``0/0``); anything else is
+refused before the robot connects. Unset or ``zero`` is the old behaviour.
 
 The eval dataset keeps the robot's own 14/16-D state; only the policy input is
 widened. Use ``LEROBOT_BASE_VEL_LOG`` if you need the measured base velocity.
@@ -102,6 +109,16 @@ _STATE_KEY = "observation.state"
 _ENV_STATE_KEY = "observation.environment_state"
 _ARM_DIMS = 14
 _BASE_DIMS = 2
+_BASE_ENV_VAR = "LEROBOT_TASK_ONEHOT_BASE"
+_BASE_MODES = ("zero", "vel")
+
+
+def _base_mode() -> str:
+    """``LEROBOT_TASK_ONEHOT_BASE``: what goes into state slots 14-15 (default ``zero``)."""
+    mode = os.environ.get(_BASE_ENV_VAR, "").strip() or "zero"
+    if mode not in _BASE_MODES:
+        raise RuntimeError(f"{_BASE_ENV_VAR}={mode!r}: must be one of {_BASE_MODES}")
+    return mode
 
 
 def _parse(value: str) -> tuple[int, int]:
@@ -125,8 +142,16 @@ class TaskOneHotStep(ProcessorStep):
     """Widen ``observation.state`` to ``[arms, 0, 0, one_hot]``. Placed before the normalizer."""
 
     def __init__(
-        self, stage: int, k: int, expected_dim: int, env_k: int | None = None
+        self, stage: int, k: int, expected_dim: int, env_k: int | None = None,
+        base_mode: str = "zero",
     ):
+        if base_mode not in _BASE_MODES:
+            raise RuntimeError(f"{_BASE_ENV_VAR}={base_mode!r}: must be one of {_BASE_MODES}")
+        if base_mode == "vel" and k == 0:
+            raise RuntimeError(
+                f"{_BASE_ENV_VAR}=vel with {_ENV_VAR}=0/0: a 16-D vel checkpoint needs no step at all "
+                f"-- run it with include_base_in_state=true and no {_ENV_VAR}"
+            )
         if env_k is not None and env_k != k:
             # Defensive: _build_step already refuses this, but the step is also
             # constructed directly (tests, future callers) and a mismatch here
@@ -144,6 +169,7 @@ class TaskOneHotStep(ProcessorStep):
         # None == a round-1 checkpoint: the key is then never added, so such a
         # run is byte-for-byte what it was before round 2 existed.
         self.env_k = env_k
+        self.base_mode = base_mode
         self._announced = False
 
     def set_stage(self, stage: int) -> None:
@@ -194,9 +220,17 @@ class TaskOneHotStep(ProcessorStep):
                 f"or 16 (true)"
             )
         arms = state[..., :_ARM_DIMS]
-        base = torch.zeros(
-            *state.shape[:-1], _BASE_DIMS, dtype=state.dtype, device=state.device
-        )
+        if self.base_mode == "vel":
+            if width != _ARM_DIMS + _BASE_DIMS:
+                raise RuntimeError(
+                    f"{_BASE_ENV_VAR}=vel but the robot state is {width} wide -- run with "
+                    f"include_base_in_state=true so slots 14-15 carry the measured base velocity"
+                )
+            base = state[..., _ARM_DIMS:_ARM_DIMS + _BASE_DIMS].clone()
+        else:
+            base = torch.zeros(
+                *state.shape[:-1], _BASE_DIMS, dtype=state.dtype, device=state.device
+            )
         hot = torch.zeros(
             *state.shape[:-1], self.k, dtype=state.dtype, device=state.device
         )
@@ -217,7 +251,8 @@ class TaskOneHotStep(ProcessorStep):
             else:
                 logger.info(
                     f"{_ENV_VAR}: stage {self.index + 1}/{self.k} active -- policy state "
-                    f"{width} -> {new_state.shape[-1]} (base slots zeroed)"
+                    f"{width} -> {new_state.shape[-1]} "
+                    + ("(base slots = measured velocity)" if self.base_mode == "vel" else "(base slots zeroed)")
                     + (" (+env token)" if self.env_k is not None else "")
                 )
             self._announced = True
@@ -351,7 +386,7 @@ def _build_step(policy_cfg, stage: int, k: int) -> "TaskOneHotStep":
             f"one-hot is K={k}. The env token IS the state tail, so a different "
             "width means this is not the checkpoint you think it is."
         )
-    return TaskOneHotStep(stage, k, expected, env_k=env_k)
+    return TaskOneHotStep(stage, k, expected, env_k=env_k, base_mode=_base_mode())
 
 
 def _insert(preprocessor, step):

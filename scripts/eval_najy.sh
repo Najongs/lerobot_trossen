@@ -135,17 +135,40 @@ elif dim not in (14, 16):
 # 위 K 검사와 별개로, 체크포인트가 스스로 선언한 두 값끼리도 대조한다.
 if env_k is not None and env_k != dim - 16:
     sys.exit(f"env 토큰 {env_k}D 인데 state={dim}D 의 원핫 꼬리는 {dim - 16}D 다 -- 같은 벡터여야 한다")
+# 학습 때 state 베이스 칸을 무엇으로 채웠나 — 체크포인트의 multi_manifest.json(우리 sim 학습본)에서 읽는다.
+# 팀 허브 전문가처럼 매니페스트가 없으면 "" (예전 규칙 그대로). 항목마다 다르면 거부.
+from pathlib import Path
+ck = Path(sys.argv[1]); base = ""
+man = next((d / "multi_manifest.json" for d in (ck, ck.parent) if (d / "multi_manifest.json").exists()), None)
+if man is not None:
+    entries = json.loads(man.read_text()); entries = entries if isinstance(entries, list) else entries.get("entries", entries)
+    modes = {e.get("base_state") for e in entries}
+    if modes == {"zero"} or modes == {"vel"}:
+        base = modes.pop()
+    elif modes - {None}:
+        sys.exit(f"multi_manifest.json 의 base_state 가 항목마다 다르다 {sorted(map(str, modes))} -- 로봇에서 한 가지로 만들 수 없다")
 print(
     f"   체크포인트 state {dim}D · chunk {chunk}"
     + (f" · env 토큰 {env_k}D (2라운드)" if env_k is not None else "")
+    + (f" · 학습 base_state={base}" if base else " · 학습 base_state 기록 없음")
     + " 확인",
     file=sys.stderr,
 )
-print(dim)
+print(f"{dim}\t{base}")
 PY
 )
-INCLUDE_BASE=false
-if [[ -z "$ONEHOT" && "$STATE_DIM" == 16 ]]; then
+BASE_STATE=$(cut -f2 <<<"$STATE_DIM"); STATE_DIM=$(cut -f1 <<<"$STATE_DIM")
+# 베이스 칸 규약 (10/14 — J45 vel·J46~48 16D zero 실기 짝):
+#  - 원핫 모델: 기본은 베이스 칸 0. 학습이 vel 이면 include_base_in_state=true + 패치가 실측 속도를 칸에 넣는다(LEROBOT_TASK_ONEHOT_BASE=vel)
+#  - 원핫 없는 16D: 학습이 zero 면 14D + 0 채움(LEROBOT_TASK_ONEHOT=0/0). vel 이거나 기록이 없으면(팀 16D 전문가) 실측 속도(true) — 예전 규칙
+INCLUDE_BASE=false; ONEHOT_BASE=""
+if [[ -n "$ONEHOT" && "$BASE_STATE" == vel ]]; then
+  INCLUDE_BASE=true; ONEHOT_BASE=vel
+  echo "   원핫 + 학습 base_state=vel: --robot.include_base_in_state=true, 패치가 state 14-15 에 실측 속도를 넣는다 (로그 'base slots = measured velocity' 확인)"
+elif [[ -z "$ONEHOT" && "$STATE_DIM" == 16 && "$BASE_STATE" == zero ]]; then
+  ONEHOT="0/0"
+  echo "   16D + 학습 base_state=zero: 로봇 state 14D + 0 채움(LEROBOT_TASK_ONEHOT=0/0) — 실측 속도를 넣지 않는다 (로그 'zero-pad only' 확인)"
+elif [[ -z "$ONEHOT" && "$STATE_DIM" == 16 ]]; then
   INCLUDE_BASE=true
   echo "   16D 기준선: --robot.include_base_in_state=true (state 베이스 칸 = 실측 속도, 학습 때와 같은 조건)"
 fi
@@ -200,6 +223,7 @@ ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv"
   LEROBOT_LOOP_HZ_WINDOW="${LOOP_HZ_WINDOW:-30}")    # 루프 주기 요약 간격(프레임). 30 이 10/02 기준선과 같은 조건 (스파이크 지표)
 [[ "${CHUNK_LOG:-0}" == 1 ]] && ENVS+=(LEROBOT_CHUNK_EXECUTION_LOG="$LOGDIR/$RUN.chunks.csv")
 [[ -n "$ONEHOT" ]] && ENVS+=(LEROBOT_TASK_ONEHOT="$ONEHOT")
+[[ -n "$ONEHOT" ]] && ENVS+=(LEROBOT_TASK_ONEHOT_BASE="${ONEHOT_BASE:-zero}")   # 셸에 남은 값이 섞이지 않게 항상 명시
 # 리셋 구간에 1초마다 「현재 → 학습 시작 자세」 를 로그로 찍는다 (pose_guide.py, 로봇 동작은 안 바뀜). 끄려면 POSE_GUIDE=0
 [[ "${POSE_GUIDE:-1}" != 0 ]] && ENVS+=(LEROBOT_POSE_GUIDE="$STAGE")
 

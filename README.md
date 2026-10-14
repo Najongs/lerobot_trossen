@@ -913,8 +913,17 @@ which the robot cannot produce, so it fails in the normalizer on the first frame
 
 `LEROBOT_TASK_ONEHOT=<stage>/<K>` inserts one step into the policy preprocessor just before the
 normalizer that builds `[arms 0..13, 0, 0, one_hot(stage, K)]` from the robot's 14- or 16-wide
-state. The base slots are always exact zeros -- measured base velocity never reaches the policy.
+state. By default the base slots are exact zeros -- measured base velocity never reaches the policy.
 The eval dataset keeps the robot's own state.
+
+`LEROBOT_TASK_ONEHOT_BASE=vel` (2026-10-14) is the one exception: for a checkpoint trained with
+`base_state: vel` (J45, real list #49) it copies the robot's measured `x.vel`/`theta.vel` into slots
+14-15 instead of zeros. It needs `include_base_in_state=true` (16-D robot state; a 14-D state raises on
+the first frame) and a real one-hot (`0/0` is refused). Unset or `zero` is the old behaviour; the log
+says `(base slots = measured velocity)` instead of `(base slots zeroed)`. `scripts/eval_najy.sh` sets
+both from the checkpoint's `multi_manifest.json`: one-hot + `vel` → this mode; plain 16-D + `zero`
+(J46~J48) → `LEROBOT_TASK_ONEHOT=0/0` with a 14-D robot state; no manifest (team 16-D experts) →
+measured velocity as before.
 
 `LEROBOT_TASK_ONEHOT=0/0` is the **zero-pad only** form (2026-10-08): `[arms 0..13, 0, 0]` with no
 one-hot, for a plain 16-D checkpoint trained with `base_state: zero` and run with
