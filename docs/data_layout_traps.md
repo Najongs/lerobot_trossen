@@ -77,7 +77,7 @@ ACT 배포 모델(M1·M2·M3)은 `kiroaiseoul/task01~11` 만 쓰므로 무관하
 | 구분 | 데이터셋 | 새 ep | 학습 반영 |
 |---|---|---|---|
 | **사본(14D 재출력)** | `task01~05·07·09·10·11_*_14D`, `task08_*_14D`, `task09_*_14D_247data`, `task10_*_14D_baseprogress`(state 16D) | 0 | 반영할 것 없음. t05·t07·t08 사본은 베이스 미기록 ep 도 물려받는다(§6) |
-| **t06 새 녹화 — 과제 문구가 바뀜** | `task06_*_14D_new_2`·`_new_3`·`_recovery`·`task06_task06-2_*_new_2/_new_3` 등 여러 판에 나눠 있음 | 중복 빼고 **「Grab and shake the filled beaker, then move…」 111 ep**(중앙 947 프레임 — 옛 t06 보다 김, 흔들기 포함) + **「Move to the front of the fridge」 95 ep**(베이스만) + 「Pick up…」 5 ep | **어느 레시피에도 없다.** 기준 레시피 t06 은 옛 `task06_pickup_beaker_and_move_to_refrigerator`(200 ep, 흔들기 없음). 10/06 TPH 레시피만 `_new_2` 를 썼다 |
+| **t06 새 녹화** | `task06_*_14D_new_2`·`_new_3`·`_recovery`·`task06_task06-2_*_new_2/_new_3`·`task06-2_move_to_the_front_of_the_fridge_14D` — **같은 ep 가 여러 레포에 복제돼 있다** | 옛 200 ep 과 판끼리의 중복을 빼면(팔 명령 중간 60 프레임 대조, 이동 전용은 베이스 칸까지 대조) **흔들기 포함 t06 84 ep**(중앙 960 프레임) + **「Move to the front of the fridge」 96 ep**(베이스만, 세 레포에 같은 96 ep) + 「Pick up…」 5 ep(recovery 판, 양이 작아 제외) | **어느 레시피에도 없다.** 기준 레시피 t06 은 옛 `task06_pickup_beaker_and_move_to_refrigerator`(200 ep) |
 | t08 새 녹화 | `task08_takeout_and_put_beaker_0930` (= `_14D_333data`·`task08_task09_mixed_14D_580data` 의 새 90 ep) | 90 | **J50(#54) 만**(학습 72 ep) |
 | 소량 | `task06-1_grab_and_shake_*`(5) · `task10_*_hz0923`(2) · `task11_*_14D`(1) | 8 | 없음(양이 작다) |
 
@@ -85,4 +85,6 @@ ACT 배포 모델(M1·M2·M3)은 `kiroaiseoul/task01~11` 만 쓰므로 무관하
 - **GIST**: 학습분 베이스0·NaN 0(라벨 필터 `make_manifest.py:39` 가 걸렀고 실측으로도 0). t09 는 `_0804` 판.
 - 모든 판의 `fps` 표기는 30(실제 녹화 20~21 Hz, §90 과 같음).
 - **확인 안 한 것**: 영상·관측 시각 어긋남, 그리퍼 값 이상, 과제 라벨 오기 — 이번 감사는 베이스·NaN·중복만 봤다.
-- **열린 결정**: t06 의 목표 동작이 흔들기를 포함하는 새 정의인지(새 111 ep) — 그렇다면 기준 레시피의 t06 을 바꿔야 하고, 실기 재생 자(`…_new_2` ep93 은 옛 형식 ep)도 맞춰야 한다. 「Move to the front of the fridge」 95 ep 은 t06 을 잡기/이동으로 나눌 때 이동 쪽 데이터가 된다.
+- **정정(같은 날)**: 처음 「새 정의(흔들기) 111 ep」 이라 적은 것은 틀렸다. **흔들기는 원래 t06 에 있었다** — 옛 200 ep 레포에도 「Grab and shake the filled beaker, then move to the front of the fridge」 문구가 있고 GIST 이름도 `task6-shake-beaker-and-move-to-fridge` 다. 111 은 판끼리 중복을 덜 뺀 수였고 고유는 84 ep. 이동 전용 95 → 96.
+- **문구는 학습에 영향 없다**: `train_multi` 는 매니페스트 항목의 `task` 로 문구를 고정한다(t06 은 우리·GIST 셋 다 「Pick up the beaker and move to the refrigerator」). ACT 는 문구를 아예 안 보고(원핫), SmolVLA 는 그 고정 문구를 보고 `eval_smolvla.sh` 가 체크포인트 매니페스트의 문구를 그대로 쓴다(다르면 거부). 이동 전용 96 ep 을 t06 에 섞으면 같은 문구 아래 「잡고 이동」 과 「이동만」 이 섞이므로, 넣는다면 t06 을 둘로 나눠 **별도 단계(원핫·문구)** 로 넣는 것이 맞다.
+- 양이 작은 판(5·2·1 ep)은 eval 녹화일 수 있어 넣지 않는다(사용자 10/15).
