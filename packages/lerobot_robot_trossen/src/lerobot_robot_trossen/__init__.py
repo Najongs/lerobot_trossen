@@ -11,6 +11,17 @@ from .smolvla_action_query import install_load_hook as _install_action_query_hoo
 
 _install_action_query_hook()
 
+# ACT per-stage heads (trossen-ai-simulation J52/J53, §94.63) -- same rules as above:
+# installed FIRST so a failure fails the plugin import. A no-op unless the checkpoint's
+# `model.action_head.weight` is 3-D (K stage heads); then it attaches the heads and the
+# per-stage decoder query offsets before load and verifies them against the file after.
+# Without the hook such a checkpoint fails to load (shape mismatch), never silently.
+# The stage is read from the last K state slots, i.e. LEROBOT_TASK_ONEHOT=<i>/<K>.
+# Byte-identical to trossen-ai-simulation/scripts/act_stage_heads.py.
+from .act_stage_heads import install_load_hook as _install_stage_heads_hook
+
+_install_stage_heads_hook()
+
 from .bi_widowxai_follower import BiWidowXAIFollowerRobot
 from .config_bi_widowxai_follower import BiWidowXAIFollowerRobotConfig
 from .config_widowxai_follower import WidowXAIFollowerConfig

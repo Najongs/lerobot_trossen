@@ -14,7 +14,11 @@ from huggingface_hub import snapshot_download
 from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.factory import make_pre_post_processors
-path = snapshot_download(args.policy, repo_type="model")
+# ACT 단계 헤드(J52/J53) load hook -- 3차원 action_head 가 없는 체크포인트에는 무동작. 로봇 SDK 를 끌지 않게 파일 경로로 연다
+import importlib.util as _ilu
+_sp = _ilu.spec_from_file_location("act_stage_heads", Path(__file__).resolve().parents[2] / "packages/lerobot_robot_trossen/src/lerobot_robot_trossen/act_stage_heads.py")
+_sh = _ilu.module_from_spec(_sp); _sp.loader.exec_module(_sh); _sh.install_load_hook()
+path =snapshot_download(args.policy, repo_type="model")
 meta = LeRobotDatasetMetadata(args.dataset); n = meta.total_episodes
 episodes = sorted({int(round(i * (n - 1) / max(1, args.n_episodes - 1))) for i in range(args.n_episodes)})
 ds = LeRobotDataset(args.dataset, episodes=episodes, delta_timestamps={"action": [i / meta.fps for i in range(50)]})
