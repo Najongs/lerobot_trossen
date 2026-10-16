@@ -3,7 +3,377 @@
 > **사용자(10/10)**: 「오프라인 평가를 너무 신뢰하지 말고 Eval 실제로 다 돌려보게 리스트에 표로 정리해둬」. 오프라인 열은 **순서를 정하는 참고**일 뿐이고 판정은 이 표의 실기 결과다. 회차 상세·명령 정본은 [`eval_queue_1008.md`](eval_queue_1008.md)(O·A·R·S·V·N·C·E 번호)와 [`model_selection_1009.md`](model_selection_1009.md) §3, 누적 성공률은 [`eval_scoreboard.md`](eval_scoreboard.md). 학습 쪽 종합 표는 sim `docs/loop_board.md`.
 > 서버: 1호기 = DGX1 · 2호기 = sandia · 실기 = Trossen PC1(사람이 실행, Claude 는 명령·기록).
 
+## ▶ 10/16 정비 — 이 절만 본다 (DGX1 → Trossen PC1, 2026-10-16 KST)
+> **사용자(10/16)**: 「그래 실기 검토 한번 해보자. 리스트 다시 잘 정비해서 Trossen PC에 보내둬」. 아래에 쌓여 있던 「▶ 지금 돌릴 것」 절 8개(10/11~10/15)를 **이 절 하나로 합쳤다**. 옛 절은 비교 정의(C·O 번호)와 지난 명령의 기록으로만 남긴다 — **거기 명령은 돌리지 마라**. 이 절의 시각은 전부 **KST** 다(옛 절은 UTC 가 섞여 있다).
+> 바뀐 것 요약: ① t01 에 **베이스 회전 예산(bb105) 켬 ↔ 끔 3 대 3** 을 새로 넣었다(과회전을 실행 층에서 자르는 시험). 그리고 기존 「전문가 ↔ #27」·「#27 e30 ↔ e60」 과 **한 줄로 엮었다** — #27 기준 회차(e60·예산 끔) 3 회를 세 비교가 같이 쓴다. ② 10/16 단계 헤드 #58~#61 의 회차와 명령을 t04·t05·t08·t11 에 넣었다. ③ 결과가 이미 나왔거나 사용자가 건너뛴 것을 「안 하는 것 · 보류」 로 옮겼다(하이브리드 1→2, 흔든 시작 B 등). ④ 남은 회차 수를 행에서 다시 셌다.
+
+### 0. 시작 전 — 매 세션
+1. `cd ~/NAJY/lerobot_trossen && git pull origin main` (로봇 PC 의 origin = Najongs fork). 필요한 커밋: **08a0631**(단계 헤드 로드 훅 — #59·#60) · **베이스 회전 예산 커밋**(`git log --oneline | grep base_budget` 로 확인).
+   - **예산 커밋은 교차 검토(codex)를 받은 뒤 따로 올린다.** `git log` 에 `base_budget` 이 없으면 **bb105 회차만 건너뛰고** 나머지는 그대로 돈다. 그 커밋이 없는 체크아웃에서는 `BASE_BUDGET_DEG=105` 가 **조용히 무시된다**(예산 없이 돈다). 그래서 아래 확인 줄이 필수다.
+2. 처음 한 번 `DRY_RUN=1` 로 명령을 확인한다. e-stop 을 손에 두고, 회차는 1 ep 씩 돈다.
+3. **로그 확인 줄 — 없으면 그 회차를 중단한다**
+
+   | 모델 | 로그에 있어야 하는 줄 |
+   |---|---|
+   | 27D ACT 전부 (HOT 를 준 회차) | `installed` · `stage i/11 active` |
+   | #50 · #51 · #52 (원핫 없음 16D) | `zero-pad only` |
+   | #49 | `base slots = measured velocity` |
+   | #40 | `[action_query] model.action_queries (64) 를 붙여 싣는다` |
+   | #59 · #60 | `[stage_heads] 단계 헤드 K=11 를 붙여 싣는다` (없으면 shape 오류로 바로 죽는다) |
+   | **bb105 회차** | **`[base_budget] 켜짐`** (시작 직후). 발동하면 `[base_budget] 발동 — … tick …` 이 찍히고, 끝나면 `[base_budget] episode 1 끝: …` 이 찍힌다. **예산을 끈 회차에는 `[base_budget]` 줄이 하나도 없어야 한다** |
+4. **판정**: 같은 자리에서 번갈아(ABAB) 각 3 회씩 돌고, **성공 수가 2 이상 차이 날 때만** 판정한다. 짝 회차끼리는 진단 스위치(`CHUNK_LOG`·`POSE_GUIDE`)를 같게 둔다 — 기본값 그대로(`CHUNK_LOG` 끔). `CHUNK_LOG=1` 은 청크 실행기를 설치해 실행 경로가 바뀌므로 한쪽에만 켜면 안 된다.
+5. **함정**
+   - 같은 분 안에 다시 돌리면 FileExistsError 로 무효가 된다(10/15 0058·0103). 1분 띄운다.
+   - 재생 명령에서 `LEROBOT_REPLAY_DATASET` 가 빠지면 정책이 돈다(10/15 1059).
+   - 명령에 `| tail` 을 붙이지 않는다(실패해도 exit 0 이 된다).
+   - **`BASE_BUDGET_DEG` 는 `export` 하지 말고 명령 앞에만 붙인다.** 끔 회차는 이 변수가 없는 명령 그대로 돈다.
+6. **기록**: 회차마다 맨 아래 「결과 기록」 에 한 줄을 적고, 상세는 `eval_najy_results_1016.md`(새로 만든다)에 적는다. 그다음 `git push origin main`. 끝나면 `scripts/eval_najy_post.sh <회차>` 의 `.summary.txt` 에 `-- 베이스 회전 예산` 줄이 생긴다(bb105 회차만 내용이 있다).
+
+### 1. 지금까지 실기 (요약 — 상세는 결과 기록·날짜 문서)
+
+| 태스크 | 결과 | 비고 |
+|---|---|---|
+| t01 | **#27 3/3**(10/15 0104 · 1045 · 1053). #2 1/3(10/11 2143 랙 빈 성공 · 0054 +54° · 1047 전진 충돌). #39 0/2 · #49 0/1 · #29 0/1 · #25 0/2 · #1 0/2(출발 못 함) · SmolVLA 0/5 | 10/15 오전부터 재생 ep30 자리 + 바닥 표시. 그 전 1023~1031 은 자리가 어긋나 무효 |
+| t02 | **#40 1/1**(10/15 013856, 양손 쥐고 정지). 전문가 0/1+p(왼손). #2 는 10/11~10/15 전부 실패(A✓ 에서 왼손만 1 회) · #39 · #29 · #27 · #25 0/1 · #32 0/3 · #43·#44 전부 실패 | 재생 ep102 로 A✓ (10/14 1647) |
+| t03 | **#2 1/1**(10/13 1139, 빈손 출발). #32 · #3 · #36 0/1 | 튜브를 쥐고 출발한 청크 100 회차는 아직 없다 |
+| t04 · t05 | 청크 100 실기 없음(청크 30 세대만: t04 M1 1/1 · t05 전문가 e30 1/3+p · e100 1/1) | |
+| t06 | #40 0/1(10/15 110222, 후진 0.40 m·−51°, 출발 자세 미확인 → 판정에서 뺀다). 1059 는 재생이 아니었다(무효) | |
+| t07 ~ t11 | 실기 없음 | |
+
+### 2. 태스크 순서 표 — 행마다 1순위를 먼저, 시간이 남으면 2순위
+
+| 순서 | 태스크 | 검증하려는 것 | 자리 | 1순위 (이 순서로) | 2순위 | 결과 → 다음 |
+|---|---|---|---|---|---|---|
+| **1** | **task01 랙으로 이동** | ⓐ **베이스 회전 예산(bb105)이 과회전만 자르고 도착·정지를 해치지 않나** (새로) · ⓑ 단계 전문가가 도착도 더 정확한가 (전문가 ↔ #27) · ⓒ exec 30 이 도착 뒤 꼬리(묵은 청크 최대 2.9 s)를 줄이나, 출발은 막지 않나 (#27 e30 ↔ e60) · #2 를 3 회로 채움 · C4 #49 · C3 #39 | 재생 ep30 + 바닥 표시. 랙에 튜브 두 개(시연과 같게) | **(전문가 → #27 → #27 bb105 → #27 e30) ×3 → #2 → #2 → #39 → #49 (16)**. 예산 커밋이 아직 없으면 bb105 3 회만 빼고 돈다 | #36 → #36 → #4 → #9 → #4 → #9 → #32 → #50 → #2 랙 빈 → #2 랙 빈 → #31 → #60 (12) | **ⓐ** 회차마다 적는다: 발동 여부 · 발동 시각 · 막은 tick(`.summary.txt`) · 82° 도달 시각 · 끝 각도 · 랙 앞에서 멈췄나. bb105 성공 수가 끔과 같거나 많고 넘친 회차의 꼬리가 사라지면 **t01 기본값으로 켠다**(t03·t10 예산은 그 단계 시연으로 따로 정한다). bb105 가 성공을 2 회 이상 잃으면 폐기한다. **ⓑ** 전문가가 #27 보다 2 회 이상 많으면 t01 = 단계 전문가. **ⓒ** e30 이 이기면 팔·베이스 exec 분리를 구현한다(그 전에 실기 t02 프레임으로 베이스 누출을 확인). e10·e20 은 넣지 않는다(10/16 오프라인: 출발이 6 s 넘게 늦어진다). **#60** 은 끝에서 멈추나만 본다 |
+| 2a | task02 튜브 집기 (시연 튜브) | C1′ #40 성공이 우연인가 · 쿼리 효과인가(#36) · C5 전문가 · C5′ 같은 레시피 단계 전문가 #51 · 왼손 높이(#1 ×2 · #26, O15) · C3 #39 | 재생 ep102 로 A✓. 튜브는 매번 같은 시연 구멍 | (#40 → 전문가 → #36 → #2 → #39 → #51) ×3 → #1 → #1 (20) | #26 → #50 → #49 → #31 (4) | 양손 ✓, 왼손만 +p. #40 이 #2 보다 2 회 이상 많으면 t02 = SmolVLA. #36 도 #40 만큼 쥐면 쿼리는 이득이 없다. #51 이 #2 보다 2 회 이상 많으면 O11(11단계 한 모델 ≥ 단계 전문가)이 t02 에서 뒤집힌다 |
+| 2b | task02 (투명 튜브) | 투명 튜브를 더 배운 #41 이 #2 보다 잘 잡나 | 같은 A✓, 투명 튜브 | — | #2 → #41 → #2 → #41 → #40 (5) | #41 만 쥐면 투명 튜브 녹화를 추가한다 |
+| **3** | **task03 제자리 회전** | 이동 후보 #27 · **C4 베이스 속도 입력 #49 ↔ #2** · 블렌딩 켬/끔(O16) · #50 회전 출발 · 튜브 쥐고 출발(O14) | **양손에 튜브를 쥐어 준 채**, 재생 ep79 로 A✓ | (#2 → #27 → #49) ×3 (9) | (#2 → #2 블렌딩 끔) ×3 → #50 → #50 → #39 → #29 → #32 → #36 → 전문가 → #1 (14) | 비커 정면에서 멈추면 ✓, 회전각을 적는다(시연 ≈ −90°). **C4 의 판정은 이 행에서 한다** — t01 의 #49 는 2 회뿐이라 닫히지 않는다. #49 가 #2 보다 2 회 이상 많으면 베이스 속도 입력을 채택한다. 블렌딩 끔이 2 회 이상 적으면 블렌딩 켬을 확정한다. **#1 은 2순위 끝으로 내렸다**(t01 에서 2/2 출발하지 못했다) |
+| 4 | task04 붓기 | 청크 100 첫 실기 · #40 조작 · **단계 헤드 #59 ↔ #58**(t03 끝 자리 — 오프라인은 나빠진 경계) | 튜브를 쥐어 준 채, 재생 ep96 로 A✓ | #2 → #40 (2) | #39 → #29 → 전문가 → (#58 → #59) ×3 → #60 → #61 (11) | 붓는 동작까지 가면 ✓. #59 가 #58 보다 2 회 이상 많으면 단계 헤드가 경계 단계를 가른다 |
+| **5** | **task05 튜브 버리기** | C2 원핫이 단계를 고르나(HOT 4/11 vs 5/11) · C2′ 원핫 없는 #50 ↔ #2 · C5 전문가 · #40 · 조작 exec 길이(전문가 e30 · e60 · e100) · **단계 헤드 #59 ↔ #58**(t04 끝 자리) | 양손에 튜브, 재생 ep69 로 A✓. 원핫 시험은 장면·자리 그대로 HOT 만 4/11 | (#2 → 전문가 → #50) ×3 → #40 → #2 HOT=4/11 → #2 HOT=4/11 → #25 → #25 HOT=4/11 (14) | (전문가 e30 → e60 → e100) ×3 → #39 → #29 → #27 → #36 → #4 → #9 → #52 ×3 → (#58 → #59) ×3 → #60 → #61 (26) | 둘 다 트레이에 떨어뜨리면 ✓, 하나면 +p. HOT=4/11 에서도 버리면 「원핫은 단계를 못 고른다」 를 실기로 확정한다. 전문가 e100 이 e30 보다 2 회 이상 많으면 조작은 길게 실행한다 |
+| 6 | task06 비커 잡고 냉장고로 | 이동 후보 #27 · 잡기와 이동 중 어디서 실패하나 · #40 재시도 | 재생 ep93 으로 A✓ — **재생이 끝난 자세에서 정책을 시작한다**(10/15 #40 은 출발 자세를 확인하지 못했다) | #2 → #27 → #40 (3) | #39 → #29 → 전문가 (3) | 잡기 ✓/✗ 와 도착 ✓/✗ 를 **나눠** 적는다 |
+| 7 | task07 냉장고 열기 | 첫 실기 · #40 · #53 · #60 끝 정지 | 재생 ep184 로 A✓ | #2 → #40 (2) | #39 → #29 → 전문가 → #53 → #60 (5) | 문이 열리면 ✓. #60 은 끝에서 멈추나 |
+| **8** | **task08 비커 꺼내 놓기** | C3 확정(#39) · #40 · #53 ↔ #54(t08 새 녹화) · **단계 헤드 #59 ↔ #58**(t07 끝 자리) | 재생 ep157 로 A✓ | (#2 → #39) ×3 → #40 (7) | #29 → 전문가 → (#53 → #54) ×3 → (#58 → #59) ×3 → #60 (15) | 놓으면 ✓. #39 가 #2 보다 2 회 이상 많으면 lr cosine 을 채택한다. #54 가 2 회 이상 많으면 t08 새 녹화를 다음 레시피에 넣는다. **#58~#61 은 t08 출발이 약해졌으므로**(오프라인) #27 대체 후보로 쓰지 말고 #58 과의 비교로만 본다 |
+| 9 | task09 냉장고 닫기 | 첫 실기 · #40 · 닫기와 물러나기를 나눠 보기 | 재생 ep174 로 A✓ | #2 → #40 (2) | #27 → #39 → #29 → 전문가 (4) | 닫기 ✓/✗ 와 물러남 ✓/✗ 를 나눠 적는다 |
+| **10** | **task10 선반으로 이동** | 이동 후보 #27 · #32 | 비커를 쥐어 준 채, 재생 ep88 로 A✓ | #2 → #27 (2) | #32 → #39 → #29 → 전문가 → #1 (5) | 선반 앞에서 멈추면 ✓, 더 돈 각도를 적는다. **#1 은 2순위로 내렸다**(t03 과 같은 이유) |
+| 11 | task11 비커 선반에 놓기 | 첫 실기 · #40 · **단계 헤드 #59 ↔ #58**(t10 끝 자리) · #60 끝 정지 | 재생 ep98 로 A✓ | #2 → #40 (2) | #39 → #29 → (#58 → #59) ×3 → #60 → #61 (10) | 놓으면 ✓ |
+
+**남은 회차**: 1순위 79 회(t01 16 · t02 20 · t03 9 · t04 2 · t05 14 · t06 3 · t07 2 · t08 7 · t09 2 · t10 2 · t11 2), 2순위 114 회(t01 12 · t02 2a 4 + 2b 5 · t03 14 · t04 11 · t05 26 · t06 3 · t07 5 · t08 15 · t09 4 · t10 5 · t11 10). 옛 표의 추정 비율(85 회 ≈ 9 h, 자리 맞추기 포함)로 1순위 ≈8.4 h, 2순위 ≈12 h 다.
+
+**t01 베이스 회전 예산(bb105)이 무엇을 하나** — `packages/lerobot_robot_trossen/src/lerobot_robot_trossen/base_budget.py`
+- 에피소드(policy 구간)마다 **보낸 `theta.vel` 을 실측 시간으로 적분한 순회전**을 잰다. 0 에서 시작한다.
+- |순회전| 이 105° 에 닿으면 **같은 방향 `theta.vel` 만 0** 으로 바꾼다. 되돌리는 방향, `x.vel`, 팔은 그대로다.
+- 명령을 0 으로 줄이기만 한다. 안전 상수(sf 0.4 · 팔 0.1 rad · 베이스 ±1.0 · e-stop)는 그대로다.
+- 리셋(리더 팔) 구간에서는 작동하지 않는다.
+- 105° 의 근거: 시연 순회전 76~89°(중앙 82°) + 출발 각 어긋남 10° + 여유. **명령 단위**라 실측 회전은 이보다 작다.
+- `basevel.csv` 에는 예산이 적용된 명령이 남고, **데이터셋 action 칸에는 정책 원출력(예산 전)** 이 남는다. 예산 회차를 분석할 때 두 열을 혼동하지 마라.
+- 오프라인 미리보기(실기 t01 기록 명령에 다시 걸어 봄, `/raid/kiro-ai/eval/real/BUDGET_1016.log`, 폐루프 아님):
+  - 넘친 회차는 9.5~14 s 에 끊긴다: 0054 163° · 0101 140° · 1029 150° · 0100 109° → 전부 105°.
+  - #27 성공 회차 중 1053(최대 99°)·0104(100°)는 건드리지 않는다. 1045(107°)는 82° 를 6.4 s 에 지났고, 19.3 s 이후의 마지막 2°(105 → 107°)만 막힌다.
+  - 재생 ep30(82°)은 건드리지 않는다.
+
+### 3. 명령 — 태스크별 (복사해서 쓴다. 모든 정책 회차 앞에 그 단계 재생으로 A✓ 를 맞춘다)
+
+#### t01
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task01_move_to_tube_rack LEROBOT_REPLAY_EPISODES=30 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep30 HOT=1/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 1 60 1
+# #27 (e60, 예산 끔 — 기준)
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 1 60 1
+# #27 bb105 (예산 켬, e60) — 로그에 [base_budget] 켜짐 이 없으면 중단
+BASE_BUDGET_DEG=105 LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 1 60 1
+# #27 e30 (예산 끔)
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 1 30 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/task01_move_to_tube_rack_14D 1 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 1 60 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 1 60 1
+# #49
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_vel_27D_60k_s1000 1 60 1
+# #36
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_60k_s1000 scripts/eval_smolvla.sh 1 rec 1
+# #4
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s1000 1 60 1
+# #9
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=5 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c150_m1_27D_60k_s1000 1 60 1
+# #32
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30mv_sw_27D_60k_s1000 1 60 1
+# #50
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_nohot_16D_60k_s1000 1 60 1
+# #31
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist50_27D_60k_s1000 1 60 1
+# #60
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_headspad_27D_150k_s1000 1 60 1
+```
+
+#### t02 (2a · 2b)
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task02_pickup_tubes LEROBOT_REPLAY_EPISODES=102 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep102 HOT=2/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 2 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 2 rec 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 2 60 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 2 60 1
+# #51
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task02_c100_gist30_solo_16D_60k_s1000 2 60 1
+# #1
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000 2 60 1
+# #36
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_60k_s1000 scripts/eval_smolvla.sh 2 rec 1
+# #26
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s3000 2 60 1
+# #50
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_nohot_16D_60k_s1000 2 60 1
+# #49
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_vel_27D_60k_s1000 2 60 1
+# #31
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist50_27D_60k_s1000 2 60 1
+# #41
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=2/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_t02il_27D_60k_s1000 2 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/task02_pickup_tubes_14D 2 60 1
+```
+
+#### t03
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task03_turn_to_face_beaker LEROBOT_REPLAY_EPISODES=79 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep79 HOT=3/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 3 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 3 60 1
+# #27
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 3 60 1
+# #49
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_vel_27D_60k_s1000 3 60 1
+# #50
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_nohot_16D_60k_s1000 3 60 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 3 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 3 60 1
+# #32
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30mv_sw_27D_60k_s1000 3 60 1
+# #36
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_60k_s1000 scripts/eval_smolvla.sh 3 rec 1
+# #1
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000 3 60 1
+# #2 블렌딩 끔 (끔을 명시 — 셸에 켠 값이 남아도 끈다)
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=0 HOT=3/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 3 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/task03_turn_to_face_beaker_14D 3 60 1
+```
+
+#### t04
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task04_pour_liquid_from_tubes_to_beaker LEROBOT_REPLAY_EPISODES=96 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep96 HOT=4/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 4 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 4 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 4 rec 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 4 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 4 60 1
+# #58
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_ctrl_27D_150k_s1000 4 60 1
+# #59
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_heads_27D_150k_s1000 4 60 1
+# #60
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_headspad_27D_150k_s1000 4 60 1
+# #61
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_padhold_27D_150k_s1000 4 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task04_pour_liquid_from_tubes_to_beaker_60000 4 60 1
+```
+
+#### t05
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task05_tube_disposal LEROBOT_REPLAY_EPISODES=69 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep69 HOT=5/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 5 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 5 60 1
+# #50
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_nohot_16D_60k_s1000 5 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 5 rec 1
+# #25
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=5 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_drop_27D_60k_s1000 5 60 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 5 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 5 60 1
+# #27
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 5 60 1
+# #36
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_60k_s1000 scripts/eval_smolvla.sh 5 rec 1
+# #4
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s1000 5 60 1
+# #9
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=5 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c150_m1_27D_60k_s1000 5 60 1
+# #52
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task05_c100_gist30_solo_16D_60k_s1000 5 60 1
+# #58
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_ctrl_27D_150k_s1000 5 60 1
+# #59
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_heads_27D_150k_s1000 5 60 1
+# #60
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_headspad_27D_150k_s1000 5 60 1
+# #61
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=5/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_padhold_27D_150k_s1000 5 60 1
+# 전문가 (e60)
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task05_tube_disposal_60000 5 60 1
+# 전문가 e30
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task05_tube_disposal_60000 5 30 1
+# 전문가 e100
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task05_tube_disposal_60000 5 100 1
+# #2 원핫 시험 HOT=4/11 (장면·자리 그대로)
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 5 60 1
+# #25 원핫 시험 HOT=4/11
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=4/11 LEROBOT_CHUNK_SMOOTH_TICKS=5 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_drop_27D_60k_s1000 5 60 1
+```
+
+#### t06
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task06_task06-2_pickup_beaker_and_move_to_refrigerator_14D_new_2 LEROBOT_REPLAY_EPISODES=93 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep93 HOT=6/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 6 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=6/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 6 60 1
+# #27
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=6/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 6 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 6 rec 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=6/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 6 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=6/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 6 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task06_task06-2_pickup_beaker_and_move_to_refrigerator_14D_new_2 6 60 1
+```
+
+#### t07
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task07_open_refrigerator LEROBOT_REPLAY_EPISODES=184 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep184 HOT=7/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 7 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=7/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 7 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 7 rec 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=7/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 7 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=7/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 7 60 1
+# #53
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=7/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_basefix_27D_60k_s1000 7 60 1
+# #60
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=7/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_headspad_27D_150k_s1000 7 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task07_open_refrigerator_14D_260916 7 60 1
+```
+
+#### t08
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task08_takeout_and_put_beaker LEROBOT_REPLAY_EPISODES=157 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep157 HOT=8/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 8 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 8 60 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 8 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 8 rec 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 8 60 1
+# #53
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_basefix_27D_60k_s1000 8 60 1
+# #54
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_t08add_27D_60k_s1000 8 60 1
+# #58
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_ctrl_27D_150k_s1000 8 60 1
+# #59
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_heads_27D_150k_s1000 8 60 1
+# #60
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=8/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_headspad_27D_150k_s1000 8 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task08_takeout_and_put_beaker_100k_251data 8 60 1
+```
+
+#### t09
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task09_close_refrigerator LEROBOT_REPLAY_EPISODES=174 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep174 HOT=9/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 9 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=9/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 9 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 9 rec 1
+# #27
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=9/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 9 60 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=9/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 9 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=9/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 9 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task09_close_refrigerator_100k_250data 9 60 1
+```
+
+#### t10
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task10_move_to_beaker_shelf LEROBOT_REPLAY_EPISODES=88 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep88 HOT=10/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 10 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=10/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 10 60 1
+# #27
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=10/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 10 60 1
+# #32
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=10/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30mv_sw_27D_60k_s1000 10 60 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=10/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 10 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=10/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 10 60 1
+# #1
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=10/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_m1_27D_60k_s2000 10 60 1
+# 전문가
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/act_task10_move_to_beaker_shelf_14D_100k_fp32 10 60 1
+```
+
+#### t11 (단계 전문가 없음)
+```bash
+# 자리 맞추기(A✓) — 정책 회차마다 먼저
+LEROBOT_REPLAY_DATASET=kiroaiseoul/task11_place_beaker_on_the_shelf LEROBOT_REPLAY_EPISODES=98 LEROBOT_REPLAY_RUN_POLICY=0 RUN_SUFFIX=replay_ep98 HOT=11/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 11 60 1
+# #2
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=11/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 11 60 1
+# #40
+POLICY=kiroaiseoul/NAJY_smolvla_all11_gist30_fp32_aq64_60k_s1000 scripts/eval_smolvla.sh 11 rec 1
+# #39
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=11/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_cos_27D_60k_s1000 11 60 1
+# #29
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=11/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_dq_27D_60k_s1000 11 60 1
+# #58
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=11/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_ctrl_27D_150k_s1000 11 60 1
+# #59
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=11/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_heads_27D_150k_s1000 11 60 1
+# #60
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=11/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_headspad_27D_150k_s1000 11 60 1
+# #61
+LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 HOT=11/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_padhold_27D_150k_s1000 11 60 1
+```
+
+### 4. 안 하는 것 · 보류 (이유와 함께 — 학습한 모델은 전부 여기나 위 표에 있다)
+- **보류(사용자 10/15 건너뜀)**: 하이브리드 1→2(#27 t01 → 재생 ep102 → #40 t02). 이동·조작 모델이 각각 정해진 뒤 다시 올린다.
+- **스킵(사용자 10/15)**: 흔든 시작 B(O17 은 실기 미확인으로 남는다).
+- **안 함(10/16 오프라인)**: 팔·베이스 exec 분리 스위치와 t01 exec 10·20. t01 e30 ↔ e60 이 먼저 판정한다.
+- **#56 · #57**(#27 → 240K, 이동 가중 1.65 / 그대로): 2호기(sandia)에서 학습 중이다. 끝나면 DGX 가 채점하고 행을 따로 올린다. **지금은 명령이 없다.**
+- **#55**(#53 시드 짝): public 이지만 시드 짝 규칙(짝 모델이 실기에서 이긴 뒤)에 따라 #53 결과를 본 뒤에 돈다.
+- state 드롭아웃 #43~#48 · #19 · #33 · #7 · #14 · #10 · #11 · #20 · #3 · #8 · #24 · #37 · #21~#23 · 시드 짝 #5 · #6 · #30 · #34 · #38 · #42 · #46 · #47 · 옛 SmolVLA #12 · #13 · #35 · odom 입력: 이유는 옛 「▶ 10/15 한 번에」 절의 「안 하는 것」 그대로다.
+- **넘어오지 않은 옛 항목 — 이번 라운드에서 하지 않는다**
+  - 빨간 테이프, 자리 ±5 cm·±10° 다양화 녹화 → 이동 결과(t01·t03 판정) 뒤에 다시 정한다.
+  - t04 전문가 exec A1·A2 → t05 전문가 exec 비교로 대체했다.
+  - exec 60·다듬기 w=3 의 실기 3 대 3 → 이번엔 블렌딩(t03)과 exec(t01·t05)만 본다.
+- **아직 유효한 부탁(로봇 PC → DGX)**: t03 회차의 `basevel.csv` 업로드, `eval_najy_1011_2141` 재업로드. 시간이 날 때 한다.
+
 ## ▶ 10/15 한 번에 — 남은 것 · 오프라인으로만 닫은 결론 · 새 방향(하이브리드) 전부, 태스크 순서 (DGX1 → Trossen PC1, 2026-10-14 18:40 UTC) · 이 표만 본다
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > 시각 정정: 이 절은 2026-10-14 **17:34 UTC** 커밋(ea32470)이다.
 > **추가(10/16 05:00 KST, 1호기(DGX1) 단계 헤드 4런 끝)** — **#58~#61 을 표에 올렸다(전부 public).** #58 = #27 에서 그대로 +30K(대조), #59 = + 단계별 헤드, #60 = 헤드 + pad_hold, #61 = pad_hold 만. **#59·#60 은 로봇 플러그인의 새 로드 훅이 있어야 실린다** — 로봇 PC 에서 `git pull` 뒤 로그에 `[stage_heads] 단계 헤드 K=11 를 붙여 싣는다` 가 찍혀야 한다(없으면 shape 오류로 즉시 죽는다 — 조용히 틀리게 도는 경로는 없다). 회차: 같은 장면 경계 단계(t05 · t11 · t08 · t04)에서 **#58 과 번갈아** 각 3 회, #60 은 t01·t07·t11 끝에서 멈추나도 본다. **주의 — 4런 공통으로 t08 출발이 약해졌다**(오프라인 h100 비 #27 .58 → .20~.35, 이어 학습 자체 효과 + pad_hold 가 더함): t08 은 #27 대체 후보로 쓰지 말고 #58 과의 비교로만. 우선 2(1순위 회차 뒤). #53·#54·#55 는 public·채점 끝(t08 출발: #53 .58 → #54 1.05).
 > **추가·정정(10/15 01:40 UTC, 사용자 「오프라인 결론으로 닫힌 것 중 한 번에 돌려야 하는 것 없는지 다시 확인」)** — 빠져 있던 것을 넣었다. ① **실행 층 기본값(블렌딩 켬)도 실기 3 대 3 이 없었다**(10/13 1052 끔 ↔ 1053 켬 각 1 회, 둘 다 실패, 자리 A?, 동작 지표로만 정함) → t03(#2 가 10/13 1139 에 성공한 단계)에서 **#2 블렌딩 켬 ↔ 끔 번갈아 각 3 회**를 2순위에(같은 날·같은 자리에서 짝이 되도록 1순위 회차와 섞지 않는다, O16). exec 60·다듬기 w=3 도 실기 비교 없이 오프라인으로 정한 값이다 — 이번엔 블렌딩만. ② **흔든 시작(B) 시험이 어디에도 없었다** — 목표가 「흔든 시작에서 70%」 인데 「자리 어긋남을 보정하는 모델은 없다」 는 [추정]이고(model_selection §1), 오프라인 프록시는 변별력이 없다(sim §94.42). t01 #27 · t02 #40 · t03 #2 에 A✓ 에서 베이스만 5 cm / 10° 옮긴 회차를 2순위로(O17). ③ **t01 랙 튜브 장면** — 10/11 #2 성공 회차는 랙이 비어 있었고, 튜브 있는 장면에서 82° 지점 남은 회전 예측이 더 크다(10/15 재예측) → t01 「랙 빈」 #2 2 회(O18). ④ **#51(t02 단계 전문가, 같은 레시피)을 1순위 3 회로** — 모델 행은 「각 3 회」 인데 표는 2순위 2 회였다(불일치). 오프라인 t02 출발 GIST ho .98 vs #2 .70 으로 가장 강한 신호다. #52 는 2순위 3 회. ⑤ #50 을 t03 2순위에 2 회(위 23:30 줄에서 말만 하고 행에 없었다). ⑥ #53·#54(1호기 ≈10/15 09:20 UTC 끝)를 **허브에 있으면** t08 3 대 3 · t07 1 회로. ⑦ GIST 50% #31 을 t01·t02 스크리닝 1 회씩(O3 의 혼합 비율). ⑧ 2a 행의 「O16」 은 O15 의 오기 — 고쳤다. ⑨ **SmolVLA(#36·#40) 는 실행 층이 다르다** — `eval_smolvla.sh rec` 는 자체 commit 30 + fade 5 + 4 샘플 앙상블이고 블렌딩·다듬기 변수를 쓰지 않는다. t02 C1′(#40 ↔ 전문가 ↔ #2)은 「모델 + 그 모델의 실행 층」 비교로 읽는다. 블렌딩 끔 회차는 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=0` 을 명령에 명시했다(셸에 켜 둔 값이 있어도 끈다).
@@ -63,6 +433,7 @@
 - **안 하는 것** (10/15 01:40 UTC 다시 씀 — 학습한 모델은 전부 이유를 단다): state 드롭아웃 #43~#48(A✓ 에서 이득 없음, 10/14 선정) · **#19** J24 우리 데이터 품질 필터(M1 레시피, 오프라인 A·J10 과 같은 자리 §94.40 — 기준이 GIST 레시피로 바뀌어 그 정제판 #29 가 대신 돈다) · **#33** 통계만 바꾼 판(오프라인 통계 효과 0, §94.54) · **#7** 기하 증강(증강은 60K 에서 이득 없음 §94.37, 실기 t02 에서도 시작 폭 안 넓힘 §94.28) · **#14** M3 이동 4단계 묶음(청크 30 — 정지 시작에서 못 빠져나온다 §94.31; 이동 후보는 #27) · **#10·#11·#20** 청크 150 의 시드·진행도 판(C7 #4 ↔ #9 결과 뒤) · **#3·#8·#24·#37** 진행도 칸 17D(체인 러너 전용, 「거짓 완료」 §94.53 — 체인 bring-up 라운드에서) · **#21~#23** 진행도 없는 드롭아웃(#3 과 짝, 같은 라운드) · **#5·#6·#30·#34·#38·#42·#46·#47** 시드 짝(짝 모델이 실기에서 이긴 뒤) · **#12·#13·#35** 옛 SmolVLA(#12 bf16 갱신 소실 §94.49, #35 언프리즈 — #36·#40 이 대신) · **#55** #53 시드 짝(2호기 학습 중) · odom 입력(학습 모델 없음) · exec 60·다듬기 w=3 의 실기 3 대 3(이번엔 블렌딩만 — 다음 라운드 후보).
 
 ## ▶ 먼저 돌릴 것 — 실기 대기 모델 첫 실기, 태스크 순서 (DGX1 → Trossen PC1, 2026-10-14 15:10 UTC) · 10/15 첫 세션
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > **대체됨(10/14 17:34 UTC)** — 맨 위 「10/15 한 번에」 표가 이 절의 남은 회차를 포함한다. 비교 정의·명령 기록으로만 둔다.
 > **사용자(10/14)**: 「3. 시도와 성과 부분에 실기 대기 중인 것들이 많은데 그거 먼저 테스트 해보게 Eval 할 거 정리해서 Trossen PC 에 보내」. 진행 현황 덱(`/home/kiro-ai/NAJY/NAJY_진행현황_1014.pdf` 7·8쪽)에서 **학습·오프라인 채점은 끝났는데 실기를 한 번도 안 돈 레시피**를 모았다. 아래 「10/15~ 비교 라운드」 보다 **먼저** 돈다.
 > **방식**: 실기 첫 확인이라 **모델마다 태스크당 1 회 스크리닝**이다. 같은 자리 A✓ 에서 기준 #2 를 맨 앞(과 t02 는 맨 뒤)에 돌려 그날 자리·장면이 맞는지 확인한다. 되는 모델(부분 성공 포함)이 보이면 그 모델·태스크를 비교 라운드에서 3 회 대 3 회로 늘린다.
@@ -97,6 +468,7 @@
 - t04 는 이 세션에서 뺐다(붓기는 액체·비커 준비가 커서 비교 라운드 세션 2 에서 한꺼번에).
 
 ## ▶ 지금 돌릴 것 — 10/15~ 비교 라운드, 태스크 순서 (DGX1 → Trossen PC1, 2026-10-14 11:00 UTC) · 이 표만 본다
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > **대체됨(10/14 17:34 UTC)** — 맨 위 「10/15 한 번에」 표가 이 절의 남은 회차를 포함한다. 비교 정의·명령 기록으로만 둔다.
 > **(10/14 15:10 UTC 추가)** 이 라운드 **앞에** 위 「먼저 돌릴 것 — 실기 대기 모델 첫 실기」 세션을 돈다. 거기서 돈 #39·#29·#25·전문가 회차는 이 라운드의 같은 태스크 스크리닝 1 회로 센다.
 > **사용자(10/14)**: 「다 실기에서 비교 안 된 거라 모르겠다는데 왜 실기에 추가 안 한 거야. 다 추가해 비교를 해야 확정을 하지」. 그래서 지금까지 **오프라인으로만 정한 결정을 전부 실기 비교**로 넣었다. 아래 「비교 목록」 의 C1~C10 이 그것이고, 태스크 표의 「검증하려는 것」 칸에 어느 비교의 회차인지 적었다.
@@ -147,6 +519,7 @@ state 드롭아웃(#43·#44)은 10/14 에 A✓ 에서 이미 비교했다(이득
 - **기록**: 회차마다 맨 아래 「결과 기록」 에 한 줄(태스크 순서), 상세는 `eval_najy_results_<MMDD>.md` → `git push origin main`.
 
 ## ▶ 지금 돌릴 것 — 10/15 선정 라운드, 태스크 순서 (DGX1 → Trossen PC1, 2026-10-14 10:40 UTC) · 이 표만 본다
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > **대체됨(10/14 11:00 UTC)** — 사용자 「다 추가해 비교를 해야 확정을 하지」 로 맨 위 「10/15~ 비교 라운드」 가 이 표를 포함해 넓혔다. 이 표는 기록으로 둔다.
 > **사용자(10/14)**: 선정안 승인 — 기준 **#2 J14**, 도전 **#39 J39**(lr cosine) · **#29 J35**(GIST 정제), 대조 **#1 J10**(GIST 없음, t02 오른손만). 근거는 [`model_selection_1014.md`](model_selection_1014.md). state 드롭아웃(#43·#44·#45~#48)과 SmolVLA 는 이번 라운드에서 돌리지 않는다.
 > **핵심 규칙(10/14 로봇 PC 발견)**: 단계마다 **시연 ep 재생으로 자리 A✓ 를 먼저 맞춘다** — 재생(모델 없음)이 시연과 같은 타이밍으로 잡을 때까지 로봇을 옮긴 자리가 A✓ 다. 10/14 t02 는 첫 자리에서 재생도 빈손이었다. 재생 ep 는 DGX 가 고른 것이다(그 단계 최근 시연 중 시작 자세가 pose_guide 목표에 가깝고 길이가 중간인 것, t02 는 로봇 PC 가 쓴 ep102). 안 맞으면 다른 ep 로 바꿔도 된다.
@@ -173,6 +546,7 @@ state 드롭아웃(#43·#44)은 10/14 에 A✓ 에서 이미 비교했다(이득
 - 이 라운드가 끝나면 단계별로 「기준이 되는 단계 / 안 되는 단계」 가 나온다 — 그다음 흔든 자리(B) n≥10 은 그 모델로만.
 
 ## ▶ 지금 돌릴 것 — 10/14 한 장, 태스크 순서 (DGX1 → Trossen PC1, 2026-10-14 07:10 UTC) · 이 표만 본다
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > **끝남(10/14 오후, 로봇 PC)** — 순서 1·2 를 돌았다(결과 [`eval_najy_results_1014.md`](eval_najy_results_1014.md)). 나머지는 맨 위 「▶ 지금 돌릴 것 — 10/15 선정 라운드」 로 옮겼다.
 > **사용자(10/14)**: 「Eval 실험은 항상 태스크 순서로 정리해서 표로 만들고 뭘 검증하려고 하는건지도 잘 적어둬. 확인하기 쉽게」. 그래서 아래 표는 **task02 → task11 순서**이고, 행마다 「검증하려는 것」 을 질문 한 줄로 적었다. 위에서부터 돌면 된다.
 > **옛 지시 표는 전부 끝났거나 이 표로 대체됐다** — 10/13 D1~D4 · 10/13 P0~P5 · 10/12 T1~T3 · 10/11 S0~S11. 근거는 [`eval_najy_results_1013.md`](eval_najy_results_1013.md) 「DGX1 답」 · sim §94.63.
@@ -206,6 +580,7 @@ state 드롭아웃(#43·#44)은 10/14 에 A✓ 에서 이미 비교했다(이득
 - **기록**: 회차마다 맨 아래 「결과 기록」 에 한 줄을 쓴다(태스크 순서로). 상세는 `eval_najy_results_<MMDD>.md` 에 쓴 뒤 `git push origin main`. 순서 1~3 은 꽂은 구멍 사진(cam_high 한 장)을 같이 남긴다.
 
 ## ▶ 지금 돌릴 것 — 한 장 (DGX1 → Trossen PC1, 2026-10-13 00:40 UTC, 사용자 「지금 Eval 돌려볼거 정리해서 Trossen PC 에 넘겨줘」)
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > **끝남·대체됨 (10/14)** — 지금 돌릴 것은 맨 위 「▶ 지금 돌릴 것 — 10/14 한 장, 태스크 순서」 이다. 이 절은 기록으로 둔다.
 > 10/11 뒤로 실기 결과가 없다. 그래서 **10/12 토너먼트 T1~T3(t02)이 그대로 1순위**다. 그 사이 새로 생긴 것은 둘이다. ⓐ 러너 **그리퍼 쥠 가드**(`b58a686`)가 생겼다 — t02·t03·t04 는 정지 창 3 초의 매 틱에 양손 그리퍼가 ≥ 0.004 여야 자동 완료된다. 10/11 B t02 의 거짓 완료(오른손 0.000)를 막는다. ⓑ **SmolVLA 짝 #35(J37)·#36(J37a)** 이 생겼다.
 > 아래 P0 → P5 순서로 돈다. 1 ep 씩, 매 회차 `DRY_RUN=1` 로 한 번 찍고, e-stop 을 대기한다. 자리 A(시연 자리)에서, 같은 장면·같은 시작 짝으로 번갈아 돈다. 회차 1개 ≈ 5~7 분이라 P1~P4 는 ≈ 2 h 다.
@@ -225,6 +600,7 @@ state 드롭아웃(#43·#44)은 10/14 에 A✓ 에서 이미 비교했다(이득
 - **#40 J38 은 아래 표에 있다**(public). 로드 로그에 `[action_query] model.action_queries (64) 를 붙여 싣는다` 가 없으면 **중단** — 쿼리 없이 도는 것이다.
 
 ## ⭐ 판정 토너먼트 — t02 를 먼저 가른다 (DGX1 → Trossen PC1, 2026-10-12 11:00 UTC, 사용자 「그렇게 진행해」)
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > **끝남·대체됨 (10/14)** — 지금 돌릴 것은 맨 위 「▶ 지금 돌릴 것 — 10/14 한 장, 태스크 순서」 이다. 이 절은 기록으로 둔다.
 > 학습 레버(시드·120K·드롭아웃·GIST 정제/비율·통계·이동만 GIST)는 오프라인에서 전부 #2(J14) 자리였고, 오프라인 지표 셋은 실기 t02 를 못 갈랐다(sim §94.43·§94.46.1·§94.52). 그래서 **아래 T1~T3 을 아래 S0~S11 보다 먼저** 돌린다 — 실기 회차를 「무엇이 t02 를 가르나」 에 집중한다. 10/11 실기에서 t02 루프 21 Hz·페이싱 FIRED 0 → 느림·튐은 안전 제한 탓이 아니다.
 
@@ -239,6 +615,7 @@ state 드롭아웃(#43·#44)은 10/14 에 A✓ 에서 이미 비교했다(이득
 - 회차마다 맨 아래 「결과 기록」 에 한 줄 + `eval_najy_results_1012.md`(새로) 에 상세 → `origin main` push.
 
 ## 로봇 PC 전달 — 돌릴 순서 (DGX1 → Trossen PC1, 2026-10-11 12:30 UTC)
+> **⛔ 10/16 정비로 대체됨 — 이 절의 명령은 돌리지 마라. 맨 위 「▶ 10/16 정비」 절만 본다.** (비교 정의·지난 기록으로만 남긴다)
 > **끝남·대체됨 (10/14)** — 지금 돌릴 것은 맨 위 「▶ 지금 돌릴 것 — 10/14 한 장, 태스크 순서」 이다. 이 절은 기록으로 둔다.
 > 로봇 PC 결과는 10/08 이후 없다. **아래 S0~S11 순서로 돌리고**, 회차마다 맨 아래 「결과 기록」 표에 한 줄 + 상세는 `eval_najy_results_1011.md`(§9 양식) → `origin main` push. 표의 모델 23개는 전부 `kiroaiseoul/…` **public 확인**(10/11 12:20 UTC, HF API). 사용자 지시(10/11): 「Eval 돌릴 거 리스트업 올려서 Trossen PC 에 전달」.
 
