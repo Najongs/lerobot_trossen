@@ -142,7 +142,7 @@ class TaskOneHotStep(ProcessorStep):
     """Widen ``observation.state`` to ``[arms, 0, 0, one_hot]``. Placed before the normalizer."""
 
     def __init__(
-        self, stage: int, k: int, expected_dim: int, env_k: int | None = None,
+        self, stage: int, k: int, expected_dim: int | None, env_k: int | None = None,
         base_mode: str = "zero",
     ):
         if base_mode not in _BASE_MODES:
@@ -213,6 +213,8 @@ class TaskOneHotStep(ProcessorStep):
         if not isinstance(obs, dict) or _STATE_KEY not in obs:
             return transition
         state = obs[_STATE_KEY]
+        if self.expected_dim is None:
+            return self._env_only(transition, obs, state)
         width = state.shape[-1]
         if width not in (_ARM_DIMS, _ARM_DIMS + _BASE_DIMS):
             raise RuntimeError(
@@ -264,6 +266,24 @@ class TaskOneHotStep(ProcessorStep):
             # went into `cat`: an in-place step downstream must not be able to
             # move one copy without the other.
             obs[_ENV_STATE_KEY] = hot.clone()
+        transition = transition.copy()
+        transition[TransitionKey.OBSERVATION] = obs
+        return transition
+
+    def _env_only(self, transition, obs, state):
+        """State-free checkpoint: write the env token, leave the robot state untouched."""
+        from lerobot.processor.core import TransitionKey
+
+        hot = torch.zeros(*state.shape[:-1], self.k, dtype=state.dtype, device=state.device)
+        hot[..., self.index] = 1.0
+        if not self._announced:
+            logger.info(
+                f"{_ENV_VAR}: stage {self.index + 1}/{self.k} active -- state-free checkpoint, "
+                f"env token only (robot state {state.shape[-1]} not fed to the policy)"
+            )
+            self._announced = True
+        obs = dict(obs)
+        obs[_ENV_STATE_KEY] = hot
         transition = transition.copy()
         transition[TransitionKey.OBSERVATION] = obs
         return transition
@@ -367,6 +387,18 @@ def _build_step(policy_cfg, stage: int, k: int) -> "TaskOneHotStep":
     one set of refusals rather than two that can drift apart.
     """
     expected = _expected_state_dim(policy_cfg)
+    if expected is None:
+        # State-free checkpoint (trossen-ai-simulation J57, ``state_free``): no state input
+        # at all, the stage rides only on the env token. The robot state is left as it is
+        # (ACT still reads ``batch[OBS_STATE].device``, modeling_act.py:431, but never its
+        # values; the normalizer skips it -- it is not a policy feature).
+        env_k = _env_state_dim(policy_cfg)
+        if k == 0 or env_k != k or not 1 <= stage <= k:
+            raise RuntimeError(
+                f"{_ENV_VAR}: checkpoint declares no observation.state, so the stage can only "
+                f"go in {_ENV_STATE_KEY}; it declares {env_k}, the one-hot is {stage}/{k}"
+            )
+        return TaskOneHotStep(stage, k, None, env_k=env_k, base_mode=_base_mode())
     if expected != 16 + k:
         raise RuntimeError(
             f"{_ENV_VAR}: checkpoint declares observation.state={expected}, "

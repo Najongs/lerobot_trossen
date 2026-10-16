@@ -22,6 +22,16 @@ from .act_stage_heads import install_load_hook as _install_stage_heads_hook
 
 _install_stage_heads_hook()
 
+# Relative-EEF ACT (trossen-ai-simulation J57/J58, `action_space: rel_eef`) -- same rules:
+# installed FIRST so a failure fails the plugin import. A no-op unless the checkpoint's
+# multi_manifest.json says rel_eef; then every predicted chunk is converted back to joint
+# angles (FK/IK, eef_kin.py) before the postprocessor, and a checkpoint whose action stats
+# look relative but carries no manifest is refused at load. rel_eef_patch.py has the rest.
+# eef_kin.py is byte-identical to trossen-ai-simulation/scripts/eef_kin.py.
+from .rel_eef_patch import install_load_hook as _install_rel_eef_hook
+
+_install_rel_eef_hook()
+
 from .bi_widowxai_follower import BiWidowXAIFollowerRobot
 from .config_bi_widowxai_follower import BiWidowXAIFollowerRobotConfig
 from .config_widowxai_follower import WidowXAIFollowerConfig

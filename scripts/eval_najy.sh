@@ -106,7 +106,9 @@ echo "   POLICY=$POLICY"
 STATE_DIM=$(uv run python - "$POLICY" "$ONEHOT" "$EXEC" <<'PY'
 import json, sys
 cfg = json.load(open(f"{sys.argv[1]}/config.json"))
-dim = cfg["input_features"]["observation.state"]["shape"][0]
+# state-free 체크포인트(J57, train_multi state_free)는 observation.state 를 선언하지 않는다 → dim 0.
+st_ft = (cfg.get("input_features") or {}).get("observation.state")
+dim = int(st_ft["shape"][0]) if st_ft else 0
 onehot, ex, chunk = sys.argv[2], int(sys.argv[3]), cfg["chunk_size"]
 if cfg.get("temporal_ensemble_coeff") is not None:
     sys.exit("체크포인트에 temporal_ensemble_coeff 가 박혀 있다 -- n_action_steps>1 과 같이 못 쓴다")
@@ -127,7 +129,11 @@ if env_ft is not None:
     if env_ft.get("type") != "ENV":
         sys.exit(f"observation.environment_state 가 type={env_ft.get('type')!r} -- ENV 여야 한다")
     env_k = int(env_ft["shape"][0])
-if onehot:
+if dim == 0:
+    # state 없이 단계는 env 토큰으로만 받는다 — 원핫이 꼭 있어야 하고 K 가 맞아야 한다.
+    if env_k is None or not onehot or int(onehot.split("/")[1]) != env_k:
+        sys.exit(f"state-free 체크포인트(env 토큰 {env_k}D)는 HOT=<단계>/{env_k} 가 필요하다 (지금 원핫 {onehot or '없음'})")
+elif onehot:
     k = int(onehot.split("/")[1])
     if dim != 16 + k:
         sys.exit(f"체크포인트 state={dim}D 인데 원핫 {onehot} 은 16+{k}D 를 요구한다")
@@ -145,7 +151,7 @@ elif env_k is not None:
 elif dim not in (14, 16):
     sys.exit(f"체크포인트 state={dim}D -- 원핫 모델이면 M1/M2/M3 로 불러라")
 # 위 K 검사와 별개로, 체크포인트가 스스로 선언한 두 값끼리도 대조한다.
-if env_k is not None and env_k != dim - 16:
+if dim and env_k is not None and env_k != dim - 16:
     sys.exit(f"env 토큰 {env_k}D 인데 state={dim}D 의 원핫 꼬리는 {dim - 16}D 다 -- 같은 벡터여야 한다")
 # 학습 때 state 베이스 칸을 무엇으로 채웠나 — 체크포인트의 multi_manifest.json(우리 sim 학습본)에서 읽는다.
 # 팀 허브 전문가처럼 매니페스트가 없으면 "" (예전 규칙 그대로). 항목마다 다르면 거부.
@@ -159,8 +165,22 @@ if man is not None:
         base = modes.pop()
     elif modes - {None}:
         sys.exit(f"multi_manifest.json 의 base_state 가 항목마다 다르다 {sorted(map(str, modes))} -- 로봇에서 한 가지로 만들 수 없다")
+# 상대 EEF 체크포인트(J57/J58, action_space rel_eef)는 이 체크아웃의 rel_eef_patch 가 청크를 관절로 바꿔야 한다.
+space = "joint"
+if man is not None:
+    spaces = {e.get("action_space", "joint") for e in entries}
+    if len(spaces) != 1:
+        sys.exit(f"multi_manifest.json 의 action_space 가 항목마다 다르다 {sorted(spaces)}")
+    space = spaces.pop()
+if space == "rel_eef":
+    init = Path("packages/lerobot_robot_trossen/src/lerobot_robot_trossen/__init__.py")
+    if "_install_rel_eef_hook()" not in init.read_text():
+        sys.exit("상대 EEF 체크포인트인데 이 체크아웃에 rel_eef_patch 가 없다 -- git pull 하라 (관절로 안 바꾸면 변위가 관절 목표로 나간다)")
+    print("   상대 EEF 체크포인트 — 실행 로그에 '[rel_eef] 상대 EEF 체크포인트' 줄이 없으면 중단", file=sys.stderr)
+elif space != "joint":
+    sys.exit(f"모르는 action_space {space!r}")
 print(
-    f"   체크포인트 state {dim}D · chunk {chunk}"
+    f"   체크포인트 state {dim or '없음(state-free)'}D · chunk {chunk} · 행동 {space}"
     + (f" · env 토큰 {env_k}D (2라운드)" if env_k is not None else "")
     + (f" · 학습 base_state={base}" if base else " · 학습 base_state 기록 없음")
     + " 확인",
