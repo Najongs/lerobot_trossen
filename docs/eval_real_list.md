@@ -8,8 +8,8 @@
 > 바뀐 것 요약: ① t01 에 **베이스 회전 예산(bb105) 켬 ↔ 끔 3 대 3** 을 새로 넣었다(과회전을 실행 층에서 자르는 시험). 그리고 기존 「전문가 ↔ #27」·「#27 e30 ↔ e60」 과 **한 줄로 엮었다** — #27 기준 회차(e60·예산 끔) 3 회를 세 비교가 같이 쓴다. ② 10/16 단계 헤드 #58~#61 의 회차와 명령을 t04·t05·t08·t11 에 넣었다. ③ 결과가 이미 나왔거나 사용자가 건너뛴 것을 「안 하는 것 · 보류」 로 옮겼다(하이브리드 1→2, 흔든 시작 B 등). ④ 남은 회차 수를 행에서 다시 셌다.
 
 ### 0. 시작 전 — 매 세션
-1. `cd ~/NAJY/lerobot_trossen && git pull origin main` (로봇 PC 의 origin = Najongs fork). 필요한 커밋: **08a0631**(단계 헤드 로드 훅 — #59·#60) · **베이스 회전 예산 커밋**(`git log --oneline | grep base_budget` 로 확인).
-   - **예산 커밋은 교차 검토(codex)를 받은 뒤 따로 올린다.** `git log` 에 `base_budget` 이 없으면 **bb105 회차만 건너뛰고** 나머지는 그대로 돈다. 그 커밋이 없는 체크아웃에서는 `BASE_BUDGET_DEG=105` 가 **조용히 무시된다**(예산 없이 돈다). 그래서 아래 확인 줄이 필수다.
+1. `cd ~/NAJY/lerobot_trossen && git pull origin main` (로봇 PC 의 origin = Najongs fork). 필요한 커밋: **08a0631**(단계 헤드 로드 훅 — #59·#60) · **a76ce00**(베이스 회전 예산 — `ls packages/lerobot_robot_trossen/src/lerobot_robot_trossen/base_budget.py` 로 확인; 커밋 제목에는 `base_budget` 이 없어 `git log --oneline | grep` 은 안 걸린다).
+   - 예산 커밋은 codex 교차 검토 뒤 a76ce00 으로 올라갔다(10/16 16:13 KST). 위 파일이 없으면 **bb105 회차만 건너뛰고** 나머지는 그대로 돈다. 그 커밋이 없는 체크아웃에서는 `BASE_BUDGET_DEG=105` 가 **조용히 무시된다**(예산 없이 돈다). 그래서 아래 확인 줄이 필수다.
 2. 처음 한 번 `DRY_RUN=1` 로 명령을 확인한다. e-stop 을 손에 두고, 회차는 1 ep 씩 돈다.
 3. **로그 확인 줄 — 없으면 그 회차를 중단한다**
 
