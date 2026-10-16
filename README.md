@@ -1192,6 +1192,7 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_BASE_LEAD_TICKS` | unset (off) | Integer `d`: send the base's action `d` ticks ahead of the arms' |
 | `LEROBOT_REPLAY_DATASET` · `LEROBOT_REPLAY_EPISODES` · `LEROBOT_REPLAY_RUN_POLICY` | unset (off) · all episodes · `1` | Replay bench: demo repo id, episode list, whether the checkpoint's real inference still runs |
 | `LEROBOT_CHUNK_EXECUTION_LOG` | unset (off) | Path of a per-tick CSV of the chunk schedule, base commands and arm seams |
+| `LEROBOT_BASE_THETA_BUDGET_DEG` | unset (off) | Degrees: per policy episode, once the signed net yaw command (sent `theta.vel` × measured loop time) reaches this, a `theta.vel` that turns further is sent as 0; turning back, `x.vel` and the arms pass. task01 only via `scripts/eval_najy.sh` `BASE_BUDGET_DEG=105` (`base_budget.py`) |
 | `LEROBOT_CHUNK_RTC` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: steer the prefetched chunk toward the old chunk's remaining actions → [Chunk Seam Smoothing](#chunk-seam-smoothing) |
 | `LEROBOT_CHUNK_RTC_MAX_GUIDANCE` | unset (10) | RTC guidance clip |
 | `LEROBOT_CHUNK_SEAM_BLEND_TICKS` | unset (off) | Integer `m`: fade the arm jump at each swap over at least `m` ticks |

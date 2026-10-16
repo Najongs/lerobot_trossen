@@ -171,6 +171,8 @@ CMD=(uv run python scripts/record_ensemble.py
 
 ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv" PYTHONUNBUFFERED=1 SVT_LOG=2
   LEROBOT_LOOP_HZ_WINDOW="${LOOP_HZ_WINDOW:-30}" LEROBOT_POSE_GUIDE="$STAGE")
+# 베이스 회전 예산(base_budget.py)은 eval_najy.sh 의 task01 전용 — 셸에 남은 값이 SmolVLA 회차에 새지 않게 비운다
+ENVS+=(LEROBOT_BASE_THETA_BUDGET_DEG=)
 [[ -n "$ZERO_PAD" ]] && ENVS+=("$ZERO_PAD")   # 빈 배열 확장을 피한다 (bash 4.3 이하 + set -u, codex 10/08)
 
 echo "== SmolVLA $POLICY · 단계 task$NN · $VARIANT (${ENS[*]}) · ${EPISODES}ep · include_base=$INCLUDE_BASE${ZERO_PAD:+ + 0 채움(14D→16D)} · 팔 한 틱 상한 $MAX_REL · chunk $CHUNK"

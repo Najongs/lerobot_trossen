@@ -39,7 +39,8 @@ def main(run: str) -> int:
         if text is None:
             missing.append(name)
 
-    m = re.match(r"^(\d{2})(\d{2})_(\d{2})(\d{2})_([a-z0-9]+)_t(\d{2})_e(\d+)$", run)
+    # 꼬리(RUN_SUFFIX · _bb<예산>)는 허용하고 버린다 -- 회차 이름 자체가 기록에 남는다
+    m = re.match(r"^(\d{2})(\d{2})_(\d{2})(\d{2})_([a-z0-9]+)_t(\d{2})_e(\d+)(?:_[A-Za-z0-9_]+)?$", run)
     if not m:
         print(f"회차 이름 형식이 아니다: {run}", file=sys.stderr)
         return 2

@@ -12,6 +12,10 @@
 #        scripts/eval_najy.sh M1 4 30 3               # 실행
 #        MAX_REL=none scripts/eval_najy.sh M1 4 30 3  # 팔 한 틱 이동 제한을 끈다 (10/06 이전 회차와 같은 조건)
 #        POSE_GUIDE=0 scripts/eval_najy.sh M1 4 30 3  # 리셋 중 시작 자세 안내 로그(POSE …)를 끈다
+#        BASE_BUDGET_DEG=105 scripts/eval_najy.sh <repo> 1 30 1   # task01 베이스 회전 예산(base_budget.py): 에피소드마다 순회전이
+#                                                       # 105° 에 닿으면 같은 방향 theta.vel 만 0 (되돌리기·x.vel·팔 그대로). task01 전용.
+#                                                       # 회차 이름에 _bb105 가 붙는다. 비우면(기본) 끔. LEROBOT_BASE_THETA_BUDGET_DEG 가 셸에 남아 있어도 덮어쓴다 —
+#                                                       # BASE_BUDGET_DEG 자체는 export 하지 말고 명령 앞에만 붙여라
 #
 #   MAX_REL  팔 관절 한 틱 이동 상한(rad, 기본 0.1). 정책 action 이 현재 자세에서 이만큼 넘게 떨어지면
 #            그 틱엔 0.1 만 간다 -- 청크 경계·시작 순간의 큰 점프로 팔이 다치는 것을 막는다(10/06 부터).
@@ -33,6 +37,9 @@ EXEC=${3:?exec (30 또는 5)}
 EPISODES=${4:-5}
 DRY_RUN=${DRY_RUN:-0}
 MAX_REL=${MAX_REL:-0.1}
+BASE_BUDGET_DEG=${BASE_BUDGET_DEG:-}
+[[ -z "$BASE_BUDGET_DEG" ]] || awk -v v="$BASE_BUDGET_DEG" 'BEGIN{exit !(v ~ /^[0-9]*\.?[0-9]+$/ && v+0 > 0)}' \
+  || { echo "BASE_BUDGET_DEG 는 양수(도) 또는 빈 값" >&2; exit 2; }
 [[ "$MAX_REL" == none ]] || awk -v v="$MAX_REL" 'BEGIN{exit !(v ~ /^[0-9]*\.?[0-9]+$/ && v+0 > 0)}' \
   || { echo "MAX_REL 은 양수(rad) 또는 none" >&2; exit 2; }
 
@@ -52,6 +59,10 @@ TASKS=(
 )
 
 [[ "$STAGE" =~ ^([1-9]|1[01])$ ]] || { echo "단계는 1~11" >&2; exit 2; }
+# 예산 값(105°)은 task01 시연(순회전 76~89°)에서 나온 숫자다 — 다른 단계에 걸면 정당한 회전을 막는다
+[[ -z "$BASE_BUDGET_DEG" || "$STAGE" == 1 ]] || { echo "BASE_BUDGET_DEG 는 task01 전용 (단계 $STAGE)" >&2; exit 2; }
+# 재생(시연 명령이 실기에서 얼마나 도나)을 예산이 자르면 재생의 목적이 가려진다
+[[ -z "$BASE_BUDGET_DEG" || -z "${LEROBOT_REPLAY_DATASET:-}" ]] || { echo "BASE_BUDGET_DEG 는 재생 회차(LEROBOT_REPLAY_DATASET)와 같이 못 쓴다" >&2; exit 2; }
 [[ "$EXEC" =~ ^[0-9]+$ ]] && (( EXEC >= 1 )) || { echo "exec 는 1 이상 (체크포인트 chunk 이하 -- 아래에서 확인)" >&2; exit 2; }
 
 ONEHOT=""
@@ -76,9 +87,10 @@ if [[ -n "${RUN_SUFFIX:-}" ]]; then
   [[ "$RUN_SUFFIX" =~ ^[A-Za-z0-9_]+$ ]] || { echo "RUN_SUFFIX 는 영숫자·_ 만" >&2; exit 2; }
   RUN="${RUN}_${RUN_SUFFIX}"
 fi
+[[ -n "$BASE_BUDGET_DEG" ]] && RUN="${RUN}_bb${BASE_BUDGET_DEG//./p}"
 LOGDIR=~/eval_logs; mkdir -p "$LOGDIR"
 
-echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL"
+echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL · 베이스 회전 예산 ${BASE_BUDGET_DEG:-끔}"
 
 # 1) 체크포인트 받기 (루트형/pretrained_model 중첩형 모두)
 POLICY=$(uv run python -c "
@@ -226,6 +238,10 @@ ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv"
 [[ -n "$ONEHOT" ]] && ENVS+=(LEROBOT_TASK_ONEHOT_BASE="${ONEHOT_BASE:-zero}")   # 셸에 남은 값이 섞이지 않게 항상 명시
 # 리셋 구간에 1초마다 「현재 → 학습 시작 자세」 를 로그로 찍는다 (pose_guide.py, 로봇 동작은 안 바뀜). 끄려면 POSE_GUIDE=0
 [[ "${POSE_GUIDE:-1}" != 0 ]] && ENVS+=(LEROBOT_POSE_GUIDE="$STAGE")
+# 베이스 회전 예산 — 끔일 때도 빈 값으로 명시해 셸에 남은 export 가 「끔」 회차를 켜지 못하게 한다
+ENVS+=(LEROBOT_BASE_THETA_BUDGET_DEG="$BASE_BUDGET_DEG")
+# 예산은 record_loop phase 태그(LEROBOT_LOOP_HZ_LOG)로 policy 구간을 안다 — 셸에 남은 0 이 예산을 조용히 끄지 않게
+[[ -n "$BASE_BUDGET_DEG" ]] && ENVS+=(LEROBOT_LOOP_HZ_LOG=1)
 
 if [[ "$DRY_RUN" == 1 ]]; then
   echo "-- DRY_RUN: 실행하지 않는다"; printf '%q ' env "${ENVS[@]}" "${CMD[@]}"; echo

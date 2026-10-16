@@ -14,6 +14,8 @@ from lerobot.robots import Robot
 from lerobot_robot_trossen import BiWidowXAIFollowerRobot, BiWidowXAIFollowerRobotConfig
 from lerobot_robot_trossen.base_serial_rearm import create_base_serial_rearm
 from lerobot_robot_trossen.config_mobileai import MobileAIRobotConfig
+from lerobot_robot_trossen.base_budget import finish as finish_base_budget
+from lerobot_robot_trossen.base_budget import govern_theta
 from lerobot_robot_trossen.base_vel_log import flush as flush_base_vel_log
 from lerobot_robot_trossen.base_vel_log import record_sample as record_base_vel_sample
 from lerobot_robot_trossen.loop_rate_log import add_loop_section, record_loop_tick
@@ -478,6 +480,10 @@ class MobileAIRobot(Robot):
         action_base_x_vel, action_base_theta_vel = _sanitize_base_command(
             action.get("x.vel", 0.0), action.get("theta.vel", 0.0)
         )
+        # Per-episode yaw budget, off unless LEROBOT_BASE_THETA_BUDGET_DEG is set
+        # (base_budget.py). Only ever lowers theta.vel to 0; before the CSV sample
+        # below so basevel.csv holds what the base actually got.
+        action_base_theta_vel = govern_theta(action_base_theta_vel)
         _t = time.perf_counter()
         # set_cmd_vel carries the read half of the same Modbus transaction, so a
         # failure means both that the command may not have been applied and that
@@ -515,6 +521,7 @@ class MobileAIRobot(Robot):
         if not self.base.set_cmd_vel(0.0, 0.0):
             # We log a warning but continue with disconnect
             logger.warning("Failed to stop Mobile AI base during disconnect.")
+        finish_base_budget()
 
         try:
             self.arms.disconnect()

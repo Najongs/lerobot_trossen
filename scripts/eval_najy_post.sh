@@ -19,7 +19,8 @@ RUN=${1:?회차 이름 (MMDD_HHMM_<m1|m2|m3|base>_tNN_eE)}
 LOGDIR=~/eval_logs
 LOG=$LOGDIR/$RUN.log
 [[ -f "$LOG" ]] || { echo "로그 없음: $LOG" >&2; exit 2; }
-[[ "$RUN" =~ ^([0-9]{2})([0-9]{2})_[0-9]{4}_[a-z0-9]+_t([0-9]{2})_e([0-9]+)$ ]] \
+# 끝 꼬리(RUN_SUFFIX · BASE_BUDGET_DEG 의 _bb<예산>)는 허용한다
+[[ "$RUN" =~ ^([0-9]{2})([0-9]{2})_[0-9]{4}_[a-z0-9]+_t([0-9]{2})_e([0-9]+)(_[A-Za-z0-9_]+)?$ ]] \
   || { echo "회차 이름에서 날짜·단계·exec 를 못 읽음: $RUN" >&2; exit 2; }
 MM=${BASH_REMATCH[1]}; DD=${BASH_REMATCH[2]}; STAGE=$((10#${BASH_REMATCH[3]})); EXEC=${BASH_REMATCH[4]}
 # 회차 이름엔 연도가 없다 — 오늘보다 뒤의 MMDD 면 작년 회차로 본다 (12/31 회차를 1/1 에 정리하는 경우)
@@ -47,6 +48,8 @@ CACHE=~/.cache/huggingface/lerobot
   CLAMP_WIN=$(awk -F'clamped=' '/Control loop rate/ && /phase=policy/ && NF>1 {split($2,a," "); s+=a[1]} END{print s+0}' "$LOG")
   echo "-- 팔 한 틱 상한에 잘린 arm-tick (policy): $CLAMP_PHASE (phase 끝 줄 합; 창 합 $CLAMP_WIN; 필터 전 경고줄 $(grep -c "had to be clamped" "$LOG"))"
   echo "-- 베이스 시리얼 재등록: $(grep -h "LEROBOT_BASE_SERIAL_REARM" "$LOG" | tail -1)"
+  echo "-- 베이스 회전 예산 (base_budget.py; 없으면 끔):"
+  grep -h "\[base_budget\]" "$LOG" | sed 's/^/   /'
   echo "-- 에피소드 시작 자세 (POSE-START = 첫 정책 틱, POSE = 리셋 마지막 줄):"
   awk '/ POSE task/ {pose=$0} /Recording episode/ {print "   " $0; if (pose) print "   " pose; pose=""} / POSE-START / {print "   " $0}' "$LOG"
 } > "$LOGDIR/$RUN.summary.txt"
