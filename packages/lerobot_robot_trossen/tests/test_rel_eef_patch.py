@@ -70,14 +70,26 @@ def test_converter_round_trip(rp, ek):
         assert np.allclose(joint[:, c], chunk[:, c], atol=1e-5)
 
 
-def test_nonfinite_step_holds_that_arm_only(rp, ek):
+def test_nonfinite_step_holds_that_arm_and_its_gripper(rp, ek):
     q0, chunk = _joint_path(seed=1)
+    chunk[:, 6] = np.linspace(0.0, 0.04, len(chunk))  # left gripper opening during the chunk
     rel = _relative_chunk(ek, q0, chunk)
     rel[40, 2] = np.nan  # left arm dz
     joint, info = rp.RelEefConverter(*STATS).convert(rel, q0)
     assert info["hold_from"] == {"left": 40}
     assert np.all(joint[40:, 0:6] == joint[39, 0:6])
+    assert np.all(joint[40:, 6] == joint[39, 6])  # gripper frozen with its arm
     assert np.abs(joint[:, 7:13] - chunk[:, 7:13]).max() < 1e-3
+
+
+def test_only_executed_steps_are_solved(rp, ek):
+    q0, chunk = _joint_path(seed=3)
+    rel = _relative_chunk(ek, q0, chunk)
+    joint, info = rp.RelEefConverter(*STATS).convert(rel, q0, steps=30)
+    assert info["solved"] == 30
+    assert np.abs(joint[:30] - chunk[:30]).max() < 1e-3
+    assert np.all(joint[30:, 0:7] == joint[29, 0:7]) and np.all(joint[30:, 7:14] == joint[29, 7:14])
+    assert np.allclose(joint[:, 14:], chunk[:, 14:])  # base untouched
 
 
 def test_unreachable_target_holds(rp, ek):
@@ -114,15 +126,23 @@ def _ckpt(tmp_path, entries=None, mean=None):
 def test_read_action_space(rp, tmp_path):
     d = _ckpt(tmp_path, [{"action_space": "rel_eef", "state_free": True}] * 3)
     assert rp.read_action_space(d) == ("rel_eef", True)
-    assert rp.read_action_space(tmp_path / "nowhere") is None or True  # hub lookup may fail offline
+    with pytest.raises(RuntimeError, match="cannot resolve"):
+        rp.read_action_space(tmp_path / "nowhere")  # neither a local dir nor a hub id: refused
     (d / "multi_manifest.json").write_text(json.dumps([{"action_space": "rel_eef"}, {}]))
     with pytest.raises(RuntimeError):
         rp.read_action_space(d)
 
 
+class _Cfg:
+    type = "act"
+    normalization_mapping = {"ACTION": "MEAN_STD"}
+    n_action_steps = 100
+
+
 class _Policy:
     def __init__(self, chunk):
         self.chunk = chunk
+        self.config = _Cfg()
 
     def predict_action_chunk(self, batch):
         return self.chunk.clone()
@@ -132,6 +152,41 @@ def test_load_refuses_relative_stats_without_manifest(rp, tmp_path):
     d = _ckpt(tmp_path, None, mean=np.zeros(16))
     with pytest.raises(RuntimeError, match="look relative"):
         rp.on_policy_loaded(_Policy(torch.zeros(1, 4, 16)), d)
+
+
+def test_load_refuses_relative_stats_under_joint_manifest(rp, tmp_path):
+    d = _ckpt(tmp_path, [{"base_state": "zero"}], mean=np.zeros(16))
+    with pytest.raises(RuntimeError, match="says joint"):
+        rp.on_policy_loaded(_Policy(torch.zeros(1, 4, 16)), d)
+
+
+def test_manifest_found_in_training_run_layout(rp, tmp_path):
+    run = tmp_path / "run"
+    ck = run / "checkpoints" / "015000" / "pretrained_model"
+    ck.mkdir(parents=True)
+    (run / "multi_manifest.json").write_text(json.dumps([{"action_space": "rel_eef", "state_free": False}]))
+    assert rp.read_action_space(ck) == ("rel_eef", False)
+
+
+def test_unresolvable_hub_id_refuses(rp, monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    with pytest.raises(RuntimeError, match="cannot resolve"):
+        rp.on_policy_loaded(_Policy(torch.zeros(1, 4, 16)), "kiroaiseoul/definitely_not_cached_rel_eef_xyz")
+
+
+def test_non_act_rel_checkpoint_refused(rp, tmp_path):
+    d = _ckpt(tmp_path, [{"action_space": "rel_eef"}])
+    pol = _Policy(torch.zeros(1, 4, 16))
+    pol.config.type = "smolvla"
+    with pytest.raises(RuntimeError, match="only supported for ACT"):
+        rp.on_policy_loaded(pol, d)
+
+
+def test_vendored_eef_kin_matches_sim():
+    sim = Path("/home/kiro-ai/NAJY/trossen-ai-simulation/scripts/eef_kin.py")
+    if not sim.is_file():
+        pytest.skip("trossen-ai-simulation checkout not present")
+    assert (_DIR / "eef_kin.py").read_bytes() == sim.read_bytes()
 
 
 def test_joint_checkpoint_untouched(rp, tmp_path):
@@ -155,6 +210,13 @@ def test_rel_checkpoint_wrapped_and_needs_stash(rp, ek, tmp_path):
     assert np.abs(out[0].double().numpy() * 0.2 - chunk).max() < 2e-3
     with pytest.raises(RuntimeError, match="RTC"):
         pol.predict_action_chunk({rp.Q_KEY: torch.zeros(1, 14)}, prev_chunk_left_over=torch.zeros(1, 2, 16))
+
+
+def test_stash_step_refuses_odd_width(rp):
+    from lerobot.processor.core import TransitionKey
+
+    with pytest.raises(RuntimeError, match="14 or 16"):
+        rp.RelEefStashStep()({TransitionKey.OBSERVATION: {"observation.state": torch.zeros(1, 28)}})
 
 
 def test_stash_step_copies_raw_arms(rp):

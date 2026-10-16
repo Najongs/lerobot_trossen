@@ -76,19 +76,39 @@ def _local_dir(path) -> Path | None:
     return p if p.is_dir() else None
 
 
-def _find_file(path, name: str) -> Path | None:
+def resolve_dir(path) -> Path:
+    """The checkpoint as a local directory. A hub id is resolved to its snapshot (cache
+    first, then the hub). Failing to resolve is an error, never "no manifest": a relative
+    checkpoint whose manifest could not be fetched must not run as a joint one."""
     d = _local_dir(path)
     if d is not None:
-        for c in (d / name, d.parent / name):
-            if c.is_file():
-                return c
-        return None
-    try:
-        from huggingface_hub import hf_hub_download
+        return d
+    from huggingface_hub import snapshot_download
 
-        return Path(hf_hub_download(repo_id=str(path), filename=name))
+    patterns = ["*.json", "*.safetensors"]
+    # Online first: the cache may hold only what from_pretrained fetched (config, weights),
+    # not the manifest or the processor files. Offline (HF_HUB_OFFLINE=1) falls to the cache.
+    try:
+        return Path(snapshot_download(repo_id=str(path), allow_patterns=patterns))
     except Exception:
-        return None
+        pass
+    try:
+        return Path(snapshot_download(repo_id=str(path), allow_patterns=patterns, local_files_only=True))
+    except Exception as exc:
+        raise RuntimeError(
+            f"rel_eef: cannot resolve {path} to a local snapshot to read its action space ({exc!r}) "
+            "-- refusing to run it unchecked"
+        ) from exc
+
+
+def _find_file(path, name: str) -> Path | None:
+    """``name`` in the checkpoint directory or up to 4 levels above it (a training run keeps
+    the manifest copy at ``<run>/``, three above ``checkpoints/<step>/pretrained_model``)."""
+    d = resolve_dir(path)
+    for c in (d, *d.resolve().parents[:4]):
+        if (c / name).is_file():
+            return c / name
+    return None
 
 
 def read_action_space(path) -> tuple[str, bool] | None:
@@ -111,20 +131,24 @@ def read_action_space(path) -> tuple[str, bool] | None:
     return space, free.pop()
 
 
-def action_stats(path) -> tuple[np.ndarray, np.ndarray]:
-    """(mean, std) of the action from the checkpoint's postprocessor unnormalizer file."""
+def action_stats(path, required: bool = True) -> tuple[np.ndarray, np.ndarray] | None:
+    """(mean, std) of the action from the checkpoint's postprocessor unnormalizer file.
+
+    ``required=False`` returns None when the checkpoint has no such file or keys (older
+    exports) instead of raising -- only the caller knows whether that is acceptable.
+    """
     from safetensors.numpy import load_file
 
-    d = _local_dir(path)
-    if d is None:
-        from huggingface_hub import snapshot_download
-
-        d = Path(snapshot_download(repo_id=str(path), allow_patterns=["*.safetensors", "*.json"]))
+    d = resolve_dir(path)
     files = sorted(d.glob("policy_postprocessor_step_*_unnormalizer_processor.safetensors"))
     if len(files) != 1:
+        if not required and not files:
+            return None
         raise RuntimeError(f"{d}: expected one postprocessor unnormalizer file, found {len(files)}")
     st = load_file(str(files[0]))
     if "action.mean" not in st or "action.std" not in st:
+        if not required:
+            return None
         raise RuntimeError(f"{files[0]}: no action.mean/action.std (keys {sorted(st)[:8]})")
     mean = np.asarray(st["action.mean"], dtype=np.float64).reshape(-1)
     std = np.asarray(st["action.std"], dtype=np.float64).reshape(-1)
@@ -157,34 +181,57 @@ class RelEefConverter:
         self.holds = 0
         self.last = None  # summary of the last chunk, for logs/tests
 
-    def convert(self, rel_unnorm: np.ndarray, q_obs: np.ndarray) -> tuple[np.ndarray, dict]:
-        """(K, 16) unnormalized relative chunk + (>=14,) measured joints -> (K, 16) joint chunk."""
+    def convert(self, rel_unnorm: np.ndarray, q_obs: np.ndarray, steps: int | None = None) -> tuple[np.ndarray, dict]:
+        """(K, 16) unnormalized relative chunk + (>=14,) measured joints -> (K, 16) joint chunk.
+
+        Only the first ``steps`` steps are solved (the ones the robot can execute,
+        ``n_action_steps``); the rest repeat the last solved step. Solving stops at the
+        first bad step of an arm, which -- with that arm's gripper -- then holds its last
+        good command for the rest of the chunk (the measured pose / first commanded gripper
+        if step 0 fails).
+        """
         out = np.array(rel_unnorm, dtype=np.float64, copy=True)
-        info = {"pos_err_max": 0.0, "rot_err_max": 0.0, "hold_from": {}}
+        n = out.shape[0] if steps is None else max(1, min(int(steps), out.shape[0]))
+        info = {"pos_err_max": 0.0, "rot_err_max": 0.0, "hold_from": {}, "solved": n}
         for side, (a0, a1) in zip(("left", "right"), eef_kin.ARM_SLICES):
             q0 = np.asarray(q_obs[a0:a1], dtype=np.float64)
             if not np.all(np.isfinite(q0)):
                 raise RuntimeError(f"rel_eef: measured {side} joints are not finite: {q0}")
-            rel = out[:, a0:a1]
-            ok_rel = np.all(np.isfinite(rel), axis=1)
-            safe_rel = np.where(ok_rel[:, None], rel, 0.0)
-            q, ep, er = eef_kin.chunk_to_joints(q0, safe_rel)
-            prev = np.vstack([q0[None], q[:-1]])
-            bad = (~ok_rel) | (~np.all(np.isfinite(q), axis=1)) | (ep > POS_TOL_M) | (er > ROT_TOL_RAD) \
-                | (np.max(np.abs(q - prev), axis=1) > STEP_JUMP_RAD)
-            first_bad = int(np.argmax(bad)) if bad.any() else len(bad)
-            if first_bad < len(bad):
-                q[first_bad:] = q[first_bad - 1] if first_bad > 0 else q0
+            grip = a1  # gripper slot right after the arm (6, 13)
+            rel = out[:n, a0:a1]
+            finite = np.all(np.isfinite(rel), axis=1)
+            # Poses for every step at once; a non-finite row is posed from zeros and never used.
+            R, P = eef_kin.absolute_pose(q0, np.where(finite[:, None], rel, 0.0))
+            q = np.empty((out.shape[0], 6))
+            seed = q0
+            first_bad = n
+            for k in range(n):
+                if not finite[k]:
+                    first_bad = k
+                    break
+                qk, ep, er = eef_kin.ik(R[k], P[k], seed)
+                if (not np.all(np.isfinite(qk)) or ep > POS_TOL_M or er > ROT_TOL_RAD
+                        or np.max(np.abs(qk - seed)) > STEP_JUMP_RAD):
+                    first_bad = k
+                    break
+                info["pos_err_max"] = max(info["pos_err_max"], ep)
+                info["rot_err_max"] = max(info["rot_err_max"], er)
+                q[k] = qk
+                seed = qk
+            if first_bad < n:
                 info["hold_from"][side] = first_bad
                 self.holds += 1
-            good = np.arange(len(bad)) < first_bad
-            if good.any():
-                info["pos_err_max"] = max(info["pos_err_max"], float(ep[good].max()))
-                info["rot_err_max"] = max(info["rot_err_max"], float(er[good].max()))
+                hold_q = q[first_bad - 1] if first_bad > 0 else q0
+                hold_g = out[first_bad - 1, grip] if first_bad > 0 else out[0, grip]
+                q[first_bad:] = hold_q
+                out[first_bad:, grip] = hold_g
+            else:
+                q[n:] = q[n - 1]
+                out[n:, grip] = out[n - 1, grip]
             out[:, a0:a1] = q
         return out, info
 
-    def __call__(self, chunk, q_obs):
+    def __call__(self, chunk, q_obs, steps: int | None = None):
         import torch
 
         if chunk.ndim != 3 or chunk.shape[-1] != ACTION_DIM:
@@ -196,7 +243,7 @@ class RelEefConverter:
         rel = x * self.std + self.mean
         joint = np.empty_like(rel)
         for b in range(rel.shape[0]):
-            joint[b], info = self.convert(rel[b], q_np[b])
+            joint[b], info = self.convert(rel[b], q_np[b], steps)
             self.last = info
             if info["hold_from"]:
                 logger.warning(
@@ -233,8 +280,10 @@ class RelEefStashStep(ProcessorStep):
                 "measured joints"
             )
         state = obs[_STATE_KEY]
-        if state.shape[-1] < ARM_DIMS:
-            raise RuntimeError(f"rel_eef: robot state is {state.shape[-1]} wide, need >= {ARM_DIMS}")
+        if state.shape[-1] not in (ARM_DIMS, ARM_DIMS + 2):
+            # 14 = arms (include_base_in_state=false), 16 = + base. Any other width means the
+            # follower also reports velocity/effort, and slots 7-13 are not the right arm.
+            raise RuntimeError(f"rel_eef: robot state is {state.shape[-1]} wide, expected 14 or 16")
         obs = dict(obs)
         obs[Q_KEY] = state[..., :ARM_DIMS].clone()
         transition = transition.copy()
@@ -269,7 +318,8 @@ def wrap_policy(policy, converter: RelEefConverter):
                 "through lerobot-record's make_pre_post_processors. Refusing to send relative "
                 "end-effector actions as joint targets"
             )
-        return converter(original(batch, *args, **kwargs), batch[Q_KEY])
+        steps = getattr(getattr(policy, "config", None), "n_action_steps", None)
+        return converter(original(batch, *args, **kwargs), batch[Q_KEY], steps)
 
     policy.predict_action_chunk = predict_action_chunk
     policy._rel_eef_converter = converter
@@ -299,25 +349,48 @@ def _install_stash_in_record() -> None:
 
 
 def on_policy_loaded(policy, path):
-    """Decide from the checkpoint at ``path``; wrap ``policy`` if it is relative-EEF."""
+    """Decide from the checkpoint at ``path``; wrap ``policy`` if it is relative-EEF.
+
+    Every checkpoint's action stats are read, so a relative one is caught both without a
+    manifest and under a manifest that claims joint (a stray copy one folder up).
+    """
     found = read_action_space(path)
-    if found is None:
-        mean, _ = action_stats(path) if _local_dir(path) is not None else (None, None)
-        if mean is not None and looks_relative(mean):
+    stats = action_stats(path, required=False)
+    if stats is None:
+        if found is not None and found[0] == "rel_eef":
+            raise RuntimeError(f"{path}: manifest says rel_eef but the action stats cannot be read")
+        if found is None and _local_dir(path) is None:
             raise RuntimeError(
-                f"{path}: no {MANIFEST} but the action stats look relative-EEF (arm means "
-                f"{np.round(mean[_arm_columns()], 3).tolist()}) -- refusing to guess the action space"
+                f"{path}: hub checkpoint with neither a {MANIFEST} nor readable action stats in its "
+                "snapshot -- cannot tell joint from relative-EEF; download it and pass the local path"
+            )
+        return policy  # an older local export without processor files: joint by construction
+    mean, std = stats
+    relative_stats = looks_relative(mean)
+    if found is None or found[0] != "rel_eef":
+        if relative_stats:
+            raise RuntimeError(
+                f"{path}: manifest {'missing' if found is None else 'says joint'} but the action stats "
+                f"look relative-EEF (arm means {np.round(mean[_arm_columns()], 3).tolist()}) -- "
+                "refusing to guess the action space"
             )
         return policy
-    space, state_free = found
-    if space != "rel_eef":
-        return policy
-    mean, std = action_stats(path)
-    if not looks_relative(mean):
+    _, state_free = found
+    if not relative_stats:
         raise RuntimeError(f"{path}: manifest says rel_eef but the action stats look joint-space")
+    cfg = getattr(policy, "config", None)
+    ptype = getattr(cfg, "type", None)
+    if ptype != "act":
+        # SmolVLA's select_action bypasses predict_action_chunk (modeling_smolvla.py:342):
+        # the wrap would be installed and logged but never convert anything.
+        raise RuntimeError(f"{path}: rel_eef is only supported for ACT, this is {ptype!r}")
+    mode = (getattr(cfg, "normalization_mapping", None) or {}).get("ACTION")
+    if getattr(mode, "value", mode) != "MEAN_STD":
+        raise RuntimeError(f"{path}: rel_eef conversion assumes MEAN_STD action normalization, got {mode!r}")
     wrap_policy(policy, RelEefConverter(mean, std))
     _install_stash_in_record()
-    msg = (f"[rel_eef] 상대 EEF 체크포인트 -- 청크를 관절로 바꿔 보낸다 (state_free={state_free}) -- {path}")
+    msg = (f"[rel_eef] 상대 EEF 체크포인트 -- 청크를 관절로 바꿔 보낸다 (state_free={state_free}, "
+           f"앞 {getattr(cfg, 'n_action_steps', '?')} 스텝 IK) -- {path}")
     print(msg, flush=True)
     logger.warning(msg)
     return policy

@@ -19,6 +19,13 @@ import importlib.util as _ilu
 _sp = _ilu.spec_from_file_location("act_stage_heads", Path(__file__).resolve().parents[2] / "packages/lerobot_robot_trossen/src/lerobot_robot_trossen/act_stage_heads.py")
 _sh = _ilu.module_from_spec(_sp); _sp.loader.exec_module(_sh); _sh.install_load_hook()
 path =snapshot_download(args.policy, repo_type="model")
+# 상대 EEF 체크포인트(J57/J58)는 출력이 관절이 아니다 -- 관절 GT 와 비교하면 MAE 가 조용히 틀린다.
+for _d in (Path(path), *Path(path).resolve().parents[:4]):
+    if (_d / "multi_manifest.json").is_file():
+        _m = json.loads((_d / "multi_manifest.json").read_text()); _m = _m if isinstance(_m, list) else _m.get("entries", _m)
+        if any(e.get("action_space", "joint") != "joint" for e in _m):
+            sys.exit(f"{args.policy}: action_space rel_eef 체크포인트 -- 이 도구는 관절 출력만 채점한다")
+        break
 meta = LeRobotDatasetMetadata(args.dataset); n = meta.total_episodes
 episodes = sorted({int(round(i * (n - 1) / max(1, args.n_episodes - 1))) for i in range(args.n_episodes)})
 ds = LeRobotDataset(args.dataset, episodes=episodes, delta_timestamps={"action": [i / meta.fps for i in range(50)]})

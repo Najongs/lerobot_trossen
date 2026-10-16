@@ -19,7 +19,8 @@ cluster to 1~5 cm in FK space while their joints spread 0.1~0.33 rad [추정 unt
 logs ``get_cartesian_positions``].
 
 Must stay importable without mujoco/scipy/torch: the robot PC venv has none of them. The
-same file is vendored into lerobot_trossen (``rel_eef.py`` there checks the hash).
+same file is vendored byte-identical into lerobot_trossen (``rel_eef_patch.py`` uses it;
+tests/test_rel_eef_patch.py compares the two when both checkouts are present).
 """
 
 from __future__ import annotations

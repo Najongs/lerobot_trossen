@@ -103,8 +103,8 @@ echo "   POLICY=$POLICY"
 
 # 2) 체크포인트 폭 ↔ 원핫 대조, exec ≤ chunk (로봇에 연결하기 전에 막는다)
 #    원핫 없는 16D 체크포인트(기존 전문가 일부)는 로봇이 베이스 실측 속도를 state 에 넣어야 한다.
-STATE_DIM=$(uv run python - "$POLICY" "$ONEHOT" "$EXEC" <<'PY'
-import json, sys
+STATE_DIM=$(MAX_REL="$MAX_REL" uv run python - "$POLICY" "$ONEHOT" "$EXEC" <<'PY'
+import json, os, sys
 cfg = json.load(open(f"{sys.argv[1]}/config.json"))
 # state-free 체크포인트(J57, train_multi state_free)는 observation.state 를 선언하지 않는다 → dim 0.
 st_ft = (cfg.get("input_features") or {}).get("observation.state")
@@ -176,6 +176,9 @@ if space == "rel_eef":
     init = Path("packages/lerobot_robot_trossen/src/lerobot_robot_trossen/__init__.py")
     if "_install_rel_eef_hook()" not in init.read_text():
         sys.exit("상대 EEF 체크포인트인데 이 체크아웃에 rel_eef_patch 가 없다 -- git pull 하라 (관절로 안 바꾸면 변위가 관절 목표로 나간다)")
+    if os.environ.get("MAX_REL") == "none":
+        # IK 실패 시 팔을 마지막 성공 자세로 붙잡는다 -- 그 점프를 받아 주는 것이 팔 한 틱 상한이다.
+        sys.exit("상대 EEF 체크포인트는 MAX_REL=none 으로 돌리지 않는다 (팔 한 틱 0.1 rad 상한이 주 안전장치)")
     print("   상대 EEF 체크포인트 — 실행 로그에 '[rel_eef] 상대 EEF 체크포인트' 줄이 없으면 중단", file=sys.stderr)
 elif space != "joint":
     sys.exit(f"모르는 action_space {space!r}")
