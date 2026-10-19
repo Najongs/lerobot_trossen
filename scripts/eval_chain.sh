@@ -204,7 +204,7 @@ ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv"
   LEROBOT_LOOP_HZ_WINDOW="${LOOP_HZ_WINDOW:-30}")
 [[ "${CHUNK_LOG:-0}" == 1 ]] && ENVS+=(LEROBOT_CHUNK_EXECUTION_LOG="$LOGDIR/$RUN.chunks.csv")
 # 베이스 회전 예산(base_budget.py)은 task01 숫자다 — 체인은 단계를 가리지 않으므로 셸에 남은 값을 항상 비운다
-ENVS+=(LEROBOT_BASE_THETA_BUDGET_DEG=)
+ENVS+=(LEROBOT_BASE_THETA_BUDGET_DEG= LEROBOT_BASE_THETA_BUDGET_SRC=)
 # LEROBOT_TASK_ONEHOT 은 **주지 않는다.** 그 변수는 `lerobot-record` 진입점을
 # 패치해 한 프로세스 = 한 단계를 가정한다. 체인은 stage_runner 가 번들을 한 번
 # 만들고 `TaskOneHotStep.set_stage` 로 단계를 바꾼다.

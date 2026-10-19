@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 # This is used for passive recording of base movement
 _base_velocity_lock = threading.Lock()
 _latest_base_velocity = {"x.vel": 0.0, "theta.vel": 0.0}
+# Whether the theta.vel above is this iteration's real reading: False after a failed
+# update_state() (stale cache) or a rejected sample (replaced by 0.0). Only the
+# measured-source yaw budget (base_budget.py) reads it -- it counts the command for
+# such a tick instead of a stale or zeroed reading. Same lock as the dict.
+_latest_base_theta_valid = False
 
 # Sanity bounds for base velocity readings. The SLATE base maxes out at 1.0 m/s
 # linear; these limits are generous but far below the garbage magnitudes (~1e28)
@@ -425,7 +430,8 @@ class MobileAIRobot(Robot):
         _t = time.perf_counter()
         if self._base_serial_rearm is not None:
             self._base_serial_rearm.rearm_if_permitted()
-        if not self.base.update_state():
+        state_ok = self.base.update_state()
+        if not state_ok:
             _warn_throttled(
                 "base_read",
                 "Failed to refresh Mobile AI base state; using last cached velocity.",
@@ -440,13 +446,21 @@ class MobileAIRobot(Robot):
                 self._log_base_state_transition(base_state)
         base_obs = self.base.get_vel()
         add_loop_section("base_read", time.perf_counter() - _t)
+        raw_theta = base_obs[1]
+        theta_valid = bool(
+            state_ok
+            and math.isfinite(raw_theta)
+            and abs(raw_theta) <= _MAX_BASE_ANGULAR_VEL
+        )
         x_vel, theta_vel = _sanitize_base_velocity(base_obs[0], base_obs[1])
 
         # Update shared state (always, so the teleoperator can passively record base
         # movement even when base velocity is excluded from the observation).
+        global _latest_base_theta_valid
         with _base_velocity_lock:
             _latest_base_velocity["x.vel"] = x_vel
             _latest_base_velocity["theta.vel"] = theta_vel
+            _latest_base_theta_valid = theta_valid
 
         # Expose base velocity as an observation feature only when configured. Off by
         # default: current policies expect a 14-dim observation.state (arms only), and
@@ -482,8 +496,16 @@ class MobileAIRobot(Robot):
         )
         # Per-episode yaw budget, off unless LEROBOT_BASE_THETA_BUDGET_DEG is set
         # (base_budget.py). Only ever lowers theta.vel to 0; before the CSV sample
-        # below so basevel.csv holds what the base actually got.
-        action_base_theta_vel = govern_theta(action_base_theta_vel)
+        # below so basevel.csv holds what the base actually got. The measured yaw rate
+        # (read by get_observation() at the top of this iteration) feeds the
+        # LEROBOT_BASE_THETA_BUDGET_SRC=meas integral.
+        # A stale or rejected reading is passed as None so the budget falls back to
+        # the command for that tick (and counts it).
+        with _base_velocity_lock:
+            meas_theta_for_budget = (
+                _latest_base_velocity["theta.vel"] if _latest_base_theta_valid else None
+            )
+        action_base_theta_vel = govern_theta(action_base_theta_vel, meas_theta_for_budget)
         _t = time.perf_counter()
         # set_cmd_vel carries the read half of the same Modbus transaction, so a
         # failure means both that the command may not have been applied and that

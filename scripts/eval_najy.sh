@@ -16,6 +16,10 @@
 #                                                       # 105° 에 닿으면 같은 방향 theta.vel 만 0 (되돌리기·x.vel·팔 그대로). task01 전용.
 #                                                       # 회차 이름에 _bb105 가 붙는다. 비우면(기본) 끔. LEROBOT_BASE_THETA_BUDGET_DEG 가 셸에 남아 있어도 덮어쓴다 —
 #                                                       # BASE_BUDGET_DEG 자체는 export 하지 말고 명령 앞에만 붙여라
+#        BASE_TORQUE=0 scripts/eval_najy.sh <repo> 1 60 1   # 베이스 모터 토크를 끈다(바퀴가 안 돈다, 팔은 움직인다) — 진단 전용.
+#                                                       # 회차 이름 꼬리 _nobase. 베이스 명령은 그대로 계산·기록된다(basevel.csv 의 cmd 열)
+#        BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas scripts/eval_najy.sh <repo> 1 60 1   # 같은 예산을 베이스 실측 회전(get_vel 적분)으로 센다.
+#                                                       # 기본 cmd(보낸 명령 적분). 회차 이름 꼬리 _bb84m. 예산 없이 주면 거부
 #
 #   MAX_REL  팔 관절 한 틱 이동 상한(rad, 기본 0.1). 정책 action 이 현재 자세에서 이만큼 넘게 떨어지면
 #            그 틱엔 0.1 만 간다 -- 청크 경계·시작 순간의 큰 점프로 팔이 다치는 것을 막는다(10/06 부터).
@@ -38,6 +42,12 @@ EPISODES=${4:-5}
 DRY_RUN=${DRY_RUN:-0}
 MAX_REL=${MAX_REL:-0.1}
 BASE_BUDGET_DEG=${BASE_BUDGET_DEG:-}
+BASE_BUDGET_SRC=${BASE_BUDGET_SRC:-}
+BASE_TORQUE=${BASE_TORQUE:-1}
+[[ "$BASE_TORQUE" == 0 || "$BASE_TORQUE" == 1 ]] || { echo "BASE_TORQUE 는 0 또는 1" >&2; exit 2; }
+[[ -z "$BASE_BUDGET_SRC" || "$BASE_BUDGET_SRC" == cmd || "$BASE_BUDGET_SRC" == meas ]] \
+  || { echo "BASE_BUDGET_SRC 는 cmd · meas 또는 빈 값" >&2; exit 2; }
+[[ -z "$BASE_BUDGET_SRC" || -n "$BASE_BUDGET_DEG" ]] || { echo "BASE_BUDGET_SRC 는 BASE_BUDGET_DEG 와 같이 준다" >&2; exit 2; }
 [[ -z "$BASE_BUDGET_DEG" ]] || awk -v v="$BASE_BUDGET_DEG" 'BEGIN{exit !(v ~ /^[0-9]*\.?[0-9]+$/ && v+0 > 0)}' \
   || { echo "BASE_BUDGET_DEG 는 양수(도) 또는 빈 값" >&2; exit 2; }
 [[ "$MAX_REL" == none ]] || awk -v v="$MAX_REL" 'BEGIN{exit !(v ~ /^[0-9]*\.?[0-9]+$/ && v+0 > 0)}' \
@@ -88,9 +98,11 @@ if [[ -n "${RUN_SUFFIX:-}" ]]; then
   RUN="${RUN}_${RUN_SUFFIX}"
 fi
 [[ -n "$BASE_BUDGET_DEG" ]] && RUN="${RUN}_bb${BASE_BUDGET_DEG//./p}"
+[[ "$BASE_BUDGET_SRC" == meas ]] && RUN="${RUN}m"
+[[ "$BASE_TORQUE" == 0 ]] && RUN="${RUN}_nobase"
 LOGDIR=~/eval_logs; mkdir -p "$LOGDIR"
 
-echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL · 베이스 회전 예산 ${BASE_BUDGET_DEG:-끔}"
+echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL · 베이스 회전 예산 ${BASE_BUDGET_DEG:-끔}${BASE_BUDGET_DEG:+ (${BASE_BUDGET_SRC:-cmd} 기준)}$([[ "$BASE_TORQUE" == 0 ]] && echo ' · 베이스 토크 끔(진단)')"
 
 # 1) 체크포인트 받기 (루트형/pretrained_model 중첩형 모두)
 POLICY=$(uv run python -c "
@@ -232,7 +244,7 @@ CMD=(uv run lerobot-record
     cam_left_wrist: {type: intelrealsense, serial_number_or_name: \"230422271234\", width: 640, height: 480, fps: 30},
     cam_right_wrist: {type: intelrealsense, serial_number_or_name: \"230322274369\", width: 640, height: 480, fps: 30}
 }"
-  --robot.enable_base_motor_torque=true
+  "--robot.enable_base_motor_torque=$([[ "$BASE_TORQUE" == 0 ]] && echo false || echo true)"
   "--robot.include_base_in_state=$INCLUDE_BASE"
   --teleop.type=mobileai_leader_teleop
   --teleop.left_arm_ip_address=192.168.1.3
@@ -262,7 +274,7 @@ ENVS=(LEROBOT_BASE_VEL_LOG="$LOGDIR/$RUN.basevel.csv"
 # 리셋 구간에 1초마다 「현재 → 학습 시작 자세」 를 로그로 찍는다 (pose_guide.py, 로봇 동작은 안 바뀜). 끄려면 POSE_GUIDE=0
 [[ "${POSE_GUIDE:-1}" != 0 ]] && ENVS+=(LEROBOT_POSE_GUIDE="$STAGE")
 # 베이스 회전 예산 — 끔일 때도 빈 값으로 명시해 셸에 남은 export 가 「끔」 회차를 켜지 못하게 한다
-ENVS+=(LEROBOT_BASE_THETA_BUDGET_DEG="$BASE_BUDGET_DEG")
+ENVS+=(LEROBOT_BASE_THETA_BUDGET_DEG="$BASE_BUDGET_DEG" LEROBOT_BASE_THETA_BUDGET_SRC="$BASE_BUDGET_SRC")
 # 예산은 record_loop phase 태그(LEROBOT_LOOP_HZ_LOG)로 policy 구간을 안다 — 셸에 남은 0 이 예산을 조용히 끄지 않게
 [[ -n "$BASE_BUDGET_DEG" ]] && ENVS+=(LEROBOT_LOOP_HZ_LOG=1)
 

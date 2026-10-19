@@ -18,9 +18,25 @@ by 0.0; one that turns back toward the start passes unchanged. ``x.vel`` and the
 arms are never touched. It only ever lowers a command to zero -- every safety
 constant (the +-1.0 clamp before it, the arm clamps, e-stop) is unchanged.
 
+Source of the net angle (``LEROBOT_BASE_THETA_BUDGET_SRC``)
+---------------------------------------------------------
+``cmd`` (default, the 10/16 behavior): the integral of the yaw command sent.
+``meas``: the integral of the base's own measured yaw rate (``get_vel()``, read at
+the top of the same loop iteration -- the ``meas_theta_vel`` column of
+``basevel.csv``), held for the same measured tick time. Added 10/19: with ``cmd``
+a 105-degree budget stopped the real turn at +94..+98 degrees because the base
+turns less than commanded under the policy's commands (measured/command 0.84..0.93
+on the 10/19 policy runs without a collision, vs 0.96 on the demo replay), so a command budget cannot be set to a
+measured target. Both integrals are kept and logged either way; only the chosen
+one gates. A tick with no usable measurement counts its command instead and is
+counted in the summary (``측정 없음``): mobileai.py passes ``None`` after a failed
+base read (stale cache) or a rejected sample (sanitized to 0.0), and a non-finite
+value is treated the same.
+
 Usage
 -----
     LEROBOT_BASE_THETA_BUDGET_DEG=105 uv run lerobot-record ...
+    LEROBOT_BASE_THETA_BUDGET_DEG=84 LEROBOT_BASE_THETA_BUDGET_SRC=meas uv run lerobot-record ...
 
 ``scripts/eval_najy.sh`` sets it from ``BASE_BUDGET_DEG`` (task01 only, never on
 a replay run, always passed explicitly); ``eval_chain.sh`` and ``eval_smolvla.sh``
@@ -58,6 +74,8 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "LEROBOT_BASE_THETA_BUDGET_DEG"
+SRC_ENV_VAR = "LEROBOT_BASE_THETA_BUDGET_SRC"
+SOURCES = ("cmd", "meas")
 # A tick longer than this (a stall, the first tick after a pause) still counts,
 # but only up to this long -- the base was told to hold the command, so the real
 # rotation grew too, yet one hiccup should not by itself spend the whole budget.
@@ -78,6 +96,16 @@ def parse_budget_deg(raw: str) -> float | None:
     return value
 
 
+def parse_source(raw: str) -> str:
+    """'' -> 'cmd' (the original behavior). 'cmd' or 'meas', else ValueError."""
+    raw = raw.strip()
+    if not raw:
+        return "cmd"
+    if raw not in SOURCES:
+        raise ValueError(f"{SRC_ENV_VAR}={raw!r} must be one of {SOURCES}")
+    return raw
+
+
 class BaseThetaBudget:
     """Signed net yaw budget per policy episode. SDK-free; phase and clock injected."""
 
@@ -87,7 +115,11 @@ class BaseThetaBudget:
         phase: Callable[[], str | None],
         phase_seq: Callable[[], int],
         clock: Callable[[], float] = time.perf_counter,
+        source: str = "cmd",
     ):
+        if source not in SOURCES:
+            raise ValueError(f"budget source must be one of {SOURCES}, got {source!r}")
+        self.source = source
         self.budget_rad = math.radians(budget_deg)
         self._phase = phase
         self._phase_seq = phase_seq
@@ -98,7 +130,10 @@ class BaseThetaBudget:
         self._reset_episode()
 
     def _reset_episode(self) -> None:
-        self.net_rad = 0.0
+        self.net_rad = 0.0  # the gating integral (cmd or meas, per self.source)
+        self.cmd_net_rad = 0.0
+        self.meas_net_rad = 0.0
+        self.meas_missing = 0
         self._prev_t = None
         self._prev_theta = 0.0
         self.ticks = 0
@@ -116,7 +151,9 @@ class BaseThetaBudget:
             )
         return (
             f"[base_budget] policy 구간 {self._episode} 끝: {fired}, "
-            f"끝 net {math.degrees(self.net_rad):+.1f}° / 예산 {math.degrees(self.budget_rad):.0f}°, "
+            f"끝 net {math.degrees(self.net_rad):+.1f}° / 예산 {math.degrees(self.budget_rad):.0f}° "
+            f"({self.source} 기준; 명령 {math.degrees(self.cmd_net_rad):+.1f}° · "
+            f"실측 {math.degrees(self.meas_net_rad):+.1f}° · 측정 없음 {self.meas_missing} tick), "
             f"policy tick {self.ticks}"
         )
 
@@ -126,8 +163,9 @@ class BaseThetaBudget:
             logger.info(self.summary())
             self._in_policy = False
 
-    def apply(self, theta_vel: float) -> float:
-        """Called once per loop with the sanitized yaw command; returns the one to send."""
+    def apply(self, theta_vel: float, meas_theta_vel: float | None = None) -> float:
+        """Called once per loop with the sanitized yaw command and the yaw rate measured
+        at the top of this iteration; returns the command to send."""
         phase = self._phase()
         seq = self._phase_seq()
         if seq != self._seq:
@@ -146,7 +184,21 @@ class BaseThetaBudget:
         if self._prev_t is not None:
             # The base held the previous command since the previous call.
             dt = min(max(now - self._prev_t, 0.0), _MAX_DT_S)
-            self.net_rad += self._prev_theta * dt
+            self.cmd_net_rad += self._prev_theta * dt
+            # The reading taken at the top of this iteration is the base's rate over
+            # the interval just ended (same pairing as basevel.csv's meas column).
+            if meas_theta_vel is not None and math.isfinite(meas_theta_vel):
+                self.meas_net_rad += meas_theta_vel * dt
+                meas_ok = True
+            else:
+                self.meas_net_rad += self._prev_theta * dt
+                meas_ok = False
+            if self.source == "meas":
+                if not meas_ok:
+                    self.meas_missing += 1
+                self.net_rad = self.meas_net_rad
+            else:
+                self.net_rad = self.cmd_net_rad
         self._prev_t = now
         self.ticks += 1
 
@@ -163,7 +215,7 @@ class BaseThetaBudget:
                 logger.warning(
                     f"[base_budget] 발동 — policy 구간 {self._episode} tick {self.ticks}: "
                     f"net {math.degrees(self.net_rad):+.1f}° ≥ 예산 "
-                    f"{math.degrees(self.budget_rad):.0f}°, 같은 방향 theta.vel 을 0 으로 (x.vel·팔 그대로)"
+                    f"{math.degrees(self.budget_rad):.0f}° ({self.source} 기준), 같은 방향 theta.vel 을 0 으로 (x.vel·팔 그대로)"
                 )
         self._prev_theta = sent
         return sent
@@ -173,10 +225,12 @@ def _create() -> BaseThetaBudget | None:
     budget_deg = parse_budget_deg(os.getenv(ENV_VAR, ""))
     if budget_deg is None:
         return None
+    source = parse_source(os.getenv(SRC_ENV_VAR, ""))
     from lerobot_robot_trossen import loop_rate_log
 
     governor = BaseThetaBudget(
-        budget_deg, loop_rate_log.current_phase, loop_rate_log.current_phase_seq
+        budget_deg, loop_rate_log.current_phase, loop_rate_log.current_phase_seq,
+        source=source,
     )
     if not loop_rate_log.LOOP_HZ_LOG_ENABLED:
         logger.error(
@@ -185,7 +239,7 @@ def _create() -> BaseThetaBudget | None:
         )
     else:
         logger.warning(
-            f"[base_budget] 켜짐: policy 구간 에피소드마다 순회전 |net| ≤ {budget_deg:g}° "
+            f"[base_budget] 켜짐: policy 구간 에피소드마다 순회전 |net| ≤ {budget_deg:g}° ({source} 기준) "
             "(넘는 같은 방향 theta.vel → 0, 되돌리는 방향·x.vel·팔은 그대로)"
         )
     return governor
@@ -194,11 +248,11 @@ def _create() -> BaseThetaBudget | None:
 _GOVERNOR = _create()
 
 
-def govern_theta(theta_vel: float) -> float:
+def govern_theta(theta_vel: float, meas_theta_vel: float | None = None) -> float:
     """Pass-through unless LEROBOT_BASE_THETA_BUDGET_DEG is set."""
     if _GOVERNOR is None:
         return theta_vel
-    return _GOVERNOR.apply(theta_vel)
+    return _GOVERNOR.apply(theta_vel, meas_theta_vel)
 
 
 def finish() -> None:
