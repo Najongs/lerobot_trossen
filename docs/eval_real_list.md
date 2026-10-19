@@ -4,44 +4,44 @@
 > 서버: 1호기 = DGX1 · 2호기 = sandia · 실기 = Trossen PC1(사람이 실행, Claude 는 명령·기록).
 
 ## ▶ 10/20 — 단계 전문가 먼저 (이 절부터 본다, DGX1 → Trossen PC1, 2026-10-19 22:25 KST)
-> **사용자(10/19)**: 「Task 1, 2, 3 개별 모델 하나씩 제작하자 … 성능체크 해보자」 → 「2호기도 써서 만들어둬. **내일 Eval 진행 이거 먼저 진행하게끔 집중**해두고」. 그래서 10/20 은 **t01·t02·t03 단계 전문가(#72~#75) 비교가 먼저**다. 아래 10/19 절(2c 자리 보정 시험 등)은 이 절이 끝난 뒤에 이어 간다.
-> 모델 4개 — 전부 #51(J47) 레시피(청크 100 · GIST 30% · 원핫 없음 16D · 60K), 태스크마다 데이터만 다르다. 상세는 표 맨 끝 #72~#75 행.
+> **사용자(10/19)**: 「Task 1, 2, 3 개별 모델 하나씩 제작하자 … 성능체크 해보자」 → 「2호기도 써서 만들어둬. **내일 Eval 진행 이거 먼저 진행하게끔 집중**해두고」. 그래서 10/20 은 **t01·t02·t03 단계 전문가(#76~#79) 비교가 먼저**다. 아래 10/19 절(2c 자리 보정 시험 등)은 이 절이 끝난 뒤에 이어 간다.
+> 모델 4개 — 전부 #51(J47) 레시피(청크 100 · GIST 30% · 원핫 없음 16D), **우리 데이터 전 에피소드(홀드아웃 없음) · 120K 학습 중 60K 체크포인트**(사용자 10/19 23시 「우리 데이터셋 다 써서 … 홀드아웃없이」 「학습량도」). 120K 는 10/20 저녁에 `…_120k_s1000` 으로 올라온다 — 오늘 60K 결과가 좋은 모델은 다음 날 120K 와 짝으로 돈다. 상세는 표 맨 끝 #76~#79 행. (22시대에 적은 #72~#75 는 홀드아웃을 남긴 판이라 학습을 멈추고 이것으로 바꿨다.)
 >
-> | # | 태스크 | 학습 | 허브에 올라오는 때 [추정] |
+> | # | 태스크 | 학습 | 60K 허브에 올라오는 때 [추정] |
 > |---|---|---|---|
-> | #73 | t02 — 투명 튜브 27 ep 넣은 재분할 | 1호기 J68 | 10/20 ≈10:15 (22:37 실측 0.73 s/step) |
-> | #75 | t03 — 우리 93 ep + GIST task3 | 1호기 J70 | 10/20 ≈07:45 (0.58 s/step) |
-> | #72 | t01 — 우리 80 ep + GIST task1 | 2호기 J67 | 10/20 ≈09:00 (2호기 투입 22:27) |
-> | #74 | t02 상대 EEF 변형 | 2호기 J69 | 10/20 ≈09:00 (〃) |
+> | #79 | t03 — 우리 117 ep 전부 + GIST task3 | 1호기 J74 | 10/20 ≈09 시 |
+> | #77 | t02 — 우리 133 ep 전부(투명 33) + GIST task2 | 1호기 J72 | 10/20 ≈10~11 시 |
+> | #76 | t01 — 우리 100 ep 전부 + GIST task1 | 2호기 J71 | 2호기 투입 + ≈10 h |
+> | #78 | t02 상대 EEF 변형 | 2호기 J73 | 〃 |
 >
-> **#75 가 #73 보다 먼저 나온다 — 아침에 #73 이 아직 없으면 §2(t03, 튜브는 손으로 쥐여 시작)부터 하고 §1 로 돌아온다.** **허브에 60K 가 없으면 그 행은 건너뛰고 다음 태스크로 간다**(다른 체크포인트로 대신 돌리지 않는다). 확인: `uv run python -c "from huggingface_hub import list_repo_files as l; print(l('<repo>'))"` 에 `model.safetensors`·`multi_manifest.json`.
+> **#79 가 #77 보다 먼저 나온다 — 아침에 #77 이 아직 없으면 §2(t03, 튜브는 손으로 쥐여 시작)부터 하고 §1 로 돌아온다.** **허브에 60K 가 없으면 그 행은 건너뛰고 다음 태스크로 간다**(다른 체크포인트로 대신 돌리지 않는다). 확인: `uv run python -c "from huggingface_hub import list_repo_files as l; print(l('<repo>'))"` 에 `model.safetensors`·`multi_manifest.json`.
 
 ### 0. 시작 (≈15 분)
 1. `git pull origin main`.
 2. **출발 이상 진단 2 회** — 아래 10/19 절 0′-2 그대로(`BASE_TORQUE=0`, 재생 ep30 자리, 각 20 s). 이 둘이 10/19 의 「첫 1~2 청크가 기록 영상으로 재현 안 됨」 을 가린다. 결과를 기다리지 말고 1 로 넘어간다. DGX 가 오늘 전문가 회차도 첫 청크를 다시 예측해 그 회차가 판정에 쓸 수 있는지 표시한다.
-3. 전문가 4개는 전부 16D · 원핫 없음이다 — **로그에 `zero-pad only` 가 없으면 그 회차를 중단**한다. #74 는 추가로 `[rel_eef] 상대 EEF 체크포인트 -- … (state_free=False …)` 줄.
+3. 전문가 4개는 전부 16D · 원핫 없음이다 — **로그에 `zero-pad only` 가 없으면 그 회차를 중단**한다. #78 는 추가로 `[rel_eef] 상대 EEF 체크포인트 -- … (state_free=False …)` 줄.
 
 ### 1. t02 튜브 집기 — 2a 자리(시연 튜브·시연 구멍) · 9 회 (+ 조건부 4)
 - 자리: 재생 ep102 로 A✓ 먼저(10/16 §2 의 2a 재생 명령 그대로).
-- 순서: **(#73 → #51 → #2) × 3** — 같은 자리·같은 구멍에서 번갈아.
-  - #73 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task02_c100_gist30_solo_il_16D_60k_s1000 2 60 1`
+- 순서: **(#77 → #51 → #2) × 3** — 같은 자리·같은 구멍에서 번갈아.
+  - #77 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task02_c100_gist30_soloall_16D_60k_s1000 2 60 1`
   - #51 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task02_c100_gist30_solo_16D_60k_s1000 2 60 1`
   - #2 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 HOT=2/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 2 60 1`
-- 조건부: #74 가 허브에 있으면 **#63 1 회(상대 EEF 어댑터 첫 실기 — 10/19 절 §0-3 줄을 다 본다)** → 정상이면 **#74 × 3**(`…task02_c100_gist30_solo_il_reef_16D_60k_s1000`, 명령은 #73 과 같고 repo 만). #63 에서 로그 줄이 하나라도 없거나 팔이 이상하면 상대 EEF 회차는 모두 멈춘다.
-- 판정: 양손으로 쥐고 들면 ✓, 왼손만 +p. **#73 이 #51 보다 2 회 이상 많으면 투명 튜브 학습 장면(6 → 27)이 레버**, #51 이 #2 보다 2 회 이상 많으면 「같은 레시피의 단계 전문가 > 11단계 모델」(O11 뒤집힘).
+- 조건부: #78 가 허브에 있으면 **#63 1 회(상대 EEF 어댑터 첫 실기 — 10/19 절 §0-3 줄을 다 본다)** → 정상이면 **#78 × 3**(`…task02_c100_gist30_soloall_reef_16D_60k_s1000`, 명령은 #77 과 같고 repo 만). #63 에서 로그 줄이 하나라도 없거나 팔이 이상하면 상대 EEF 회차는 모두 멈춘다.
+- 판정: 양손으로 쥐고 들면 ✓, 왼손만 +p. **#77 이 #51 보다 2 회 이상 많으면 우리 데이터 전부(106 → 133 ep, 투명 6 → 33) + 120K 학습 중 60K 가 레버**, #51 이 #2 보다 2 회 이상 많으면 「같은 레시피의 단계 전문가 > 11단계 모델」(O11 뒤집힘).
 
 ### 2. t03 제자리 회전 — **튜브를 양손에 쥔 채 출발** · 9 회
 - 자리: t02 를 끝낸 자세 그대로(또는 10/16 §2 3행 자리). 비커 정면까지 ≈ −81°(21 Hz 환산).
-- 순서: **(#75 → #2 → 팀 전문가) × 3**
-  - #75 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task03_c100_gist30_solo_16D_60k_s1000 3 60 1`
+- 순서: **(#79 → #2 → 팀 전문가) × 3**
+  - #79 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task03_c100_gist30_soloall_16D_60k_s1000 3 60 1`
   - #2 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 HOT=3/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_60k_s1000 3 60 1`
   - 팀 전문가 `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/task03_turn_to_face_beaker_14D 3 60 1`
 - 기록: 실측 회전(°) · 회전 시작 시각 · 튜브를 놓쳤는지. 판정: 비커 정면에서 멈추면 ✓ (#2 의 10/13 성공 실측 −84°). 덜 돌면(−44~−67° 류) ✗ 로 적고 실측값을 남긴다.
 
 ### 3. t01 랙으로 이동 — 6 회 (+ 재생 1)
 - 자리: 재생 ep30 자리. **먼저 같은 날 재생 1 회**로 도착 기준(멈춘 곳 실측 θ·x)을 잰다(10/19 재생 명령 그대로).
-- 순서: **(#72 → #27) × 3**, 둘 다 회전 예산 켬(실측 기준 84°):
-  - #72 `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task01_c100_gist30_solo_16D_60k_s1000 1 60 1`
+- 순서: **(#76 → #27) × 3**, 둘 다 회전 예산 켬(실측 기준 84°):
+  - #76 `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task01_c100_gist30_soloall_16D_60k_s1000 1 60 1`
   - #27 `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 HOT=1/11 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 1 60 1`
 - 판정(10/19 새 기준): 재생 도착 대비 |Δθ| ≤ 8° · |Δx| ≤ 0.15 m · 충돌 없음. 회차 꼬리에 `_bb84m` 이 붙었는지 확인.
 
@@ -65,7 +65,7 @@
 3. t02 2a(#63 첫 1 회) → **2c 자리 보정 시험**(아래 §2 그대로). 출발 이상이 t02 에도 있는지는 DGX 가 회차마다 재예측으로 표시한다 — 회차는 그대로 기록한다.
 4. t01 은 진단 결과 뒤로 미룬다. **새 t01 성공 기준**: 같은 날 재생 도착(멈춘 곳 실측)과 |Δθ| ≤ 8° · |Δx| ≤ 0.15 m · 충돌 없음. 다음 t01 비교는 #27 e60 ↔ `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas`(회차 꼬리 `_bb84m`) 3 대 3. **t01 전문가는 접는다**(시연 범위 밖 과회전). 10/19 의 #27 e60 · bb105 · e30 비교는 출발 이상이 섞여 판정에 쓰지 않는다.
 
-> **추가(10/19 21:50 KST, 사용자 「Task 1, 2, 3 개별 모델 하나씩 … 성능체크」)** — 단계 전문가 #72(t01) · #73(t02) · #74(t02 상대 EEF 변형) · #75(t03) 를 학습 중 — **22:25 갱신: #73·#75 는 1호기(#75 ≈07:45 · #73 ≈10:15 [추정]), #72·#74 는 2호기로 옮김(1호기 CPU 병목)**, 순서는 맨 위 10/20 절. 아래 표 맨 끝 행. **실기는 진단 2 회로 10/19 출발 이상이 풀린 뒤** — 그 전 결과는 10/19 #27 회차처럼 판정에 못 쓴다. 허브에 없으면 건너뛴다.
+> **추가(10/19 21:50 KST, 사용자 「Task 1, 2, 3 개별 모델 하나씩 … 성능체크」)** — 단계 전문가 #72(t01) · #73(t02) · #74(t02 상대 EEF 변형) · #75(t03) 를 학습 중 — **23:10 정정: #72~#75 는 멈추고 우리 데이터 전부·120K 판 #76~#79 로 바꿨다(맨 위 10/20 절). 22:25 갱신: #73·#75 는 1호기(#75 ≈07:45 · #73 ≈10:15 [추정]), #72·#74 는 2호기로 옮김(1호기 CPU 병목)**, 순서는 맨 위 10/20 절. 아래 표 맨 끝 행. **실기는 진단 2 회로 10/19 출발 이상이 풀린 뒤** — 그 전 결과는 10/19 #27 회차처럼 판정에 못 쓴다. 허브에 없으면 건너뛴다.
 
 ### 0. 시작 전 — 10/16 §0 에 아래를 더한다
 1. `git pull origin main` 뒤 **상대 EEF 어댑터 커밋 8f927a2 · 0a1c5d3** 이 있는지 본다:
@@ -858,10 +858,14 @@ state 드롭아웃(#43·#44)은 10/14 에 A✓ 에서 이미 비교했다(이득
 | 69 | `NAJY_act_all11_c100_gist30_reef_sf_27D_120k_s1000` | #62(J57, state 제거) 60K → 120K, DGX1(J64) | 120K: 잡는 자리 따라감(예측 닫힘) 20틱 전 R² .91·.87 · **40틱 전 .75·.76**(#62 .72·.62) · 출발 우리 ho 7/8(t11 .43, #62 .30) · GIST ho 8/8 · GIST t03 회전 없음(θ +.12) · **IK 유지 우리 ho 0 · GIST ho 70/2760**(t05 69 — #62 123) [오프라인]. 중간: 90K 우리 8/8·IK 132 / 105K IK 76 — 120K 가 가장 고름 | **#62 를 대신한다** — state 제거 레시피는 더 구우니 IK 유지·잡기 40틱 전·t11 이 모두 나아졌다. 명령은 #62 와 같고 repo 만 `…_reef_sf_27D_120k_s1000`. #63 과 ABAB 하면 state 효과를 같은 학습량에서 본다 | 2 | **public(10/19 09:01 KST)** sha256 a1ea5594… (sim 1934ea6) | J64 |
 | 70 | `NAJY_act_all11_c100_gist30_reef_sf_27D_120k_s2000` | #64(J59) 60K → 120K, sandia(J65) | 120K: 출발 우리 ho 7/8(**t11 .29**, #64 .57) · GIST ho 8/8 · GIST t03 회전 없음(θ −.02) · **IK 유지(60스텝 안, 새 기준) 우리 ho 35/712(t09) · GIST ho 48/2760**(t05 47 — #64 80) [오프라인, 1 시드]. 중간: 90K t11 .69·IK 36 이 가장 좋지만 한 체크포인트뿐 · t11 은 체크포인트마다 .29~.69 | #69 의 시드 짝 — #69 가 실기에서 좋거나 나쁠 때 시드 운인지 가르는 용도. 명령은 #69 와 같고 repo 만 `…_120k_s2000`. t11 출발이 약할 수 있다 | 3 | **public(10/19 21:40 KST)** sha256 a02df08c… · 허브 multi_manifest 있음 | J65 |
 | 71 | `NAJY_act_all11_c100_gist30_reef_sf_27D_120k_s3000` | #65(J60) 60K → 120K, sandia(J66) | 120K: 출발 우리 ho 7/8(t11 .41, #65 .25) · GIST ho 8/8 · GIST t03 회전 없음(θ −.00) · **IK 유지 우리 ho 2/712 · GIST ho 64/2760**(t05 62 — #65 99) [오프라인, 1 시드]. **state 제거 120K 시드 3개(#69·#70·#71)**: GIST IK 유지 70·48·64(60K 123·80·99 에서 모두 줄어듦) · t11 출발 .43·.29·.41(셋 다 약함) · GIST t03 회전 출발 셋 다 없음 | 〃 명령은 repo 만 `…_120k_s3000` | 3 | **public(10/19 21:41 KST)** sha256 806b3ab6… · 〃 | J66 |
-| 72 | `NAJY_act_task01_c100_gist30_solo_16D_60k_s1000` | **t01 단일 단계 전문가** — #51(J47) 레시피 그대로(c100 · GIST 0.43 · 원핫 없음 16D · base zero · 60K · 2장×16), 데이터 우리 t01 80 ep(0~79) + GIST task1 1,836 ep, **sandia(J67, 1호기에서 옮김)** · 사용자 10/19 「Task 1, 2, 3 개별 모델 하나씩」 | 학습 중 — 15K~60K 마다 홀드아웃 80~99 첫 청크 θ·x 비(#27·팀 전문가와 짝) + 10/15 실기 첫 프레임 재예측 | t01 3 회, 회전 예산 켬: `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task01_c100_gist30_solo_16D_60k_s1000 1 60 1` — 로그에 `zero-pad only` 없으면 중단. 판정은 10/19 새 기준(같은 날 재생 대비 \|Δθ\| ≤ 8° · \|Δx\| ≤ 0.15 m · 충돌 없음). 짝은 #27 e60 bb84m | **1 (10/20 §3)** | 2호기 투입 10/19 22:27 KST(역검증 OK) · 끝 ≈10/20 09:00 KST [추정] | J67 |
-| 73 | `NAJY_act_task02_c100_gist30_solo_il_16D_60k_s1000` | **t02 단일 단계 전문가** — 같은 레시피, 데이터 우리 t02 재분할 il 107 ep(빨강 80 · **투명 27**) + GIST task2 1,658 ep, DGX1(J68). #51 과 다른 축 = 투명 튜브 학습 장면 6 → 27 (팀 전문가 14D 는 투명 33 을 다 보고 10/15 A✓ 에서 왼손을 쥐었다) | 학습 중. **비교 주의**: il 홀드아웃 26 ep 중 21 ep 를 #51·#2 가 학습했다 → #51·#2 와는 둘 다 안 본 5 ep(109·114·119·124·129)와 실기로만 비교 | 2a 자리(재생 ep102 로 A✓)에서 3 회: `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task02_c100_gist30_solo_il_16D_60k_s1000 2 60 1` — 로그 `zero-pad only` 확인. 짝은 #51 · #2 (번갈아) | **1 (10/20 §1)** | 학습 중 1호기(≈10/20 10:15 [추정]) | J68 |
-| 74 | `NAJY_act_task02_c100_gist30_solo_il_reef_16D_60k_s1000` | #73 + **상대 EEF 행동(state 유지, 원핫·ENV 없음)**, **sandia(J69, 1호기에서 옮김)** — 변형 | 학습 중 — il 홀드아웃 26 ep 에서 #73 과 짝(잡는 자리 따라감 R²·IK 유지) | **#63 첫 실기(2a 어댑터 확인)가 정상일 때만**. 명령은 #73 에서 repo 만 `…_il_reef_16D_60k_s1000`, 로그 `[rel_eef] 상대 EEF 체크포인트 -- … (state_free=False …)`·`zero-pad only` 둘 다 있어야 한다 | 1 조건부 (10/20 §1) | 2호기 투입 10/19 22:27 KST(역검증 OK) · 끝 ≈10/20 09:00 KST [추정] | J69 |
-| 75 | `NAJY_act_task03_c100_gist30_solo_16D_60k_s1000` | **t03 단일 단계 전문가** — 같은 레시피, 데이터 우리 t03 93 ep(0~92) + GIST task3 1,878 ep, DGX1(J70). state 유지(state 제거는 GIST t03 회전 출발을 죽였다) · GIST task3 유지(#2 의 t03 성공과 같은 데이터) | 학습 중 — 홀드아웃 93~116(#2 와 같은 분할)에서 첫 청크 θ 비·max\|θ\|(≥0.3 을 내나 — 느린 회전은 베이스가 44% 만 따라간다) | **튜브를 쥔 채 출발**(10/16 §2 3행 자리) 3 회: `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task03_c100_gist30_solo_16D_60k_s1000 3 60 1` — 로그 `zero-pad only` 확인. 짝은 #2 · 팀 전문가 `task03_turn_to_face_beaker_14D` | **1 (10/20 §2)** | 학습 중 1호기(≈10/20 07:45 [추정]) | J70 |
+| 72 | `NAJY_act_task01_c100_gist30_solo_16D_60k_s1000` | **t01 단일 단계 전문가** — #51(J47) 레시피 그대로(c100 · GIST 0.43 · 원핫 없음 16D · base zero · 60K · 2장×16), 데이터 우리 t01 80 ep(0~79) + GIST task1 1,836 ep, **sandia(J67, 1호기에서 옮김)** · 사용자 10/19 「Task 1, 2, 3 개별 모델 하나씩」 | 학습 중 — 15K~60K 마다 홀드아웃 80~99 첫 청크 θ·x 비(#27·팀 전문가와 짝) + 10/15 실기 첫 프레임 재예측 | t01 3 회, 회전 예산 켬: `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task01_c100_gist30_solo_16D_60k_s1000 1 60 1` — 로그에 `zero-pad only` 없으면 중단. 판정은 10/19 새 기준(같은 날 재생 대비 \|Δθ\| ≤ 8° · \|Δx\| ≤ 0.15 m · 충돌 없음). 짝은 #27 e60 bb84m | **1 (10/20 §3)** | 2호기 투입 10/19 22:27 KST(역검증 OK) · 끝 ≈10/20 09:00 KST [추정] · **중단 10/19 23:08 KST → #76~#79 로 대체**(사용자 「홀드아웃없이」「학습량도」) | J67 |
+| 73 | `NAJY_act_task02_c100_gist30_solo_il_16D_60k_s1000` | **t02 단일 단계 전문가** — 같은 레시피, 데이터 우리 t02 재분할 il 107 ep(빨강 80 · **투명 27**) + GIST task2 1,658 ep, DGX1(J68). #51 과 다른 축 = 투명 튜브 학습 장면 6 → 27 (팀 전문가 14D 는 투명 33 을 다 보고 10/15 A✓ 에서 왼손을 쥐었다) | 학습 중. **비교 주의**: il 홀드아웃 26 ep 중 21 ep 를 #51·#2 가 학습했다 → #51·#2 와는 둘 다 안 본 5 ep(109·114·119·124·129)와 실기로만 비교 | 2a 자리(재생 ep102 로 A✓)에서 3 회: `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task02_c100_gist30_solo_il_16D_60k_s1000 2 60 1` — 로그 `zero-pad only` 확인. 짝은 #51 · #2 (번갈아) | **1 (10/20 §1)** | 학습 중 1호기(≈10/20 10:15 [추정]) · **중단 10/19 23:08 KST → #76~#79 로 대체**(사용자 「홀드아웃없이」「학습량도」) | J68 |
+| 74 | `NAJY_act_task02_c100_gist30_solo_il_reef_16D_60k_s1000` | #73 + **상대 EEF 행동(state 유지, 원핫·ENV 없음)**, **sandia(J69, 1호기에서 옮김)** — 변형 | 학습 중 — il 홀드아웃 26 ep 에서 #73 과 짝(잡는 자리 따라감 R²·IK 유지) | **#63 첫 실기(2a 어댑터 확인)가 정상일 때만**. 명령은 #73 에서 repo 만 `…_il_reef_16D_60k_s1000`, 로그 `[rel_eef] 상대 EEF 체크포인트 -- … (state_free=False …)`·`zero-pad only` 둘 다 있어야 한다 | 1 조건부 (10/20 §1) | 2호기 투입 10/19 22:27 KST(역검증 OK) · 끝 ≈10/20 09:00 KST [추정] · **중단 10/19 23:08 KST → #76~#79 로 대체**(사용자 「홀드아웃없이」「학습량도」) | J69 |
+| 75 | `NAJY_act_task03_c100_gist30_solo_16D_60k_s1000` | **t03 단일 단계 전문가** — 같은 레시피, 데이터 우리 t03 93 ep(0~92) + GIST task3 1,878 ep, DGX1(J70). state 유지(state 제거는 GIST t03 회전 출발을 죽였다) · GIST task3 유지(#2 의 t03 성공과 같은 데이터) | 학습 중 — 홀드아웃 93~116(#2 와 같은 분할)에서 첫 청크 θ 비·max\|θ\|(≥0.3 을 내나 — 느린 회전은 베이스가 44% 만 따라간다) | **튜브를 쥔 채 출발**(10/16 §2 3행 자리) 3 회: `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task03_c100_gist30_solo_16D_60k_s1000 3 60 1` — 로그 `zero-pad only` 확인. 짝은 #2 · 팀 전문가 `task03_turn_to_face_beaker_14D` | **1 (10/20 §2)** | 학습 중 1호기(≈10/20 07:45 [추정]) · **중단 10/19 23:08 KST → #76~#79 로 대체**(사용자 「홀드아웃없이」「학습량도」) | J70 |
+| 76 | `NAJY_act_task01_c100_gist30_soloall_16D_60k_s1000` (120K: `…_120k_s1000`) | **t01 단계 전문가** — #51(J47) 레시피(c100 · GIST 0.43 · 원핫 없음 16D · base zero · lr 3e-5 일정) · **우리 데이터 전 ep(홀드아웃 없음) + GIST 학습 ∪ GIST 홀드아웃(no_motion 제외)** · **120K**(60K 를 먼저 public — 일정 lr 이라 60K 단독 학습과 갱신 경로가 같다). 우리 t01 100 ep + GIST task1 2,040 ep, sandia(J71) | 홀드아웃 없음 — 오프라인 채점 안 함(실기가 판정) | 10/20 §3: `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task01_c100_gist30_soloall_16D_60k_s1000 1 60 1` ↔ #27 bb84m, 3 대 3. 로그 `zero-pad only` | **1 (10/20 §3)** | 2호기 지시 10/19 23:05 KST | J71 |
+| 77 | `NAJY_act_task02_c100_gist30_soloall_16D_60k_s1000` (120K: `…_120k_s1000`) | **t02 단계 전문가** — #51(J47) 레시피(c100 · GIST 0.43 · 원핫 없음 16D · base zero · lr 3e-5 일정) · **우리 데이터 전 ep(홀드아웃 없음) + GIST 학습 ∪ GIST 홀드아웃(no_motion 제외)** · **120K**(60K 를 먼저 public — 일정 lr 이라 60K 단독 학습과 갱신 경로가 같다). 우리 t02 133 ep(빨강 100 · 투명 33) + GIST task2 1,841 ep, DGX1(J72) | 〃 | 10/20 §1: (#77 → #51 → #2) × 3. `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task02_c100_gist30_soloall_16D_60k_s1000 2 60 1` · 로그 `zero-pad only` | **1 (10/20 §1)** | 학습 중 1호기(투입 23:08 KST, 역검증 OK) · 60K ≈10/20 10~11 시 [추정] | J72 |
+| 78 | `NAJY_act_task02_c100_gist30_soloall_reef_16D_60k_s1000` (120K: `…_120k_s1000`) | #77 + **상대 EEF 행동(state 유지, 원핫·ENV 없음)**, sandia(J73) — 변형 | 〃 | 10/20 §1 조건부: #63 첫 실기 정상일 때만 × 3. 명령은 #77 에서 repo 만. 로그 `[rel_eef] 상대 EEF 체크포인트 -- … (state_free=False …)` · `zero-pad only` | 1 조건부 (10/20 §1) | 2호기 지시 10/19 23:05 KST | J73 |
+| 79 | `NAJY_act_task03_c100_gist30_soloall_16D_60k_s1000` (120K: `…_120k_s1000`) | **t03 단계 전문가** — #51(J47) 레시피(c100 · GIST 0.43 · 원핫 없음 16D · base zero · lr 3e-5 일정) · **우리 데이터 전 ep(홀드아웃 없음) + GIST 학습 ∪ GIST 홀드아웃(no_motion 제외)** · **120K**(60K 를 먼저 public — 일정 lr 이라 60K 단독 학습과 갱신 경로가 같다). 우리 t03 117 ep + GIST task3 2,086 ep, DGX1(J74). state 유지 · GIST task3 유지 | 〃 | 10/20 §2 튜브 쥔 출발: (#79 → #2 → 팀 전문가) × 3. `LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task03_c100_gist30_soloall_16D_60k_s1000 3 60 1` · 로그 `zero-pad only` | **1 (10/20 §2)** | 학습 중 1호기(투입 23:08 KST, 역검증 OK) · 60K ≈10/20 09 시 [추정] | J74 |
 
 **순서 제안**(옛 요약 — 위 「로봇 PC 전달」 S0~S11 이 정본): 우선 1 → #1 exec A/B(1 h) → #2·#12 선정 맞대기(≈3 h, #12 public 뒤) → #3 R1·R2(1 h) → 우선 2(#4·#5·#6·#9·#13·#14·#15) → 우선 3 → 선정 뒤 #17·#18. 무접촉 ① 은 모델마다 10분이라 **먼저 전부 돌려 두면** 이후 순서를 바꿀 근거가 생긴다.
 
