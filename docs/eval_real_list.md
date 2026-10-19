@@ -7,6 +7,17 @@
 > **사용자(10/19)**: 「실기 돌려볼 리스트 정리해서 Trossen PC에 보내줘.」 마지막 실기는 10/15 다(10/16 절은 아직 한 회차도 돌지 않았다). 그래서 **10/16 절의 순서표·명령을 그대로 쓰고**, 그 뒤에 나온 **상대 EEF 모델(#62~#69)** 을 이 절에서 끼워 넣는다. 옛 모델 명령은 10/16 §3 그대로다. 이 절의 시각은 전부 KST 다.
 > 바뀐 것: ① **t02 에 2c 「자리 보정 시험」 신설(1순위)** — 랙을 3~5 cm 옮긴 자리에서 #63 ↔ #2 3 대 3. ② t02 2a(시연 구멍 그대로)의 반복에 #63 을 넣었다. ③ #69(state 제거 120K)는 2순위 — #62 를 대신한다. ④ 시드 짝(#66·#67)과 120K(#68)는 2c 결과에 따라 도는 조건부 회차. ⑤ #64·#65·#62 는 보류, #70·#71 은 아직 학습 전.
 
+### 0′. 10/19 오후 — 다음 세션 첫 순서 (DGX 답은 [`eval_najy_results_1019.md`](eval_najy_results_1019.md) 「DGX 답」)
+1. `git pull origin main` — **ade0a78** 이 있어야 한다(`grep -c BASE_TORQUE scripts/eval_najy.sh` ≥ 1).
+2. **출발 이상 진단 2 회 (먼저, 각 1 ep, 베이스 토크 끔 — 바퀴가 안 돌아 안전하다. 팔은 움직인다)**. 재생 ep30 자리에서:
+   ```bash
+   BASE_TORQUE=0 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 1 60 1
+   BASE_TORQUE=0 LEROBOT_FAST_OBS=0 HOT=1/11 LEROBOT_CHUNK_SMOOTH_TICKS=3 LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 scripts/eval_najy.sh kiroaiseoul/NAJY_act_all11_c100_gist30_27D_120k_s1000 1 60 1
+   ```
+   (10/19 t01 #27 명령과 같은 스위치인지 그날 명령과 대조하고 다르면 그날 것을 따른다.) 각 회차 20 s 쯤 돌고 ESC. 둘째 회차 로그에 `GPU-side observation preprocessing is active` 줄이 **없어야** 한다(루프가 10 Hz 대로 떨어지는 것은 정상 — 바퀴가 안 돌아 과회전 위험 없음). 데이터셋이 허브에 올라가면 DGX 가 첫 두 청크를 다시 예측해 기록과 맞는지 본다. **결과를 기다리지 말고 3 으로 넘어간다.**
+3. t02 2a(#63 첫 1 회) → **2c 자리 보정 시험**(아래 §2 그대로). 출발 이상이 t02 에도 있는지는 DGX 가 회차마다 재예측으로 표시한다 — 회차는 그대로 기록한다.
+4. t01 은 진단 결과 뒤로 미룬다. **새 t01 성공 기준**: 같은 날 재생 도착(멈춘 곳 실측)과 |Δθ| ≤ 8° · |Δx| ≤ 0.15 m · 충돌 없음. 다음 t01 비교는 #27 e60 ↔ `BASE_BUDGET_DEG=84 BASE_BUDGET_SRC=meas`(회차 꼬리 `_bb84m`) 3 대 3. **t01 전문가는 접는다**(시연 범위 밖 과회전). 10/19 의 #27 e60 · bb105 · e30 비교는 출발 이상이 섞여 판정에 쓰지 않는다.
+
 ### 0. 시작 전 — 10/16 §0 에 아래를 더한다
 1. `git pull origin main` 뒤 **상대 EEF 어댑터 커밋 8f927a2 · 0a1c5d3** 이 있는지 본다:
    `ls packages/lerobot_robot_trossen/src/lerobot_robot_trossen/rel_eef_patch.py` (없으면 `eval_najy.sh` 가 상대 EEF 체크포인트를 스스로 거부한다 — 관절 목표로 변위가 나가는 사고를 막는다).
