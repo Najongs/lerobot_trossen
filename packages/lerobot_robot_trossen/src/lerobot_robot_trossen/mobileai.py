@@ -11,6 +11,7 @@ from trossen_slate import ChassisData, TrossenSlate
 from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots import Robot
 
+from . import parallel_arms as _parallel_arms
 from lerobot_robot_trossen import BiWidowXAIFollowerRobot, BiWidowXAIFollowerRobotConfig
 from lerobot_robot_trossen.base_serial_rearm import create_base_serial_rearm
 from lerobot_robot_trossen.config_mobileai import MobileAIRobotConfig
@@ -279,6 +280,24 @@ class MobileAIRobot(Robot):
         )
 
     def connect(self, calibrate: bool = True) -> None:
+        # Leader arms connect in a thread while the followers do (parallel_arms.py).
+        # On any failure below, wait for them and release them before re-raising.
+        leader_job = _parallel_arms.start_teleop("connect")
+        try:
+            self._connect(calibrate)
+        except BaseException:
+            if leader_job is not None:
+                try:
+                    leader_job.join()
+                    if _parallel_arms._paired_teleop is not None and _parallel_arms._paired_teleop.is_connected:
+                        _parallel_arms._paired_teleop.disconnect()
+                except Exception as e:
+                    logger.warning(f"[parallel_arms] leader cleanup after failed connect: {e!r}")
+            raise
+        if leader_job is not None:
+            leader_job.join()
+
+    def _connect(self, calibrate: bool = True) -> None:
         self.arms.connect(calibrate=calibrate)
         base_init_success, message = self.base.init_base()
         if not base_init_success:
@@ -538,6 +557,19 @@ class MobileAIRobot(Robot):
         }
 
     def disconnect(self):
+        # Leader arms go to sleep in a thread while the followers do (parallel_arms.py);
+        # lerobot-record's own teleop.disconnect() is then skipped by its is_connected guard.
+        leader_job = _parallel_arms.start_teleop("disconnect")
+        try:
+            self._disconnect()
+        finally:
+            if leader_job is not None:
+                try:
+                    leader_job.join()
+                except Exception as e:
+                    logger.warning(f"Error while disconnecting leader arms: {e}")
+
+    def _disconnect(self):
         flush_base_vel_log()
 
         if not self.base.set_cmd_vel(0.0, 0.0):

@@ -1,0 +1,2 @@
+학습 kiroaiseoul/task01_move_to_tube_rack: 100ep, 30 fps | 프레임당 이동 중앙값 0.003 rad, 방향 바뀜 0.22/s | 시작점끼리 최근접 거리 중앙값 0.08
+kiroaiseoul/eval_najy_1020_1357_hot_t01_e100_nobase ep0: 28.1s, 21 fps | 프레임당 이동 0.002 rad, 방향 바뀜 0.01/s | 시작점 최근접 0.00 | 청크 경계 점프 0.002 / 그 외 0.001 (1.3x, exec 100)

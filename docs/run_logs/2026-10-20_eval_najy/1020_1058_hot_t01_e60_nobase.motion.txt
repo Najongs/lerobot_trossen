@@ -1,0 +1,2 @@
+학습 kiroaiseoul/task01_move_to_tube_rack: 100ep, 30 fps | 프레임당 이동 중앙값 0.003 rad, 방향 바뀜 0.22/s | 시작점끼리 최근접 거리 중앙값 0.08
+/home/trossen-ai/.cache/huggingface/lerobot/kiroaiseoul/eval_najy_1020_1058_hot_t01_e60_nobase 에 저장된 에피소드가 없다

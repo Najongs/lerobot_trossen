@@ -10,6 +10,7 @@ from lerobot_teleoperator_trossen.config_widowxai_leader import (
     WidowXAILeaderTeleopConfig,
 )
 from lerobot_teleoperator_trossen.widowxai_leader import WidowXAILeaderTeleop
+from lerobot_teleoperator_trossen.parallel_arms import run_both
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,11 @@ class BiWidowXAILeaderRobot(Teleoperator):
         return self.left_arm.is_connected and self.right_arm.is_connected
 
     def connect(self, calibrate: bool = True) -> None:
-        self.left_arm.connect(calibrate)
-        self.right_arm.connect(calibrate)
+        run_both(
+            "leader connect",
+            lambda: self.left_arm.connect(calibrate),
+            lambda: self.right_arm.connect(calibrate),
+        )
 
     @property
     def is_calibrated(self) -> bool:
@@ -75,8 +79,7 @@ class BiWidowXAILeaderRobot(Teleoperator):
         self.right_arm.calibrate()
 
     def configure(self) -> None:
-        self.left_arm.configure()
-        self.right_arm.configure()
+        run_both("leader configure", self.left_arm.configure, self.right_arm.configure)
 
     def get_action(self) -> dict[str, float]:
         action_dict = {}
@@ -113,5 +116,4 @@ class BiWidowXAILeaderRobot(Teleoperator):
             self.right_arm.send_feedback(right_feedback)
 
     def disconnect(self) -> None:
-        self.left_arm.disconnect()
-        self.right_arm.disconnect()
+        run_both("leader disconnect", self.left_arm.disconnect, self.right_arm.disconnect)

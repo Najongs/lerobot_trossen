@@ -1,0 +1,6 @@
+/home/trossen-ai/NAJY/lerobot_trossen/scripts/eval_motion_stats.py:71: RuntimeWarning: Mean of empty slice.
+  seam, rest = da[k == 0].mean(), da[k != 0].mean()
+/home/trossen-ai/NAJY/lerobot_trossen/.venv/lib/python3.11/site-packages/numpy/_core/_methods.py:145: RuntimeWarning: invalid value encountered in divide
+  ret = ret.dtype.type(ret / rcount)
+학습 kiroaiseoul/task01_move_to_tube_rack: 100ep, 30 fps | 프레임당 이동 중앙값 0.003 rad, 방향 바뀜 0.22/s | 시작점끼리 최근접 거리 중앙값 0.08
+kiroaiseoul/eval_najy_1020_1111_hot_t01_e60_nobase ep0: 0.9s, 21 fps | 프레임당 이동 0.003 rad, 방향 바뀜 0.64/s | 시작점 최근접 0.00 | 청크 경계 점프 nan / 그 외 0.001 (nanx, exec 60)

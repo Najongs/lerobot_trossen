@@ -10,6 +10,7 @@ from lerobot_robot_trossen.config_bi_widowxai_follower import (
 )
 from lerobot_robot_trossen.config_widowxai_follower import WidowXAIFollowerConfig
 from lerobot_robot_trossen.widowxai_follower import WidowXAIFollower
+from lerobot_robot_trossen.parallel_arms import run_both
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +93,11 @@ class BiWidowXAIFollowerRobot(Robot):
         )
 
     def connect(self, calibrate: bool = True) -> None:
-        self.left_arm.connect(calibrate)
-        self.right_arm.connect(calibrate)
+        run_both(
+            "follower connect",
+            lambda: self.left_arm.connect(calibrate),
+            lambda: self.right_arm.connect(calibrate),
+        )
 
         for cam in self.cameras.values():
             cam.connect()
@@ -111,8 +115,7 @@ class BiWidowXAIFollowerRobot(Robot):
 
     def configure(self) -> None:
         # Set the arm to position control mode
-        self.left_arm.configure()
-        self.right_arm.configure()
+        run_both("follower configure", self.left_arm.configure, self.right_arm.configure)
 
     def get_observation(self) -> dict[str, Any]:
         obs_dict = {}
@@ -162,8 +165,7 @@ class BiWidowXAIFollowerRobot(Robot):
         return {**prefixed_send_action_left, **prefixed_send_action_right}
 
     def disconnect(self):
-        self.left_arm.disconnect()
-        self.right_arm.disconnect()
+        run_both("follower disconnect", self.left_arm.disconnect, self.right_arm.disconnect)
 
         for cam in self.cameras.values():
             cam.disconnect()

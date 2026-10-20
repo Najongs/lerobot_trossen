@@ -1,0 +1,3 @@
+학습 kiroaiseoul/task01_move_to_tube_rack: 100ep, 표기 30 fps | 명령 적분 회전 중앙 +57° (p10 +55 / p90 +59) | 전진 중앙 +1.15 m (p10 +1.06 / p90 +1.24) | 길이 중앙 6.2s
+   실제 녹화가 21 Hz 였다면 (×1.43): 회전 +82° · 전진 +1.64 m · 길이 8.9s — 어느 쪽인지는 녹화 로그의 Control loop rate 로 확인
+== 1020_1052_hot_t01_e60_replay_ep30: basevel.csv 없음 (/home/trossen-ai/eval_logs/1020_1052_hot_t01_e60_replay_ep30.basevel.csv)

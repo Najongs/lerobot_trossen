@@ -283,6 +283,19 @@ if [[ "$DRY_RUN" == 1 ]]; then
   exit 0
 fi
 
+# 팔 4대 사전 확인 — 유선이 끊긴 채 띄우면 lerobot 이 팔 연결에서 130 s 넘게 기다리다 죽는다(10/15·10/20).
+# 1 s 안에 알린다. 로봇에 쓰지 않는다(TCP 연결만 열었다 닫는다). SKIP_NETCHECK=1 로 끈다.
+if [[ "${SKIP_NETCHECK:-0}" != 1 ]]; then
+  _down=()
+  for _ip in 192.168.1.5 192.168.1.4 192.168.1.3 192.168.1.2; do
+    timeout 1 bash -c "exec 3<>/dev/tcp/$_ip/50001" 2>/dev/null || _down+=("$_ip")
+  done
+  if (( ${#_down[@]} )); then
+    echo "!! 팔 컨트롤러 연결 안 됨: ${_down[*]} (TCP 50001) — 유선 링크·스위치·로봇 전원 확인 (ip -br link show enp129s0)" >&2
+    exit 4
+  fi
+fi
+
 echo "== 로그 $LOGDIR/$RUN.log  (리셋 구간은 리더암, 끝나면 →)"
 # 로그는 파일로 직접 쓰고 tail 로 보여 준다. `| tee` 를 쓰면 --display_data 가 띄운 rerun 뷰어가 파이프를
 # 물려받아, 창을 닫기 전엔 tee 가 끝나지 않아 아래 정리 단계가 안 돈다 (10/06 C-1). lerobot 은 전경에 둔다 —

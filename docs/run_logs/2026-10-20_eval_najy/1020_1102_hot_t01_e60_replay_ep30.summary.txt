@@ -1,0 +1,2 @@
+             'repo_id': 'kiroaiseoul/eval_najy_1020_1102_hot_t01_e60_replay_ep30',
+           'enable_base_motor_torque': True,

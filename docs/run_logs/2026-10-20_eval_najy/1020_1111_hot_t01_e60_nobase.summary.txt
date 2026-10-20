@@ -1,0 +1,2 @@
+           'enable_base_motor_torque': False,
+WARNING 2026-10-20 11:12:02 n_patch.py:1658 Base latency switches: LEROBOT_CHUNK_SEAM_BLEND_TICKS=10 LEROBOT_CHUNK_SMOOTH_TICKS=3 | executor: seam blend >= 10 ticks on 12 arm joints, chunk smoothing 3

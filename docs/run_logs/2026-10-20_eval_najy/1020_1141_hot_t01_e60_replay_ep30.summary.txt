@@ -1,0 +1,5 @@
+             'repo_id': 'kiroaiseoul/eval_najy_1020_1141_hot_t01_e60_replay_ep30',
+           'enable_base_motor_torque': True,
+WARNING 2026-10-20 11:42:08 n_patch.py:1658 Base latency switches: LEROBOT_REPLAY_DATASET=kiroaiseoul/task01_move_to_tube_rack LEROBOT_REPLAY_EPISODES=30 LEROBOT_REPLAY_RUN_POLICY=0 | executor: synchr
+INFO 2026-10-20 11:42:18 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=20.7 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
+INFO 2026-10-20 11:42:19 rate_log.py:274 Control loop rate over last 30 frames (phase=policy, target=21 Hz): mean=21.0 Hz, min=20.6 Hz, clamped=0 (divide the recording run's mean by this one for the base over-rotation multiplier) | per-frame: arms_read=1ms  arms_write=2ms  base_read=10ms  base_write=10ms  cam:cam_high=0ms  cam:cam_left_wrist=0ms  cam:cam_right_wrist=0ms  other=25ms
