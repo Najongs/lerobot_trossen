@@ -1,0 +1,2 @@
+학습 kiroaiseoul/task02_pickup_tubes: 133ep, 30 fps | 프레임당 이동 중앙값 0.038 rad, 방향 바뀜 0.22/s | 시작점끼리 최근접 거리 중앙값 0.31
+kiroaiseoul/eval_najy_1019_1535_hot_t02_e60_replay_ep102 ep0: 31.6s, 21 fps | 프레임당 이동 0.035 rad, 방향 바뀜 0.12/s | 시작점 최근접 0.01 | 청크 경계 점프 0.013 / 그 외 0.034 (0.4x, exec 60)
