@@ -296,6 +296,7 @@ uv run python -m stage_runner --config_path configs/chain_task45.yaml
 - **전체 인자는 이 README가 아니라 `configs/chain_task45.yaml` 주석이 정본** — 로봇 IP·카메라 시리얼·정책·타이머·회차별 저장 이름이 전부 거기 있고, 명령줄에 남는 것은 `--config_path` 하나뿐이다
 - 단계마다 팔을 학습 데이터의 대표 시작 자세로 옮긴 뒤 시작하려면(선택) → [packages/stage_runner/README.md](packages/stage_runner/README.md#단계-시작-자세-start_pose)
 - 단계 앞에서 리더암으로 튜브·비커를 쥐여 주고 시작하려면(선택, 체인 아무 자리) → [packages/stage_runner/README.md](packages/stage_runner/README.md#리더암-리셋-단계-leader_reset)
+- 이동 단계를 정책 대신 데모 경로 재생 + 도착 화면 정렬로 돌리려면(선택, 이동마다 한 쌍) → [packages/stage_runner/README.md](packages/stage_runner/README.md#베이스-이동-단계-base_replay--base_align) · 로봇 예 `configs/chain_stage12_align.yaml`
 
 ---
 

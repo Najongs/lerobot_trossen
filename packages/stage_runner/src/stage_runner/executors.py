@@ -4,8 +4,10 @@ import logging
 import time
 from collections.abc import Callable
 
-from stage_runner import leader_reset, record_adapter
+from stage_runner import base_stages, leader_reset, record_adapter
 from stage_runner.config import (
+    EXECUTOR_BASE_ALIGN,
+    EXECUTOR_BASE_REPLAY,
     EXECUTOR_LEADER_RESET,
     EXECUTOR_LEROBOT_POLICY,
     StageConfig,
@@ -271,6 +273,33 @@ def run_leader_reset_stage(context: StageContext, stage: StageConfig) -> StageRe
     )
 
 
+def run_base_replay_stage(context: StageContext, stage: StageConfig) -> StageResult:
+    """Drive the base along a demo's base path, arms held, recording every tick.
+
+    A thin wrapper: the two flag rules every stage keeps live here, where the
+    other executors keep them, and the stage itself is base_stages.replay. The
+    split is what keeps base_stages from importing this module (this module
+    imports it for the dispatch table).
+    """
+    aborted = _aborted_by_flags(context, stage)
+    if aborted is not None:
+        return aborted
+    _discard_stray_right_arrow(context, stage)
+    return base_stages.replay(context, stage)
+
+
+def run_base_align_stage(context: StageContext, stage: StageConfig) -> StageResult:
+    """Turn and drive the base until cam_high matches the demo's arrival frame.
+
+    The same thin wrapper as run_base_replay_stage, around base_stages.align.
+    """
+    aborted = _aborted_by_flags(context, stage)
+    if aborted is not None:
+        return aborted
+    _discard_stray_right_arrow(context, stage)
+    return base_stages.align(context, stage)
+
+
 def _aborted_by_flags(context: StageContext, stage: StageConfig) -> StageResult | None:
     """The result for an abort key already pressed, or None to run the stage."""
     if context.events.get("stop_recording"):
@@ -335,4 +364,6 @@ def _aborted_before_start(
 EXECUTORS: dict[str, StageExecutor] = {
     EXECUTOR_LEROBOT_POLICY: run_lerobot_policy_stage,
     EXECUTOR_LEADER_RESET: run_leader_reset_stage,
+    EXECUTOR_BASE_REPLAY: run_base_replay_stage,
+    EXECUTOR_BASE_ALIGN: run_base_align_stage,
 }

@@ -8,7 +8,7 @@ re-aggregating an old events.jsonl to a working install of both.
 
 from dataclasses import dataclass
 
-# The five values terminated_by may take. Closed on purpose: the aggregator
+# The values terminated_by may take. Closed on purpose: the aggregator
 # buckets on this exact string, so a sixth value invented at a call site would
 # become a silently separate bucket rather than an error. events.EventLog
 # validates every emitted terminator against TERMINATED_BY_VALUES.
@@ -17,12 +17,23 @@ TERMINATED_BY_MANUAL: str = "manual"
 TERMINATED_BY_STOP_RECORDING: str = "stop_recording"
 TERMINATED_BY_RERECORD_REQUESTED: str = "rerecord_requested"
 TERMINATED_BY_ERROR: str = "error"
+# The two ends of a base_replay / base_align stage that are not a timeout, a
+# key or an exception. "converged": the stage reached what it was driving to (a
+# settled replay, an aligned or heading-only align); the chain goes on.
+# "base_failed": the stage stopped the base because carrying on was unsafe or
+# meaningless (lost odometry, an e-stop, a refused command, an unusable
+# estimate, a diverging correction); the outcome field of the stage's own event
+# says which. Separate from "error" because nothing raised -- the stage decided.
+TERMINATED_BY_CONVERGED: str = "converged"
+TERMINATED_BY_BASE_FAILED: str = "base_failed"
 TERMINATED_BY_VALUES: tuple[str, ...] = (
     TERMINATED_BY_TIMEOUT,
     TERMINATED_BY_MANUAL,
     TERMINATED_BY_STOP_RECORDING,
     TERMINATED_BY_RERECORD_REQUESTED,
     TERMINATED_BY_ERROR,
+    TERMINATED_BY_CONVERGED,
+    TERMINATED_BY_BASE_FAILED,
 )
 
 # Terminators that end the whole trial rather than just the stage: the operator
@@ -37,11 +48,17 @@ TERMINATED_BY_VALUES: tuple[str, ...] = (
 # itself what a press between two trials means. A reader who believed the old
 # sentence writes that loop without clearing, and trial 2 is then aborted before
 # its first stage by a key pressed during trial 1.
+#
+# base_failed aborts too: an align failure must not let the next policy run. A
+# policy started from a base pose the align stage could not establish is not a
+# measurement of that policy, and a base that stopped answering (odometry, an
+# e-stop, refused commands) must not be handed to a policy that drives it.
 ABORTING_TERMINATORS: frozenset[str] = frozenset(
     {
         TERMINATED_BY_STOP_RECORDING,
         TERMINATED_BY_RERECORD_REQUESTED,
         TERMINATED_BY_ERROR,
+        TERMINATED_BY_BASE_FAILED,
     }
 )
 

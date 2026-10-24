@@ -15,6 +15,7 @@ from lerobot.utils.visualization_utils import init_rerun
 
 from stage_runner import (
     __version__,
+    base_assets,
     config,
     policies,
     preflight,
@@ -133,6 +134,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         # Step 8. Dimensions, manual-terminator reachability, dataset name.
         preflight.run_preflight(cfg, robot, policy_configs, teleop)
+
+        # Every base stage's replay targets and align reference, from local
+        # files only, while the robot is still unpowered: a missing dataset or a
+        # reference of the wrong size is an exit 2 here rather than a failure
+        # mid-chain, and no stage reads a dataset between two others. {} for a
+        # chain without base stages, which reads nothing.
+        loaded_base_assets = base_assets.load_base_assets(cfg, robot)
     except PreflightError as error:
         logger.error(f"preflight failed: {error}")
         return EXIT_PREFLIGHT
@@ -228,6 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 log=log,
                 run_directory=run_directory,
                 teleop=teleop,
+                base_assets=loaded_base_assets,
             )
 
             # Steps 14-18. VideoEncodingManager.__exit__ flushes the encoders,

@@ -97,7 +97,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from stage_runner.results import TERMINATED_BY_VALUES
+from stage_runner.results import TERMINATED_BY_BASE_FAILED, TERMINATED_BY_VALUES
 
 # The wire vocabulary this reader understands. Duplicated from events.py rather
 # than imported from it on purpose: a log reader must keep reading logs written
@@ -116,6 +116,15 @@ EVENT_TRIAL_END: str = "trial_end"
 # build_trial), so a run with start poses reports the same seam numbers as one
 # without, and the arm move is reported on its own as stage_reposition_s.
 EVENT_STAGE_REPOSITION: str = "stage_reposition"
+# Additive (2026-10-24): written INSIDE a base_replay / base_align stage, between
+# its stage_start and its stage_end, one per stage. Only the `outcome` field is
+# read: the terminator says converged / base_failed, and the outcome is what
+# tells an `aligned` from a `heading_only` (both converged) or a `base_estop`
+# from a `tracking_lost` (both base_failed). The per-measurement
+# stage_base_align_step lines are not read here; the stage CSV and the step
+# events are the place to study a single align.
+EVENT_STAGE_BASE_REPLAY: str = "stage_base_replay"
+EVENT_STAGE_BASE_ALIGN: str = "stage_base_align"
 # The stage_start `executor` values this reader branches on, pinned like the
 # event names. A leader_reset stage (2026-10-19) is the operator driving the
 # leader arm: it records no frames and has no outcome to label, so it is kept
@@ -123,7 +132,25 @@ EVENT_STAGE_REPOSITION: str = "stage_reposition"
 # log written before the field existed reads as lerobot_policy throughout.
 EXECUTOR_LEROBOT_POLICY: str = "lerobot_policy"
 EXECUTOR_LEADER_RESET: str = "leader_reset"
-UNSCORED_EXECUTORS: frozenset[str] = frozenset({EXECUTOR_LEADER_RESET})
+# The base stages (2026-10-24) are off the axis for the same reason as a reset,
+# and one more: they DO record frames, but what they do is drive the base to the
+# demo's arrival, and whether that worked is the align's own measurement, not an
+# operator label. A label sheet that grew a row for every drive and every align
+# would dilute chain_sr with stages nobody scores, and a chain whose first stage
+# is a base_replay -- the robot chain -- would have every trial unscored, since
+# scored_trials keys off the axis' FIRST stage. Their time and outcomes are
+# reported apart, as timing's base_replay_s / base_align_s.
+EXECUTOR_BASE_REPLAY: str = "base_replay"
+EXECUTOR_BASE_ALIGN: str = "base_align"
+BASE_EXECUTORS: frozenset[str] = frozenset({EXECUTOR_BASE_REPLAY, EXECUTOR_BASE_ALIGN})
+UNSCORED_EXECUTORS: frozenset[str] = frozenset(
+    {EXECUTOR_LEADER_RESET, EXECUTOR_BASE_REPLAY, EXECUTOR_BASE_ALIGN}
+)
+# Which base event carries a given base executor's outcome.
+BASE_OUTCOME_EVENT_BY_EXECUTOR: dict[str, str] = {
+    EXECUTOR_BASE_REPLAY: EVENT_STAGE_BASE_REPLAY,
+    EXECUTOR_BASE_ALIGN: EVENT_STAGE_BASE_ALIGN,
+}
 # wall_clock_iso carries milliseconds and isoformat TRUNCATES to them
 # (events.wall_clock_iso, timespec="milliseconds"), so a window between two
 # stamps is exact only to within one step of this.
@@ -239,6 +266,11 @@ class StageRecord:
     # stage_start's `executor`. Defaulted so a log without it -- every log before
     # 2026-10-19 -- reads as the policy stages it was.
     executor: str = EXECUTOR_LEROBOT_POLICY
+    # The `outcome` of the stage_base_replay / stage_base_align event written
+    # inside this stage. None for every other executor, and for a base stage
+    # whose event is missing -- the exception path emits best-effort, so an
+    # interrupted stage can lack it. None means "not logged", never an outcome.
+    base_outcome: str | None = None
 
     @property
     def hertz(self) -> float:
@@ -543,6 +575,10 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
     pending_reposition_s = 0.0
     reposition_durations: list[float] = []
     reposition_failures: list[str] = []
+    # The outcome of the base event seen inside the stage now open. Taken only
+    # when the event names that stage and is the event its executor writes, so a
+    # stray line cannot label the wrong stage.
+    pending_base_outcome: str | None = None
     trial_end: dict[str, Any] | None = None
     for event in events:
         name = event.get("event")
@@ -591,6 +627,7 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
             previous_stage_end_iso = None
             pending_stop_base_s = None
             pending_reposition_s = 0.0
+            pending_base_outcome = None
             if pending is not None:
                 # Two starts with no end between them: the first stage never
                 # finished. Dropping it is the same rule as the truncated tail.
@@ -669,9 +706,11 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
                     start_wall_clock_iso=str(pending["wall_clock_iso"]),
                     end_wall_clock_iso=str(event["wall_clock_iso"]),
                     executor=str(pending.get("executor") or EXECUTOR_LEROBOT_POLICY),
+                    base_outcome=pending_base_outcome,
                 )
             )
             pending = None
+            pending_base_outcome = None
             previous_stage_end_iso = str(event["wall_clock_iso"])
             # A new boundary opens here, so anything still held from the last one
             # (a transition whose stage_start never arrived) is stale.
@@ -734,6 +773,25 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
                 reposition_durations.append(float(duration))
             elif outcome != REPOSITION_SKIPPED:
                 reposition_failures.append(str(event.get("stage_id")))
+        elif name in (EVENT_STAGE_BASE_REPLAY, EVENT_STAGE_BASE_ALIGN):
+            expected = BASE_OUTCOME_EVENT_BY_EXECUTOR.get(
+                str((pending or {}).get("executor"))
+            )
+            if (
+                pending is not None
+                and name == expected
+                and event.get("stage_id") == pending.get("stage_id")
+            ):
+                outcome = event.get("outcome")
+                pending_base_outcome = None if outcome is None else str(outcome)
+            else:
+                # Not fatal, like an unknown terminator: the stage itself is
+                # still read from its stage_start/stage_end pair.
+                print(
+                    f"[warn] 짝 없는 {name} 무시 / ignoring {name} for stage "
+                    f"{event.get('stage_id')!r} in run {run_id}: it is not inside "
+                    f"a stage of the executor that writes it"
+                )
         elif name == EVENT_TRIAL_END:
             trial_end = event
     if pending is not None:
@@ -1044,7 +1102,10 @@ def stage_order(trials: Sequence[TrialRecord]) -> list[str]:
     A leader_reset stage is NOT on this axis. Nobody labels a reset -- there is
     no policy outcome to label -- and every success metric keys off the axis'
     FIRST stage: a reset placed first would make every trial unscored. Its wall
-    time is reported on its own, as timing's leader_reset_s.
+    time is reported on its own, as timing's leader_reset_s. The base stages
+    (base_replay, base_align) are off it for the same reason -- the robot chain
+    STARTS with a base_replay -- and are reported as base_replay_s and
+    base_align_s.
     """
     first_index: dict[str, int] = {}
     for trial in trials:
@@ -1074,6 +1135,46 @@ def _spread(values: Sequence[float]) -> dict[str, Any]:
         "min": min(values) if values else 0.0,
         "max": max(values) if values else 0.0,
     }
+
+
+def _count(values: Sequence[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _base_stage_block(
+    trials: Sequence[TrialRecord], executor: str, definition: str
+) -> dict[str, Any]:
+    """Wall clock, frames, rate and outcomes of one base executor's stages.
+
+    The same exclusion as per_stage: a record with elapsed_s == 0.0 never ran
+    (an abort between stages) and is kept out of the spreads, counted in n and
+    the terminators. `outcomes` counts the executor's own event, because the
+    terminator alone folds `aligned` and `heading_only` into one `converged`,
+    and those are not the same arrival -- on 10/24 pi0 went 2/3 after a
+    heading-only align and 4/4 after both corrections. A stage whose event is
+    missing is counted under "not_logged" rather than dropped.
+    """
+    records = [
+        stage
+        for trial in trials
+        for stage in trial.stages
+        if stage.executor == executor
+    ]
+    measured = [stage for stage in records if stage.elapsed_s > 0.0]
+    block = _spread([stage.elapsed_s for stage in measured])
+    block["definition"] = definition
+    block["records_n"] = len(records)
+    block["not_run_n"] = len(records) - len(measured)
+    block["frames"] = _spread([float(stage.frames) for stage in measured])
+    block["hertz"] = _spread([stage.hertz for stage in measured])
+    block["terminators"] = _count([stage.terminated_by for stage in records])
+    block["outcomes"] = _count(
+        [stage.base_outcome or "not_logged" for stage in records]
+    )
+    return block
 
 
 def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
@@ -1250,6 +1351,42 @@ def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
     # "timeout" here means the reset ran to its ceiling without the right arrow
     # and the chain moved on regardless -- worth seeing, not an error.
     leader_reset["terminators"] = reset_terminators
+    base_replay = _base_stage_block(
+        trials,
+        EXECUTOR_BASE_REPLAY,
+        "seconds of a base_replay stage (stage_end.elapsed_s: pre-roll, the "
+        "time-interpolated demo path and the settle hold, all recorded at the "
+        "dataset fps). Robot time, but not a policy: kept out of per_stage and "
+        "every success metric. `outcomes` is the stage_base_replay outcome",
+    )
+    base_align = _base_stage_block(
+        trials,
+        EXECUTOR_BASE_ALIGN,
+        "seconds of a base_align stage (stage_end.elapsed_s: every capture, "
+        "measurement and correction move, with hold frames recorded while the "
+        "worker measured). Kept out of per_stage and every success metric. "
+        "`outcomes` is the stage_base_align outcome: aligned and heading_only "
+        "are both terminator converged and are counted apart here",
+    )
+    # Every base stage that ended base_failed -- replay or align -- with the
+    # reason that tripped it. A base failure aborts the trial before the next
+    # policy, so that trial is incomplete and drops out of the scored trials like
+    # any other abort (summarize's excluded_run_ids); this list is where it says
+    # WHY, without opening the JSONL.
+    base_stage_failed = [
+        {
+            "run_id": trial.run_id,
+            "stage_id": stage.stage_id,
+            "executor": stage.executor,
+            "terminated_by": stage.terminated_by,
+            "outcome": stage.base_outcome,
+            "reason": stage.reason,
+        }
+        for trial in trials
+        for stage in trial.stages
+        if stage.executor in BASE_EXECUTORS
+        and stage.terminated_by == TERMINATED_BY_BASE_FAILED
+    ]
     return {
         "trial_count": len(trials),
         "completed_trial_count": sum(1 for trial in trials if trial.completed),
@@ -1296,6 +1433,11 @@ def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
         "stage_reposition_failed": reposition_failed,
         # Additive (2026-10-19); n=0 for every run without a leader_reset stage.
         "leader_reset_s": leader_reset,
+        # Additive (2026-10-24); n=0 and [] for every run without base stages.
+        "base_replay_s": base_replay,
+        "base_align_s": base_align,
+        "base_stage_failed_n": len(base_stage_failed),
+        "base_stage_failed": base_stage_failed,
     }
 
 
@@ -2171,6 +2313,37 @@ def format_report(summary: Mapping[str, Any]) -> str:
             f"  - !! start pose 미도달 / NOT reached at "
             f"{timing['stage_reposition_failed_n']} stage(s): {failed} -- the "
             f"policy was not started there and the trial ended"
+        )
+    # Printed only for runs with base stages, so every other report is unchanged
+    # line for line. .get for a summary dict written before these keys existed.
+    for key, label in (
+        ("base_replay_s", "base replay 베이스 재생"),
+        ("base_align_s", "base align 베이스 정렬"),
+    ):
+        block = timing.get(key) or {"records_n": 0}
+        if not block.get("records_n"):
+            continue
+        lines.append(
+            f"  - {label} (NOT scored): n={block['n']} of {block['records_n']} "
+            f"(never ran={block['not_run_n']}) elapsed mean={block['mean']:.2f}s "
+            f"({block['min']:.2f}..{block['max']:.2f}) "
+            f"frames={block['frames']['mean']:.1f} "
+            f"hertz={block['hertz']['mean']:.2f} "
+            f"({block['hertz']['min']:.2f}..{block['hertz']['max']:.2f})"
+        )
+        lines.append(
+            f"      결과 / outcomes={block['outcomes']} "
+            f"terminators={block['terminators']}"
+        )
+    if timing.get("base_stage_failed_n"):
+        failed = ", ".join(
+            f"{item['run_id']}/{item['stage_id']} ({item['outcome']})"
+            for item in timing["base_stage_failed"]
+        )
+        lines.append(
+            f"  - !! 베이스 단계 실패 / base stage FAILED at "
+            f"{timing['base_stage_failed_n']} stage(s): {failed} -- the next "
+            f"policy was not started and the trial ended"
         )
     if not summary["labels_available"]:
         lines.append(

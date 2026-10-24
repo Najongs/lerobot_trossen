@@ -147,9 +147,10 @@ def load_bundles(
     """Every stage's bundle, keyed by stage id, loaded before robot.connect().
 
     Called after the dataset exists because ``make_policy`` needs ``ds_meta``.
-    Identical policy_paths are loaded twice on purpose: deduplicating into one
-    cached bundle is an unconfirmed proposal, and this is the only function it
-    would ever go in.
+    Stages with the same policy_path share one loaded bundle: eight pi0 stages
+    loaded separately do not fit a 24 GB GPU. Sharing is safe because
+    record_loop resets the policy and both processors on every stage entry, so
+    no action chunk carries over from the previous stage.
 
     Each real bundle also gets one warm-up forward here (:func:`warm_up_bundle`),
     because this is the last point before ``robot.connect()`` where a stall is
@@ -157,8 +158,16 @@ def load_bundles(
     stage, inside the hertz the operator reads to set the timers.
     """
     bundles: dict[str, PolicyBundle] = {}
+    # One copy per policy_path (user-approved 2026-10-25, as on 10/20).
+    loaded: dict[str, PolicyBundle] = {}
     for stage in stages:
         if stage.executor not in POLICY_EXECUTORS:
+            continue
+        if stage.policy_path in loaded:
+            logger.info(
+                f"Reusing loaded policy for stage {stage.id}: {stage.policy_path}"
+            )
+            bundles[stage.id] = replace(loaded[stage.policy_path], stage_id=stage.id)
             continue
         if stage.policy_path.startswith(MOCK_POLICY_SCHEME):
             # Imported here, not at module top: mock_policy imports PolicyBundle
@@ -187,6 +196,7 @@ def load_bundles(
         # this line it reached the console only, and init_logging runs with
         # log_file=None, so it was gone the moment the terminal scrolled.
         bundles[stage.id] = replace(bundle, warmed_up=warm_up_bundle(bundle))
+        loaded[stage.policy_path] = bundles[stage.id]
     return bundles
 
 

@@ -1,0 +1,131 @@
+# Hardware-free smoke config for the BASE stages: the whole move-and-work
+# chain the robot will run, twice over, in one process (user decision A5) --
+#
+#   s1 base_replay -> s1_align base_align -> s2 policy
+#   s3 base_replay -> s3_align base_align -> s4 policy
+#
+# on the mock's simulated base (simulate_base) and synthetic scene camera
+# (scene_camera). Each bundle drives along ITS OWN demo path (its own episode of
+# the pose dataset) and aligns against ITS OWN reference image, ROI and landmark
+# distance; odometry is anchored per stage, so s3 starts from wherever s1_align
+# left the base.
+#
+# THE __NAME__ TOKENS ARE FILLED IN BY test_base_smoke.py, which writes a copy
+# of this file with them replaced: the pose dataset and the two reference PNGs
+# are generated per run (from the same mock_scene renderer the camera uses), and
+# their paths and the dark_blob_box ROIs of the rendered references are only
+# known then. The geometry they are rendered at is stated here and in the test:
+#
+#   __POSE_ROOT__  episode 0: 30 rows, 0.5 mm and -0.1 deg per row -> the replay
+#                  ends 1.5 cm forward at -3 deg;
+#                  episode 1: 30 rows, -2 mm and -0.5 deg per row -> 6 cm back
+#                  and -15 deg from wherever s3 starts.
+#   __RACK_PNG__   the view from +3 deg at 0.555 m: the replay's end pose turned
+#                  +6 deg and 3 cm closer, so the align has a turn and a drive
+#                  to make (spec case 3).
+#   __SHELF_PNG__  the view from -8 deg at 0.62 m.
+#
+# The camera matrix is the mock's own (it has no RealSense profile to read),
+# with zero distortion, as the renderer draws none. align timeout_s 60 sits
+# above the 57 s preflight floor of max_moves 6. dataset.root and output.root
+# are overridden to a tmp dir by the test, as for smoke_mock.yaml.
+#
+# NOTHING HERE IS EVIDENCE ABOUT THE ROBOT: the scene is a pure rotation with
+# dense synthetic texture, and the mock base follows its command exactly. The
+# robot example is configs/chain_stage12_align.yaml at the repo root.
+
+version: 1
+
+robot:
+  type: stage_runner_mock_robot
+  id: smoke
+  arm_layout: bimanual
+  simulate_base: true
+  scene_camera: cam_high
+
+dataset:
+  # Must start with `eval_` and hold exactly one slash (sanity_check_dataset_name).
+  repo_id: local/eval_smoke_base_align
+  fps: 30
+  video: false
+
+defaults:
+  executor: lerobot_policy
+  manual_ceiling_s: 5.0
+
+output:
+  root: /tmp/stage_runner_smoke/outputs
+
+stages:
+  # --- bundle 1: drive to the rack, align, work ---------------------------
+  - id: s1
+    # A base stage's task string is its name: every frame it records carries
+    # it, so it must differ from every other stage's task string.
+    name: drive to the rack
+    executor: base_replay
+    terminator:
+      type: timeout
+      timeout_s: 15
+    replay:
+      dataset: local/smoke_pose
+      root: __POSE_ROOT__
+      episode: 0
+      until_row: 29
+
+  - id: s1_align
+    name: align to the rack
+    executor: base_align
+    terminator:
+      type: timeout
+      timeout_s: 60
+    align:
+      reference_image: __RACK_PNG__
+      landmark_roi: __RACK_ROI__
+      landmark_distance_m: 0.555
+      camera_matrix: [[392.6346, 0.0, 322.7227], [0.0, 392.0662, 236.2555], [0.0, 0.0, 1.0]]
+      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+  - id: s2
+    name: mock_stage_two
+    executor: lerobot_policy
+    policy_path: mock://hold
+    instruction: "pick up the tube"
+    terminator:
+      type: timeout
+      timeout_s: 1.0
+
+  # --- bundle 2: drive to the shelf, align, work --------------------------
+  - id: s3
+    name: drive to the shelf
+    executor: base_replay
+    terminator:
+      type: timeout
+      timeout_s: 15
+    replay:
+      dataset: local/smoke_pose
+      root: __POSE_ROOT__
+      episode: 1
+      until_row: 29
+
+  - id: s3_align
+    name: align to the shelf
+    executor: base_align
+    terminator:
+      type: timeout
+      timeout_s: 60
+    align:
+      reference_image: __SHELF_PNG__
+      landmark_roi: __SHELF_ROI__
+      landmark_distance_m: 0.62
+      yaw_tol_deg: 1.5
+      camera_matrix: [[392.6346, 0.0, 322.7227], [0.0, 392.0662, 236.2555], [0.0, 0.0, 1.0]]
+      dist_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+  - id: s4
+    name: mock_stage_four
+    executor: lerobot_policy
+    policy_path: mock://hold
+    instruction: "place the tube"
+    terminator:
+      type: timeout
+      timeout_s: 1.0

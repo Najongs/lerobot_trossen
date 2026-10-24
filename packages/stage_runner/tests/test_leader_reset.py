@@ -14,7 +14,8 @@ What is asserted, and why each matters on the robot:
 * nothing is recorded during a reset, and the reset is kept off the
   success-metric axis;
 * the operator's last gripper command is held through the following start pose
-  move;
+  move, and through a base_replay that comes straight after the reset (the
+  base stage would otherwise re-send the earlier policy's gripper command);
 * base torque is released and restored only on a robot connected with it, and
   a failed restore ends the trial before the next policy;
 * Esc during a reset aborts the trial before any policy runs; the ceiling does
@@ -35,10 +36,12 @@ from unittest import mock
 import pytest
 from lerobot.robots import Robot
 from lerobot.robots.config import RobotConfig
-from stage_runner import aggregate, cli, config, preflight, record_adapter
+from stage_runner import aggregate, cli, config, mock_policy, preflight, record_adapter
 from stage_runner.config import StageConfig, StartPoseConfig, TerminatorConfig
 from stage_runner.mock_robot import MockRobot, MockRobotConfig
 from stage_runner.mock_teleop import MockTeleop, MockTeleopConfig
+from test_base_assets import _write_pose_dataset
+from test_base_stages import _path
 
 CONFIGS = Path(__file__).parent / "configs"
 RESET_CONFIG = CONFIGS / "smoke_mock_leader_reset.yaml"
@@ -281,6 +284,174 @@ def test_the_operators_grip_is_held_through_the_next_start_pose_move(
     hold = _of(result, "transition")[0]["stop_action"]
     for key in GRIPPERS:
         assert hold[key] == first_reset["gripper_goals"][key]
+
+
+RESET_THEN_REPLAY = """\
+version: 1
+robot:
+  type: stage_runner_mock_robot
+  id: smoke
+  arm_layout: bimanual
+  simulate_base: true
+teleop:
+  type: stage_runner_mock_teleop
+  id: leader
+dataset:
+  repo_id: local/eval_reset_then_base
+  fps: 30
+  video: false
+defaults:
+  executor: lerobot_policy
+  manual_ceiling_s: 5.0
+output:
+  root: /tmp/unused
+stages:
+  - id: s1
+    name: mock_stage_one
+    policy_path: mock://hold
+    instruction: "mock stage one"
+    terminator: {type: timeout, timeout_s: 0.5}
+  - id: reset_mid
+    name: hand the tube over
+    executor: leader_reset
+    terminator: {type: timeout, timeout_s: 0.5}
+  - id: s3
+    name: drive with the tube
+    executor: base_replay
+    terminator: {type: timeout, timeout_s: 10}
+    replay: {dataset: local/pose, root: POSE, episode: 0, until_row: 29}
+"""
+
+
+def test_the_operators_grip_is_held_through_a_base_replay_after_the_reset(
+    tmp_path: Path,
+) -> None:
+    """policy (grippers at A) -> reset (operator sets B) -> base_replay holds B.
+
+    A reset records no frames, so the episode buffer's last action row is
+    still s1's command A. Holding A would re-open the grippers on the tube the
+    operator just closed them on, for the whole drive.
+    """
+    pose = _write_pose_dataset(
+        tmp_path / "pose",
+        {0: [[0.0] * 14 + [s, t] for s, t in _path(30, 0.001, 0.3)]},
+    )
+    chain = tmp_path / "chain.yaml"
+    chain.write_text(RESET_THEN_REPLAY.replace("POSE", str(pose)))
+
+    def operator_closes_on_the_tube(n: int, teleop: Any, captured: dict) -> None:
+        teleop.positions["left_left_carriage_joint.pos"] = 0.011
+        teleop.positions["right_left_carriage_joint.pos"] = 0.012
+
+    result = _run(
+        tmp_path, config_path=chain, on_get_action=operator_closes_on_the_tube
+    )
+    assert result["exit_code"] == cli.EXIT_OK, result["raised"]
+    (reset,) = _of(result, "stage_reset")
+    (replay,) = _of(result, "stage_base_replay")
+    assert replay["outcome"] == "settled"
+    assert reset["gripper_goals"] == {
+        "left_left_carriage_joint.pos": 0.011,
+        "right_left_carriage_joint.pos": 0.012,
+    }
+    assert replay["gripper_hold_source"] == "reset"
+    for key in GRIPPERS:
+        assert replay["held_arm_positions"][key] == reset["gripper_goals"][key]
+
+    # Every frame the replay recorded carries B, not s1's A.
+    starts = {e["stage_id"]: e["frame_idx"] for e in _of(result, "stage_start")}
+    ends = {e["stage_id"]: e["frame_idx"] for e in _of(result, "stage_end")}
+    assert ends["s3"] > starts["s3"] > 0
+    robot = result["robot"]
+    names = list(robot.action_features)
+    import pyarrow.parquet as pq
+
+    (data,) = sorted((tmp_path / "dataset" / "data").rglob("*.parquet"))
+    actions = pq.read_table(data, columns=["action"]).column("action").to_pylist()
+    for row in actions[starts["s3"] : ends["s3"]]:
+        values = dict(zip(names, row, strict=True))
+        for key in GRIPPERS:
+            assert values[key] == pytest.approx(reset["gripper_goals"][key], abs=1e-6)
+    s1_last = dict(zip(names, actions[ends["s1"] - 1], strict=True))
+    assert all(
+        s1_last[key] != pytest.approx(reset["gripper_goals"][key], abs=1e-3)
+        for key in GRIPPERS
+    ), "the test needs s1's goal A to differ from the operator's B"
+
+
+RESET_POLICY_THEN_REPLAY = RESET_THEN_REPLAY.replace(
+    """  - id: s3
+    name: drive with the tube""",
+    """  - id: s3
+    name: release the tube
+    policy_path: mock://hold
+    instruction: "mock release"
+    terminator: {type: timeout, timeout_s: 0.5}
+  - id: s4
+    name: drive away""",
+)
+
+
+def test_a_reset_grip_expires_once_a_policy_stage_records_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """reset (operator sets B) -> policy (opens to C) -> base_replay holds C, not B.
+
+    The runner clears StageContext.reset_gripper_goals after any stage that
+    recorded frames: from then on the buffer's last row is newer than the
+    operator's grip. Without the clear the base stage would close the grippers
+    back onto B -- here, onto a tube the policy just let go of -- for the whole
+    drive, because base_loop consults the reset goals before the buffer.
+    """
+    pose = _write_pose_dataset(
+        tmp_path / "pose",
+        {0: [[0.0] * 14 + [s, t] for s, t in _path(30, 0.001, 0.3)]},
+    )
+    chain = tmp_path / "chain.yaml"
+    text = RESET_POLICY_THEN_REPLAY.replace("POSE", str(pose))
+    assert "id: s4" in text, "the chain rewrite did not apply"
+    chain.write_text(text)
+    opened = 0.031
+
+    real_init = mock_policy.MockPolicy.__init__
+    real_select = mock_policy.MockPolicy.select_action
+
+    def init(self: Any, *args: Any, **kwargs: Any) -> None:
+        real_init(self, *args, **kwargs)
+        self._test_grippers = [
+            index
+            for index, name in enumerate(kwargs["action_names"])
+            if name in GRIPPERS
+        ]
+
+    def select_action(self: Any, batch: dict[str, Any]) -> Any:
+        # Every mock policy stage commands the grippers open at C.
+        action = real_select(self, batch)
+        for index in self._test_grippers:
+            action[0, index] = opened
+        return action
+
+    monkeypatch.setattr(mock_policy.MockPolicy, "__init__", init)
+    monkeypatch.setattr(mock_policy.MockPolicy, "select_action", select_action)
+
+    def operator_closes_on_the_tube(n: int, teleop: Any, captured: dict) -> None:
+        teleop.positions["left_left_carriage_joint.pos"] = 0.011
+        teleop.positions["right_left_carriage_joint.pos"] = 0.012
+
+    result = _run(
+        tmp_path, config_path=chain, on_get_action=operator_closes_on_the_tube
+    )
+    assert result["exit_code"] == cli.EXIT_OK, result["raised"]
+    (reset,) = _of(result, "stage_reset")
+    (replay,) = _of(result, "stage_base_replay")
+    assert replay["outcome"] == "settled"
+    assert all(
+        reset["gripper_goals"][key] != pytest.approx(opened, abs=1e-3)
+        for key in GRIPPERS
+    ), "the test needs the operator's B to differ from the policy's C"
+    assert replay["gripper_hold_source"] == "recorded"
+    for key in GRIPPERS:
+        assert replay["held_arm_positions"][key] == pytest.approx(opened, abs=1e-6)
 
 
 def test_the_right_arrow_ends_a_reset_and_the_chain_goes_on(tmp_path: Path) -> None:

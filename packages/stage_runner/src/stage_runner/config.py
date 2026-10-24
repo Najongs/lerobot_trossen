@@ -35,6 +35,14 @@ logger = logging.getLogger(__name__)
 # The same rule, and the same answer, for the `leader_reset` executor and the
 # top-level `teleop:` block (2026-10-19): both are opt-in, and a YAML without
 # them means what it meant.
+# The same again for the `base_replay` and `base_align` executors and their
+# StageConfig.replay / StageConfig.align blocks (2026-10-24): both blocks default
+# to None and only those two executors read them, so a YAML without them is
+# unchanged. The one visible difference is cosmetic -- resolved_config_text does
+# not pop them, so a new snapshot shows `replay: null` and `align: null` on every
+# stage (popping them would break the snapshot tests that compare against
+# draccus.dump with only start_pose and teleop filtered, and nothing reads
+# snapshots back).
 LATEST_CONFIG_VERSION: int = 1
 
 TERMINATOR_TIMEOUT: str = "timeout"
@@ -49,7 +57,26 @@ EXECUTOR_LEROBOT_POLICY: str = "lerobot_policy"
 # The same string is pinned in aggregate.py, which keeps such stages off the
 # success-metric axis.
 EXECUTOR_LEADER_RESET: str = "leader_reset"
-# Executors that run a checkpoint, i.e. need a policy_path and a bundle.
+# Two stages that drive the BASE and nothing else, the 10/24 field loop
+# (heading_align.py / stage1_align.py) as chain stages:
+#
+# * base_replay -- follows a demo's base path (x.pos / theta.pos targets read
+#   from a local pose-labelled dataset) with odometry feedback, arms held;
+# * base_align -- turns and drives the base until the cam_high view matches the
+#   demo's arrival frame (heading by SIFT rotation, distance by landmark scale).
+#
+# Both run their own tick loop and RECORD every tick into the trial's episode,
+# tagged with the stage name, so the replay, the measurement holds and the
+# corrections are frames like any policy stage's. Neither runs a checkpoint, so
+# neither needs a policy_path or a bundle. A chain may hold any number of them,
+# anywhere, each with its own dataset / reference (StageConfig.replay / .align).
+# The same strings are pinned in aggregate.py, which keeps such stages off the
+# success-metric axis.
+EXECUTOR_BASE_REPLAY: str = "base_replay"
+EXECUTOR_BASE_ALIGN: str = "base_align"
+BASE_EXECUTORS: frozenset[str] = frozenset({EXECUTOR_BASE_REPLAY, EXECUTOR_BASE_ALIGN})
+# Executors that run a checkpoint, i.e. need a policy_path and a bundle. The base
+# executors are deliberately not here: they run no policy.
 POLICY_EXECUTORS: frozenset[str] = frozenset({EXECUTOR_LEROBOT_POLICY})
 
 # draccus owns this flag; we only scan argv for it so the verbatim source copy
@@ -143,6 +170,113 @@ class StartPoseConfig:
 
 
 @dataclass
+class BaseReplayConfig:
+    """What a ``base_replay`` stage drives the base along. Only that executor reads it.
+
+    The targets are a demo episode's base path as POSES -- cumulative forward
+    distance ``x.pos`` (m) and unwrapped heading ``theta.pos`` (rad) per row --
+    read before connect from a dataset on local disk (base_assets). Never from
+    the velocity dataset the demo was recorded as: its ``fps: 30`` timestamps
+    are not the ticks the base actually ran at, and integrating them gave 59.5
+    deg of an 85.8 deg turn on 10/24. ``derive_pose.py`` (vault
+    .claude/scripts/heading-align) writes the pose copy from the acquisition's
+    measured tick times.
+    """
+
+    # Repo id of a POSE-labelled LeRobot dataset (action names include x.pos and
+    # theta.pos, as derive_pose.py writes). Read from local disk only: the robot
+    # never downloads at run time.
+    dataset: str = ""
+    # Local dataset directory. None -> HF_LEROBOT_HOME / dataset, where
+    # derive_pose.py wrote test_replay_timing_1024_basepose on the robot PC.
+    root: str | None = None
+    episode: int = 0
+    # Inclusive row range of that episode. until_row 297 -> 298 targets, as
+    # stage1_align ran stage 1 of episode 0. -1 (the default) is refused by
+    # preflight on purpose: the last row is where the demo's base STOPPED, which
+    # only the operator's segmentation knows. from_row > 0 replays a later piece
+    # of the episode; its targets are then taken relative to row from_row - 1,
+    # the pose the base is at when the piece starts.
+    from_row: int = 0
+    until_row: int = -1
+    # Wall time per target row. 1/21 is the field's replay rate (stage1_align
+    # REPLAY_HZ) -- the rate the demo's base commands actually ran at, so the
+    # replay takes as long as the demo did.
+    row_period_s: float = 1.0 / 21.0
+
+
+@dataclass
+class BaseAlignConfig:
+    """How a ``base_align`` stage matches the live cam_high view to a demo frame.
+
+    The reference is EITHER a frame of a local LeRobot dataset (reference_dataset,
+    episode, frame) OR an image file captured at the demo spot (reference_image);
+    preflight refuses both or neither. Loaded before connect (base_assets), so a
+    missing file stops the run before the robot is energised, and no dataset is
+    opened between stages.
+    """
+
+    reference_dataset: str = ""
+    # None -> HF_LEROBOT_HOME / reference_dataset. Local disk only.
+    reference_root: str | None = None
+    episode: int = 0
+    # The demo's ARRIVAL frame (heading_align ARRIVAL_TICK: the demo's base
+    # stopped plus 5 ticks, e.g. 302 for episode 0). -1 is refused by preflight.
+    frame: int = -1
+    # ... or an image file (PNG/JPG, read as RGB). Exactly one of the two.
+    reference_image: str | None = None
+    # Observation key of the camera that sees the landmark. The field used
+    # cam_high, the head camera that turns with the base.
+    camera: str = "cam_high"
+    # [x, y, w, h] of the landmark (the stage-2 rack) in the REFERENCE image, the
+    # region the distance estimate scales. The field recomputed it with
+    # dark_blob_box(reference) every run; the stage logs that automatic box next
+    # to this one and warns when they differ.
+    landmark_roi: list[int] = field(default_factory=list)
+    # Distance from the camera to the landmark at the demo arrival (m). Required:
+    # it turns the landmark's apparent scale into a forward move. 0.60 for the
+    # 10/24 stage-2 rack (two samples, about +-10 %).
+    landmark_distance_m: float = 0.0
+    # Tolerances that end the loop as "aligned": the field's --yaw-tol and
+    # --dist-tol-cm defaults.
+    yaw_tol_deg: float = 2.0
+    dist_tol_cm: float = 1.0
+    # Turns and drives together, as the field's --max-moves; at most
+    # max_moves + 1 measurements. Coarse turns count toward it too.
+    max_moves: int = 6
+    # Robot vertical axis in camera coordinates (10/24 estimate from in-place
+    # turns). Yaw is measured about this axis, so a tilted head camera does not
+    # read pitch as heading.
+    camera_up: list[float] = field(
+        default_factory=lambda: [-0.06288349, -0.84574326, -0.52987169]
+    )
+    # Override for the intrinsics; None (default) = read them from the RealSense
+    # stream profile at stage start. Give both or neither; the mock robot, which
+    # has no RealSense, needs them.
+    camera_matrix: list[list[float]] | None = None
+    dist_coeffs: list[float] | None = None
+    # P gain of the heading tracker during an align turn (the field's 2.0).
+    turn_kp: float = 2.0
+    # Small-rotation shortfall option, OFF by default (0 = the 10/24 behaviour).
+    # Turns below 3 deg fell 50-70 % short on 10/24 (cause not measured); > 0
+    # floors the commanded turn rate at this many rad/s while the turn is still
+    # short of its target. Its effect is unmeasured, hence off.
+    min_turn_rate_rad_s: float = 0.0
+    # Field fallback for distance when SIFT scale has < 8 inliers: live rack-box
+    # width / ROI width. OFF by default; on 10/24 it was live (no ROI was passed)
+    # and it fired once (run f2).
+    distance_width_fallback: bool = False
+    # Field fallback for HEADING, ON by default as on 10/24 (heading_for_step):
+    # when the fine SIFT estimate is unusable (< 15 inliers or > 20 deg) the
+    # horizontal position of the dark rack blob gives a coarse heading; the stage
+    # turns on it and measures again, and a coarse estimate never counts as
+    # aligned. Without it, two of the ten 10/24 arrivals (c1 +20.9 deg / 8
+    # inliers, f1 +15.3 deg / 7 inliers) would have ended the stage. false = abort
+    # whenever the fine estimate is unusable.
+    coarse_heading: bool = True
+
+
+@dataclass
 class StageConfig:
     # `id` is the join key to the hand-filled labels file and to every event
     # line, so it has to stay stable across trials even when `name` changes.
@@ -166,6 +300,11 @@ class StageConfig:
     # before. Set = the arms are moved there first; generate the block with
     # `python -m stage_runner.start_pose` rather than by hand.
     start_pose: StartPoseConfig | None = None
+    # The block of a `base_replay` stage (what path to drive) and of a
+    # `base_align` stage (what view to match). None on every other stage, and
+    # preflight refuses either block on an executor that would ignore it.
+    replay: BaseReplayConfig | None = None
+    align: BaseAlignConfig | None = None
 
 
 @dataclass

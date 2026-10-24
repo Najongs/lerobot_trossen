@@ -48,6 +48,15 @@ EVENT_STAGE_REPOSITION: str = "stage_reposition"
 # the same reason as stage_reposition: aggregate skips names it does not
 # branch on.
 EVENT_STAGE_RESET: str = "stage_reset"
+# What a base_replay / base_align stage did: one summary line per stage (the
+# outcome, the targets or reference it used, final errors, tick statistics), and
+# for base_align one step line per measurement and per correction move, so every
+# number a decision acted on is in the log. All written INSIDE the stage, between
+# its stage_start and stage_end, so they change no residual; additive within
+# schema_version 1 for the same reason as the two above.
+EVENT_STAGE_BASE_REPLAY: str = "stage_base_replay"
+EVENT_STAGE_BASE_ALIGN: str = "stage_base_align"
+EVENT_STAGE_BASE_ALIGN_STEP: str = "stage_base_align_step"
 EVENT_NAMES: tuple[str, ...] = (
     EVENT_TRIAL_START,
     EVENT_STAGE_START,
@@ -56,6 +65,9 @@ EVENT_NAMES: tuple[str, ...] = (
     EVENT_TRIAL_END,
     EVENT_STAGE_REPOSITION,
     EVENT_STAGE_RESET,
+    EVENT_STAGE_BASE_REPLAY,
+    EVENT_STAGE_BASE_ALIGN,
+    EVENT_STAGE_BASE_ALIGN_STEP,
 )
 
 # Present on every line whatever the event is. Per-event fields are additive on

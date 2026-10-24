@@ -38,6 +38,8 @@ __version__: str = "0.1.0"
 # access and nothing at all if the caller never touches it.
 _LAZY_ATTRIBUTES: dict[str, str] = {
     "LATEST_CONFIG_VERSION": "config",
+    "BaseAlignConfig": "config",
+    "BaseReplayConfig": "config",
     "DatasetConfig": "config",
     "DefaultsConfig": "config",
     "OutputConfig": "config",
