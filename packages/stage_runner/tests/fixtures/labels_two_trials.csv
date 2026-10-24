@@ -1,0 +1,5 @@
+run_id,stage_id,outcome,failure_phase
+t01,s4,success,
+t01,s5,success,
+t02,s4,success,
+t02,s5,fail,transition

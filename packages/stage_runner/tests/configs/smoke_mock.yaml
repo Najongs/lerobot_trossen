@@ -1,0 +1,53 @@
+# Hardware-free smoke config: same runner, same code path, mock robot and mock
+# policies. Both terminators are timeout so nothing waits on a keypress and the
+# path is headless-safe over ssh; a manual stage here would hang under is_headless().
+#
+# The two instructions DIFFER on purpose -- that is verification target B (a task
+# string that changes per stage inside ONE episode is recorded per frame).
+#
+# dataset.root and output.root are overridden to a tmp dir by the test, because
+# LeRobotDataset.create() mkdirs its root with exist_ok=False and a second run
+# would otherwise die on the first one's leftovers.
+
+version: 1
+
+robot:
+  type: stage_runner_mock_robot
+  id: smoke
+  joint_count: 14
+  include_base_in_state: true
+
+dataset:
+  # Must start with `eval_` and hold exactly one slash: sanity_check_dataset_name
+  # enforces both directions once a policy is present.
+  repo_id: local/eval_smoke_chain
+  fps: 30
+  video: false
+
+defaults:
+  executor: lerobot_policy
+  manual_ceiling_s: 5.0
+
+output:
+  root: /tmp/stage_runner_smoke/outputs
+
+stages:
+  - id: s4
+    name: mock_stage_four
+    executor: lerobot_policy
+    policy_path: mock://sine
+    instruction: "mock stage four"
+    terminator:
+      type: timeout
+      timeout_s: 1.0
+    precondition: null
+
+  - id: s5
+    name: mock_stage_five
+    executor: lerobot_policy
+    policy_path: mock://hold
+    instruction: "mock stage five"
+    terminator:
+      type: timeout
+      timeout_s: 1.0
+    precondition: null

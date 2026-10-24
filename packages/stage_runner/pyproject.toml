@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stage_runner"
+version = "0.1.0"
+description = "LeRobot stage chaining runner for Mobile AI"
+# KIRO, not Trossen Robotics: the sibling packages carry the upstream author
+# because they are derived from Trossen's integration, but this package is
+# written here and has no upstream counterpart.
+authors = [{ name = "KIRO" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+# lerobot 0.6.0 removed --policy.path from lerobot-record and split rollout out
+# into lerobot-rollout: the seam this package attaches to is already reorganised
+# upstream. The upper bound is the only thing that stops one `uv sync` from
+# silently breaking every run. preflight.check_lerobot_version() re-checks it.
+dependencies = ["lerobot[intelrealsense]>=0.4.4,<0.5", "draccus>=0.10,<0.11"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["stage_runner"]

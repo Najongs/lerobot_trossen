@@ -1,0 +1,101 @@
+# stage_runner P1 — 단계 4(붓기) → 5(폐기) 체이닝 실행 설정
+#
+# 인자는 전부 이 파일에 있다. 회차마다 바꾸는 것은 아래 dataset.repo_id
+# 하나이고, 명령줄에 남는 것은 --config_path 하나뿐이다.
+#
+#   uv run python -m stage_runner --config_path configs/chain_task45.yaml
+#
+# --dataset.repo_id= 로 덮어써도 돌지만, 그 값은 아래 config.source.yaml
+# 사본에 안 남아 재현할 때 그 인자를 다시 쳐야 한다.
+#
+# 이 파일은 실행마다 run 디렉터리에 config.source.yaml로 그대로 복사된다
+# (주석 포함). 아래 두 전제 — rad 단위 가정과 p95 타이머 출처 — 는 코드
+# 어디에도 남지 않으므로 그 사본이 유일한 기록이다.
+#
+# ⚠ 관절 단위는 rad 「가정」이다 — meta/info.json이 단위를 기록하지 않아
+#   대조할 대상 자체가 없다. preflight는 차원(16-dim)만 막고 단위는 아무도
+#   안 막는다. 단위를 표기하는 자산(다른 로봇·다른 취득)이 섞이면 재검토.
+
+version: 1                        # 스키마 판 — 옛 회차 YAML 식별용
+
+robot:
+  type: mobileai_robot            # 등록된 실제 타입 문자열(옛 표기 `mobile_ai`는 오기)
+  id: follower
+  left_arm_ip_address: 192.168.1.5
+  right_arm_ip_address: 192.168.1.4
+  enable_base_motor_torque: true  # eval에선 true가 필수 — 끄면 정책의 x.vel·theta.vel이
+                                  # 베이스에 도달해도 무시되는데 아무 에러도 안 난다
+  include_base_in_state: true     # 16-dim 자산 기준. 14-dim(_nobasestate) 체크포인트로
+                                  # 갈아타면 false — 체크포인트 state 차원과 어긋나면
+                                  # preflight가 connect 전에 죽인다
+  cameras:
+    cam_high:
+      type: intelrealsense
+      serial_number_or_name: "230422273501"
+      width: 640
+      height: 480
+      fps: 30
+    cam_left_wrist:
+      type: intelrealsense
+      serial_number_or_name: "230422271234"
+      width: 640
+      height: 480
+      fps: 30
+    cam_right_wrist:
+      type: intelrealsense
+      serial_number_or_name: "230322274369"
+      width: 640
+      height: 480
+      fps: 30
+
+dataset:
+  # ⚠ 회차마다 새 이름 — LeRobotDataset.create()가 root를 exist_ok=False로
+  #   만들어, 같은 이름이 이미 있으면 덮지 않고 FileExistsError로 죽는다.
+  #   그래서 이 필드 하나만 CLI 오버라이드로 남겼다.
+  #   정책을 주는 실행이라 이름은 반드시 `<owner>/eval_`로 시작해야 한다.
+  repo_id: kiroaiseoul/eval_chain_task45_t01
+  fps: 30
+
+defaults:
+  executor: lerobot_policy
+  manual_ceiling_s: 300.0         # manual 단계의 상한 겸 폭주 가드 — 화살표를
+                                  # 놓쳐도 여기서 끊긴다
+
+output:
+  root: outputs/stage_runner
+
+display_data: false
+
+# ⚠ [추론 — 미검증] 아래 타이머는 30 fps 전제다.
+#   12.9(단계 4, median 10.27)도 20.8(단계 5, median 9.47)도 P0 실측 p95이고,
+#   데이터셋이 30 fps라 그 p95도 「프레임 수 ÷ 30」이다. 실기 제어 루프가
+#   그보다 느리게 돌면(2026-09-08 다른 세션 관측 20.4 Hz) 같은 액션 시퀀스가
+#   더 긴 벽시계 시간에 걸쳐 나가 동작이 30/20.4 ≈ 1.5배 느려지고, 그러면
+#   타이머가 단계를 덜 끝난 채로 자른다(팔은 느려지는데 속도명령을 받는
+#   base는 반대로 과회전한다 — fork 주석의 target_fps / mean_hz가 같은 항).
+#   실행기는 이걸 대신 잡아 주지 않는다. 첫 실행 뒤
+#   outputs/stage_runner/<run_id>/events.jsonl의 단계별 `hertz`를 먼저 읽고
+#   타이머를 정할 것. 30 Hz가 나오면 아래 값 그대로다.
+stages:
+  - id: s4
+    name: pour_liquid_from_tubes_to_beaker
+    executor: lerobot_policy
+    policy_path: kiroaiseoul/act_task04_pour_liquid_from_tubes_to_beaker_60000
+    instruction: "Pour the liquid from the tubes into the leftmost beaker"
+    terminator:
+      type: timeout
+      timeout_s: 12.9             # P0 실측 p95 (median 10.27, 잉여 +2.7초)
+    precondition: null            # P1에선 파싱만 하고 안 쓴다
+
+  - id: s5
+    name: tube_disposal
+    executor: lerobot_policy
+    policy_path: kiroaiseoul/act_task05_tube_disposal_60000
+    instruction: "Drop the two empty tubes into the tube disposal tray"
+    terminator:
+      # 마지막 단계라 「전환」이 아니라 「종료」 — 오른쪽 화살표로 끊는다.
+      # 타이머로 바꿀 거면 timeout_s: 20.8 (P0 실측 p95, median 9.47).
+      # ⚠ median 대비 +11.4초라 잉여가 에피소드 자체보다 길다 — 단계 5는
+      #   max/median이 3.21배(단계 4는 1.37배)라 p95 타이머가 헐겁다.
+      type: manual
+    precondition: null
