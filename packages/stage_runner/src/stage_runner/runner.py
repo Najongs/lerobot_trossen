@@ -1,6 +1,7 @@
 """The trial body: one function, one episode, one pass over the stages."""
 
 import logging
+import math
 import time
 
 # Module scope, not the call-time import this used to be: the old form was
@@ -8,10 +9,12 @@ import time
 # __version__ did not exist yet while runner was loading. __init__ is lazy now
 # (PEP 562) and imports nothing at package-import time, so the cycle is gone.
 from stage_runner import __version__ as stage_runner_version
-from stage_runner import record_adapter, transitions
+from stage_runner import record_adapter, reposition, transitions
+from stage_runner.config import StageConfig
 from stage_runner.context import StageContext
 from stage_runner.events import (
     EVENT_STAGE_END,
+    EVENT_STAGE_REPOSITION,
     EVENT_STAGE_START,
     EVENT_TRANSITION,
     EVENT_TRIAL_END,
@@ -102,6 +105,13 @@ def run_trial(context: StageContext) -> TrialOutcome:
        rejects, so the save is guarded on ``buffered_frame_count() > 0`` and
        trial_end carries ``reason="aborted_empty"``.
 
+    A stage with a ``start_pose`` first has its arm joints moved there
+    (:func:`_reposition_before_stage`), AFTER the previous boundary's stop_base and
+    transition emit and BEFORE its own stage_start, so stage_start still marks the
+    instant the policy takes over. Stage 0 included. A pose that is not reached
+    ends the trial as an abort (see the reposition_failure branch below), never
+    by starting the policy from the wrong pose.
+
     HARDWARE FIRST, BOOKKEEPING AFTER, the same rule cli.main's finally follows.
     The base stop happens as soon as the executor returns, before the stage_end
     emit, and the whole trial body is inside one ``except BaseException`` so that
@@ -179,7 +189,35 @@ def run_trial(context: StageContext) -> TrialOutcome:
         # Option B (a trial loop around this call) has to decide for itself what a
         # press between two trials means; it must not be decided here by accident.
 
+        # The outcome of the boundary just crossed, None before the first stage.
+        # Read by the start pose move, which refuses to drive the arms for
+        # seconds while the base may still be holding a velocity.
+        last_boundary: StopBaseOutcome | None = None
+        # The gripper goals this runner last sent, None until something sent
+        # one (connect()'s staged pose is not ours to know). Tracked ONLY when a
+        # stage has a start_pose, so a config without one runs and logs exactly
+        # as before. Read at a boundary followed by a start pose, so the hold
+        # there keeps the gripper's previous command instead of re-anchoring it
+        # to its measured position -- see _recorded_gripper_goals.
+        uses_start_poses = any(stage.start_pose is not None for stage in stages)
+        last_gripper_goals: dict[str, float] | None = None
+        gripper_goal_source = reposition.GRIPPER_GOAL_UNCHANGED
         for stage_index, stage in enumerate(stages):
+            # BEFORE `stage_id = stage.id`, on purpose: until this stage's
+            # stage_start is written, the stage that owns the open boundary is
+            # still the previous one, and _record_failed_trial keys any boundary
+            # line it writes off stage_id. A move that raises here (Ctrl+C) is
+            # therefore filed at that boundary, not as a stage that never
+            # started -- no stage_start, no stage_end, no extra transition.
+            reposition_failure: str | None = None
+            if stage.start_pose is not None:
+                reposition_failure = _reposition_before_stage(
+                    context,
+                    stage,
+                    stage_index=stage_index,
+                    boundary=last_boundary,
+                    gripper_goal_source=gripper_goal_source,
+                )
             stage_id = stage.id
             plan = record_adapter.plan_stage(stage, config.defaults)
             log.emit(
@@ -202,7 +240,29 @@ def run_trial(context: StageContext) -> TrialOutcome:
 
             frames_before = context.buffered_frame_count()
             stage_started = time.perf_counter()
-            result = EXECUTORS[stage.executor](context, stage)
+            if reposition_failure is not None:
+                # The arms are NOT at the pose this stage's policy was trained
+                # to start from, so the policy is not run. Recorded the way
+                # executors._aborted_before_start records a stage that never
+                # entered record_loop -- 0 frames, elapsed_s exactly 0.0, which
+                # aggregate reads as "never ran" rather than as a slow stage --
+                # and with an ABORTING terminator, so the loop below ends the
+                # trial. NOT an exception: the episode buffer's state is known
+                # (nothing was added during the move), so the earlier stages'
+                # frames are saved as a partial chain exactly like an operator
+                # abort, instead of being discarded with an unknown buffer.
+                result = StageResult(
+                    terminated_by=TERMINATED_BY_ERROR,
+                    elapsed_s=0.0,
+                    frames=0,
+                    reason=(
+                        f"start pose not reached, so record_loop was not entered: "
+                        f"{reposition_failure}"
+                    ),
+                )
+                logger.error(f"stage {stage.id!r} not started: {reposition_failure}")
+            else:
+                result = EXECUTORS[stage.executor](context, stage)
             results.append(result)
 
             # HARDWARE FIRST: the base is zeroed before ANY of the bookkeeping
@@ -210,13 +270,45 @@ def run_trial(context: StageContext) -> TrialOutcome:
             # should be I/O -- an OSError out of the stage_end emit (a full disk
             # on the robot PC while three cameras write video) used to escape
             # with the base still holding the last policy velocity.
+            #
+            # The one exception is in-memory and never raises: which gripper goal
+            # the hold must carry has to be known BEFORE the hold is built.
+            next_stage = (
+                stages[stage_index + 1]
+                if stage_index < len(stages) - 1
+                and result.terminated_by not in ABORTING_TERMINATORS
+                else None
+            )
+            held_gripper: dict[str, float] | None = None
+            gripper_goal_source = reposition.GRIPPER_GOAL_UNCHANGED
+            if uses_start_poses:
+                if result.frames > 0:
+                    # This stage's policy sent the latest gripper goal; a stage
+                    # that recorded nothing sent none, so the previous one stands.
+                    last_gripper_goals = _recorded_gripper_goals(context)
+                if next_stage is not None and next_stage.start_pose is not None:
+                    held_gripper = last_gripper_goals
             transition_started = time.perf_counter()
-            outcome = transitions.stop_base(context.robot)
+            outcome = transitions.stop_base(context.robot, held_positions=held_gripper)
             stop_base_s = time.perf_counter() - transition_started
+            if uses_start_poses and outcome.path == transitions.STOP_PATH_PRIMARY:
+                # The fallback path commands no arm joint, so after it the goals
+                # tracked above are still the ones in force.
+                gripper_goal_source = (
+                    reposition.GRIPPER_GOAL_PREVIOUS_COMMAND
+                    if held_gripper is not None
+                    else reposition.GRIPPER_GOAL_MEASURED
+                )
+                last_gripper_goals = {
+                    key: value
+                    for key, value in (outcome.action or {}).items()
+                    if reposition.is_gripper_key(key)
+                } or last_gripper_goals
             # Read BEFORE the emit, and `and` rather than assignment: the emit
             # below can raise (a full disk), and the exit code must still carry
             # a stop that already failed.
             base_is_stopped = base_is_stopped and outcome.base_is_stopped
+            last_boundary = outcome
 
             log.emit(
                 EVENT_STAGE_END,
@@ -384,6 +476,234 @@ def run_trial(context: StageContext) -> TrialOutcome:
         # unwinding away, which is why the base is stopped at the top of this
         # handler rather than left to it.
         raise
+
+
+def _recorded_gripper_goals(context: StageContext) -> dict[str, float] | None:
+    """The gripper goals of the last action record_loop sent, or None. Never raises.
+
+    record_loop records ``action_values`` and sends
+    ``robot_action_processor((action_values, obs))`` (lerobot_record.py:396-412),
+    and the robot_action processor stage_runner hands it is make_default_processors'
+    identity (record_adapter.make_processors) -- so the last recorded action IS the
+    last action sent, rounded to the dataset's float32 (sub-micrometre on a
+    gripper carriage in metres). build_dataset_frame lays the values out in
+    ``features["action"]["names"]`` order, so they are read back BY NAME.
+
+    None means "unknown", and the boundary hold then falls back to the measured
+    position -- the hold every boundary sent before start poses existed -- with
+    a warning, and gripper_goal_source "measured" on the stage_reposition event
+    says so. Never raising is the point: this runs between record_loop and
+    stop_base, and nothing there may cost the base stop.
+    """
+    try:
+        names = list(context.dataset.features["action"]["names"])
+        row = context.dataset.episode_buffer["action"][-1]
+        values = dict(zip(names, (float(value) for value in row), strict=True))
+        goals = {
+            key: values[key]
+            for key in context.robot.action_features
+            if reposition.is_gripper_key(key)
+        }
+        if not goals or not all(math.isfinite(value) for value in goals.values()):
+            raise ValueError(f"no finite gripper goal in the last action: {goals}")
+        return goals
+    except Exception:
+        logger.warning(
+            "could not read the gripper goals of the last recorded action; the "
+            "next boundary holds the grippers at their MEASURED position, which "
+            "may loosen a grip during the start pose move",
+            exc_info=True,
+        )
+        return None
+
+
+def _reposition_before_stage(
+    context: StageContext,
+    stage: StageConfig,
+    *,
+    stage_index: int,
+    boundary: StopBaseOutcome | None,
+    gripper_goal_source: str = reposition.GRIPPER_GOAL_UNCHANGED,
+) -> str | None:
+    """Move the arms to ``stage.start_pose`` and log it. None = start the stage.
+
+    Returns a reason string when the stage must NOT run its policy (the pose was
+    not reached, the move failed, or the base was not confirmed stopped). Returns
+    None when the arms are at the pose -- or when the move was SKIPPED because the
+    operator already pressed Esc / left arrow, in which case the executor's own
+    abort-flag check ends the trial exactly as it would without a start pose. A
+    KeyboardInterrupt (or SystemExit) is logged and re-raised: run_trial's handler
+    stops the base and closes the log, and Ctrl+C reaches the operator.
+
+    Why each refusal is a refusal:
+
+    * Esc pressed -> skipped. Moving the arms for seconds after the operator
+      asked the run to stop is the opposite of what the key means.
+    * The boundary's stop_base did not stop the base -> refused. Both stop paths
+      failed, so the base may still be holding the previous stage's velocity; a
+      blocking multi-second arm move would hold the robot in exactly that state
+      with no loop running. Ending the trial instead runs one more stop_base at
+      this stage's boundary at once, then cli's disconnect, which zeroes the
+      base directly again. Not applicable to stage 0: nothing has commanded the
+      base since connect().
+    * Any exception from the move -> error. The controller may have refused a
+      goal; whatever the arms did, they are not known to be at the pose.
+
+    The gripper is never commanded and the base never moved by the move itself
+    (reposition.py says why). The gripper goal in force DURING the move is the
+    one the boundary's hold left: the previous stage's last command when the
+    runner could read it (gripper_goal_source "previous_command"), the measured
+    position when it could not ("measured"), and whatever was already standing
+    at stage 0 or after a fallback stop that commanded no arm ("unchanged"). No
+    frame is recorded: this sits between two record_loop calls, so frame_idx is
+    the same on both sides of the event.
+
+    reposition_s IS NOT TRANSITION TIME. It lands between the previous stage_end
+    and this stage_start, i.e. inside the wall-clock window aggregate.build_trial
+    derives the stage_end -> stage_start residual from; aggregate subtracts it
+    back out, so the residual and boundary_cost_s keep measuring the seam's
+    bookkeeping exactly as they did before this feature, and the move's own cost
+    is reported separately as stage_reposition_s.
+
+    reposition_s INCLUDES THE EXPIRY WAIT: move_arms_to_start_pose first sleeps
+    until the boundary hold's trajectory has run out (reposition.py says why),
+    and that sleep starts after ``started``. Kept inside the move's own time on
+    purpose -- outside it, it would land in the stage_end -> stage_start
+    residual and read as seam bookkeeping. expiry_wait_s reports it alone.
+    """
+    start_pose = stage.start_pose
+    source = start_pose.source
+    fields = {
+        "stage_index": stage_index,
+        "target": dict(start_pose.positions),
+        "min_goal_time_s": start_pose.min_goal_time_s,
+        "position_tolerance_rad": start_pose.position_tolerance_rad,
+        "source": {
+            "dataset_repo_id": source.dataset_repo_id,
+            "dataset_revision": source.dataset_revision,
+            "dataset_commit": source.dataset_commit,
+            "policy_path": source.policy_path,
+            "episode_index": source.episode_index,
+            "n_episodes": source.n_episodes,
+            "method": source.method,
+            "distance": source.distance,
+        },
+        # The boundary this move follows, so a reader can see the move happened
+        # with the base confirmed stopped. Null at stage 0.
+        "boundary_stop_base_path": None if boundary is None else boundary.path,
+        # Said out loud rather than left to a reader's knowledge of reposition.py:
+        # a stage that begins holding an object depends on it.
+        "gripper_commanded": False,
+        # The gripper goal standing while the arms move, and where it came from
+        # -- the question a dropped beaker asks first.
+        "gripper_goal_source": gripper_goal_source,
+        "gripper_goal": (
+            {
+                key: value
+                for key, value in (boundary.action or {}).items()
+                if reposition.is_gripper_key(key)
+            }
+            if boundary is not None
+            and gripper_goal_source != reposition.GRIPPER_GOAL_UNCHANGED
+            else None
+        ),
+    }
+
+    def emit(outcome: str, reason: str, **extra: object) -> None:
+        context.log.emit(
+            EVENT_STAGE_REPOSITION,
+            stage_id=stage.id,
+            frame_idx=context.buffered_frame_count(),
+            reason=reason,
+            outcome=outcome,
+            **fields,
+            **extra,
+        )
+
+    if context.events.get("stop_recording") or context.events.get("rerecord_episode"):
+        reason = "an abort key was pressed before this stage; the arms were not moved"
+        logger.warning(f"stage {stage.id!r}: start pose skipped -- {reason}")
+        emit(
+            reposition.REPOSITION_SKIPPED,
+            reason,
+            goal_time_s=None,
+            expiry_wait_s=None,
+            reposition_s=0.0,
+        )
+        return None
+    if boundary is not None and not boundary.base_is_stopped:
+        reason = (
+            f"the previous boundary's stop_base path was {boundary.path!r}, so the "
+            "base may still be moving; the arms were not moved"
+        )
+        emit(
+            reposition.REPOSITION_REFUSED,
+            reason,
+            goal_time_s=None,
+            expiry_wait_s=None,
+            reposition_s=0.0,
+        )
+        return reason
+
+    started = time.perf_counter()
+    try:
+        moved = reposition.move_arms_to_start_pose(
+            context.robot,
+            start_pose.positions,
+            min_goal_time_s=start_pose.min_goal_time_s,
+            position_tolerance_rad=start_pose.position_tolerance_rad,
+        )
+    except Exception as error:
+        reason = f"start pose move failed: {error!r}"
+        logger.exception(f"stage {stage.id!r}: {reason}")
+        emit(
+            reposition.REPOSITION_ERROR,
+            reason,
+            goal_time_s=None,
+            expiry_wait_s=None,
+            reposition_s=time.perf_counter() - started,
+        )
+        return reason
+    except BaseException as interrupt:
+        # Ctrl+C mid-move. The trajectory already handed to the controller runs
+        # to its goal (the arms are position-controlled; nothing here can recall
+        # it), and the base was confirmed stopped before the move began. The
+        # line is best-effort -- a failing emit must not replace the interrupt.
+        try:
+            emit(
+                reposition.REPOSITION_INTERRUPTED,
+                f"interrupted during the start pose move: {interrupt!r}",
+                goal_time_s=None,
+                expiry_wait_s=None,
+                reposition_s=time.perf_counter() - started,
+            )
+        except Exception:
+            logger.exception("could not record the interrupted start pose move")
+        raise
+    reposition_s = time.perf_counter() - started
+
+    outcome = (
+        reposition.REPOSITION_REACHED
+        if moved.reached
+        else reposition.REPOSITION_NOT_REACHED
+    )
+    emit(
+        outcome,
+        moved.detail,
+        goal_time_s=moved.goal_time_s,
+        expiry_wait_s=moved.expiry_wait_s,
+        expiry_wait_source=moved.expiry_wait_source,
+        previous_goal_time_s=moved.previous_goal_time_s,
+        reposition_s=reposition_s,
+        max_abs_error_rad=moved.max_abs_error,
+        start_positions=moved.start_positions,
+        end_positions=moved.end_positions,
+    )
+    logger.info(
+        f"stage {stage.id!r}: start pose {outcome} in {reposition_s:.2f}s "
+        f"(episode {source.episode_index} of {source.dataset_repo_id or '?'})"
+    )
+    return None if moved.reached else moved.detail
 
 
 def _emit_boundary(

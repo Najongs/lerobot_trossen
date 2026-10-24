@@ -68,27 +68,58 @@ class StopBaseOutcome:
 
 
 def build_hold_action(
-    robot: Robot, observation: Mapping[str, Any] | None = None
+    robot: Robot,
+    observation: Mapping[str, Any] | None = None,
+    *,
+    held_positions: Mapping[str, float] | None = None,
 ) -> dict[str, float]:
     """Build a full-width action that holds the arms and zeroes the base.
 
     A base-only action such as ``{"x.vel": 0.0, "theta.vel": 0.0}`` RAISES, which
     is why this fills every action feature: MobileAIRobot.send_action forwards the
     arm-matching keys to the arms (mobileai.py:542-544), WidowXAIFollower.send_action
-    builds ``goal_pos`` by filtering ``.pos`` keys (widowxai_follower.py:233-237),
-    and widowxai_follower.py:272 then does
+    builds ``goal_pos`` by filtering ``.pos`` keys (widowxai_follower.py:275-279),
+    and widowxai_follower.py:316 then does
     ``delta = abs(goal_pos[joint_name] - present_pos[joint_name])`` for every name in
     ``config.joint_names``. An arm-empty action is a KeyError there -- before
     anything reaches the motors, so the base is not stopped either.
 
     Commanding each arm joint to its present position makes every delta 0, so the
     velocity pacing in that same loop does nothing and the arms do not move.
+
+    ``held_positions`` replaces the MEASURED value with a given goal for those
+    keys. It exists for one case: the gripper before a stage with a start_pose
+    (runner._recorded_gripper_goals). A gripper closed on a beaker has a measured
+    position equal to the beaker's width while the policy's last command is
+    narrower -- that difference is the squeeze. "Hold at the measured position"
+    sets the goal to the beaker's width and leaves the position controller with
+    no error to push against, i.e. little or no grip force (UNMEASURED on this
+    gripper; the reasoning is the position-control law, not a test). Without a
+    start pose that window is the few milliseconds of bookkeeping before the next
+    stage's first action; with one it spans a multi-second move of the arm
+    carrying the object. Keeping the previous command instead is a re-send of a
+    goal already in force, not a new gripper command. Not a base key, and only
+    an action feature: anything else is a programming error and raises, which on
+    stop_base's primary path means the FALLBACK zeroes the base and the arms --
+    gripper included -- keep their last command, the same safe outcome.
     """
     if observation is None:
         observation = robot.get_observation()
+    held = dict(held_positions or {})
+    for key, value in held.items():
+        if key in BASE_VELOCITY_KEYS or key not in robot.action_features:
+            raise KeyError(
+                f"{robot.name}: held position for {key!r}, which is not an arm "
+                "action feature of this robot"
+            )
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{robot.name}: held position for {key!r} is {value!r}")
 
     action: dict[str, float] = {}
     for key in robot.action_features:
+        if key in held:
+            action[key] = float(held[key])
+            continue
         if key in BASE_VELOCITY_KEYS:
             # Set unconditionally rather than copied from the observation: with
             # include_base_in_state=False the base velocities are absent from
@@ -165,12 +196,17 @@ def zero_base_directly(robot: Robot) -> str:
     return ""
 
 
-def stop_base(robot: Robot, *, reraise_interrupt: bool = True) -> StopBaseOutcome:
+def stop_base(
+    robot: Robot,
+    *,
+    reraise_interrupt: bool = True,
+    held_positions: Mapping[str, float] | None = None,
+) -> StopBaseOutcome:
     """Zero the base at a stage boundary and report which path did it.
 
     PRIMARY path: one ``get_observation``, one full hold action, one
     ``send_action``. It stays primary because a base-only action dict raises a
-    KeyError at widowxai_follower.py:272 before anything reaches the motors --
+    KeyError at widowxai_follower.py:316 before anything reaches the motors --
     see :func:`build_hold_action`.
 
     FALLBACK path: if the observation or the send raises, :func:`zero_base_directly`
@@ -206,9 +242,12 @@ def stop_base(robot: Robot, *, reraise_interrupt: bool = True) -> StopBaseOutcom
     base-write warning on the same timeline instead of only the first. The durable
     fix is a delivery signal out of MobileAIRobot.send_action, which is the sibling
     package's call to make. The FALLBACK path does have one (set_cmd_vel's bool).
+
+    ``held_positions`` goes to :func:`build_hold_action` unchanged; None (every
+    boundary not followed by a start pose) is the hold this function always sent.
     """
     try:
-        action = build_hold_action(robot)
+        action = build_hold_action(robot, held_positions=held_positions)
         echo = robot.send_action(action)
     except BaseException as primary_error:
         fallback_error = zero_base_directly(robot)

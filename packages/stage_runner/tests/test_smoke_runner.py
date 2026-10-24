@@ -238,7 +238,7 @@ def test_smoke_chain_runs_without_hardware(tmp_path: Path) -> None:
     stop_action = transitions[0]["stop_action"]
     assert stop_action["x.vel"] == 0.0
     assert stop_action["theta.vel"] == 0.0
-    # Full width: a base-only dict raises KeyError at widowxai_follower.py:272,
+    # Full width: a base-only dict raises KeyError at widowxai_follower.py:314,
     # which iterates every configured joint name.
     assert set(stop_action) == set(robot.action_features), stop_action
     position_keys = sorted(key for key in stop_action if key.endswith(".pos"))

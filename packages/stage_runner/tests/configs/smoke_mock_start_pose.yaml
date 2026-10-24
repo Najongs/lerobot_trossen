@@ -1,0 +1,105 @@
+# Hardware-free smoke config for the per-stage arm START POSE path. Same chain as
+# smoke_mock.yaml, with two differences:
+#
+# * robot.arm_layout: bimanual -- the mock then carries the Mobile AI kit's
+#   left_/right_ joint names, a gripper joint last per arm, and
+#   robot.arms.<side>.driver, which is what the start pose move drives.
+# * both stages carry a start_pose, so the move runs before the FIRST stage and
+#   at the boundary after stop_base.
+#
+# The targets are hand-written test values, NOT a pose computed from a dataset;
+# the provenance below says so. Every target differs from the mock's seeded
+# joint positions ((index + 1) * 0.1 rad in name order), so a move that did not
+# happen cannot pass for one that did.
+
+version: 1
+
+robot:
+  type: stage_runner_mock_robot
+  id: smoke
+  joint_count: 14
+  include_base_in_state: true
+  arm_layout: bimanual
+
+dataset:
+  repo_id: local/eval_smoke_chain
+  fps: 30
+  video: false
+
+defaults:
+  executor: lerobot_policy
+  manual_ceiling_s: 5.0
+
+output:
+  root: /tmp/stage_runner_smoke/outputs
+
+stages:
+  - id: s4
+    name: mock_stage_four
+    executor: lerobot_policy
+    policy_path: mock://sine
+    instruction: "mock stage four"
+    terminator:
+      type: timeout
+      timeout_s: 1.0
+    precondition: null
+    start_pose:
+      positions:
+        left_joint_0.pos: -0.25
+        left_joint_1.pos: 1.25
+        left_joint_2.pos: 0.45
+        left_joint_3.pos: 0.5
+        left_joint_4.pos: 0.35
+        left_joint_5.pos: -0.3
+        right_joint_0.pos: 0.55
+        right_joint_1.pos: 1.3
+        right_joint_2.pos: 0.5
+        right_joint_3.pos: 0.4
+        right_joint_4.pos: -0.25
+        right_joint_5.pos: -0.2
+      min_goal_time_s: 3.0
+      position_tolerance_rad: 0.05
+      source:
+        dataset_repo_id: "local/hand_written_smoke_pose"
+        dataset_revision: null
+        dataset_commit: null
+        policy_path: "mock://sine"
+        episode_index: 0
+        n_episodes: 1
+        method: "hand_written_test_value"
+        distance: 0.0
+
+  - id: s5
+    name: mock_stage_five
+    executor: lerobot_policy
+    policy_path: mock://hold
+    instruction: "mock stage five"
+    terminator:
+      type: timeout
+      timeout_s: 1.0
+    precondition: null
+    start_pose:
+      positions:
+        left_joint_0.pos: 0.15
+        left_joint_1.pos: 0.95
+        left_joint_2.pos: 0.65
+        left_joint_3.pos: -0.45
+        left_joint_4.pos: 0.05
+        left_joint_5.pos: 0.85
+        right_joint_0.pos: -0.35
+        right_joint_1.pos: 1.05
+        right_joint_2.pos: 0.75
+        right_joint_3.pos: -0.15
+        right_joint_4.pos: 0.25
+        right_joint_5.pos: 0.95
+      min_goal_time_s: 3.0
+      position_tolerance_rad: 0.05
+      source:
+        dataset_repo_id: "local/hand_written_smoke_pose"
+        dataset_revision: null
+        dataset_commit: null
+        policy_path: "mock://hold"
+        episode_index: 1
+        n_episodes: 2
+        method: "hand_written_test_value"
+        distance: 0.0

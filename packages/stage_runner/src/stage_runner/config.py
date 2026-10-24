@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 import draccus
+import draccus.cfgparsing
 
 from lerobot.robots.config import RobotConfig
 
@@ -23,6 +24,13 @@ logger = logging.getLogger(__name__)
 # Bumped when a change to these dataclasses makes an older YAML mean something
 # different. preflight.check_config_version compares the file's `version:` key
 # against this, so a run started from a stale YAML dies before the robot moves.
+#
+# NOT bumped for StageConfig.start_pose (2026-10-19), by this rule: the field is
+# optional and defaults to None, which is exactly the old behaviour, so every
+# version-1 YAML written before it still means the same thing. The other
+# direction needs no bump either -- an older stage_runner handed a YAML that HAS
+# start_pose dies in draccus on the unknown field at parse time, before preflight
+# and long before the robot moves, which is the failure a bump would have bought.
 LATEST_CONFIG_VERSION: int = 1
 
 TERMINATOR_TIMEOUT: str = "timeout"
@@ -69,6 +77,59 @@ class TerminatorConfig:
 
 
 @dataclass
+class StartPoseSourceConfig:
+    """Where a start pose came from. Written by ``python -m stage_runner.start_pose``.
+
+    Carried into the stage_reposition event verbatim, because a pose is a
+    number with no meaning on its own: which dataset, which episode out of how
+    many, chosen how. Without it a pose pasted months ago cannot be checked
+    against the checkpoint now in ``policy_path``.
+    """
+
+    dataset_repo_id: str = ""
+    # The revision asked for (the training config's, else lerobot's CODEBASE_VERSION
+    # tag) and the commit it resolved to; null for a local --dataset-root.
+    dataset_revision: str | None = None
+    dataset_commit: str | None = None
+    # The checkpoint whose train_config.json named the dataset. preflight warns
+    # when it differs from the stage's policy_path (a swapped checkpoint may have
+    # been trained on other demonstrations).
+    policy_path: str = ""
+    episode_index: int | None = None
+    # Episodes whose first frame entered the pick (non-finite rows are dropped).
+    n_episodes: int | None = None
+    method: str = ""
+    # Standardised L2 distance of the chosen episode to the per-joint median.
+    distance: float | None = None
+
+
+@dataclass
+class StartPoseConfig:
+    """Arm joint targets to move to before a stage starts. ARM JOINTS ONLY.
+
+    Keys are the robot's ACTION feature names for the arm joints of both arms
+    (``left_joint_0.pos`` ... ``right_joint_5.pos``), never a gripper and never
+    the base -- preflight.check_stage_start_poses rejects either before connect().
+    The gripper is not commanded by the move: the boundary hold before it keeps
+    the previous stage's last gripper command, so a held object is not released
+    (unverified on hardware); the base is not moved (see reposition.py).
+    """
+
+    positions: dict[str, float] = field(default_factory=dict)
+    # Floor of the paced goal time. The actual goal time is stretched beyond it
+    # whenever a joint would otherwise exceed velocity_max x
+    # velocity_safety_factor -- the same pacing rule as WidowXAIFollower's
+    # send_action. 3.0 s rather than connect()'s fixed 2.0 s because the arm may
+    # be carrying an object.
+    min_goal_time_s: float = 3.0
+    # Max |measured - target| per arm joint, in rad, after the move. A larger
+    # error aborts the trial instead of starting the stage from a wrong pose.
+    # UNMEASURED default: no settled tracking error of this arm has been recorded.
+    position_tolerance_rad: float = 0.05
+    source: StartPoseSourceConfig = field(default_factory=StartPoseSourceConfig)
+
+
+@dataclass
 class StageConfig:
     # `id` is the join key to the hand-filled labels file and to every event
     # line, so it has to stay stable across trials even when `name` changes.
@@ -86,6 +147,11 @@ class StageConfig:
     # start running, this YAML is tied to experiment logs and a schema change
     # costs more than a code change.
     precondition: str | None = None
+    # Optional. None (the default, and every YAML written before 2026-10-19) =
+    # the stage starts wherever the previous stage left the arms, exactly as
+    # before. Set = the arms are moved there first; generate the block with
+    # `python -m stage_runner.start_pose` rather than by hand.
+    start_pose: StartPoseConfig | None = None
 
 
 @dataclass
@@ -242,5 +308,21 @@ def snapshot_configs(
         shutil.copyfile(source_path, run_directory / SOURCE_CONFIG_FILENAME)
 
     (run_directory / RESOLVED_CONFIG_FILENAME).write_text(
-        RESOLVED_CONFIG_HEADER + draccus.dump(config), encoding="utf-8"
+        RESOLVED_CONFIG_HEADER + resolved_config_text(config), encoding="utf-8"
     )
+
+
+def resolved_config_text(config: StageRunnerConfig) -> str:
+    """``draccus.dump(config)`` minus every ``start_pose: null``.
+
+    draccus.dump is ``save_config(encode(config))`` (draccus/cfgparsing.py), so
+    dropping the key from the encoded stage dicts before saving yields exactly
+    the dump a config without the field produced. A config with no start pose
+    therefore snapshots byte-for-byte as it did before StageConfig.start_pose
+    existed, and the absent key still reads as "no start pose" (its default).
+    """
+    encoded = draccus.encode(config)
+    for stage in encoded.get("stages") or []:
+        if isinstance(stage, dict) and stage.get("start_pose") is None:
+            stage.pop("start_pose", None)
+    return draccus.cfgparsing.save_config(encoded)

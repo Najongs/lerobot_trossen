@@ -43,6 +43,8 @@ _LAZY_ATTRIBUTES: dict[str, str] = {
     "OutputConfig": "config",
     "StageConfig": "config",
     "StageRunnerConfig": "config",
+    "StartPoseConfig": "config",
+    "StartPoseSourceConfig": "config",
     "TerminatorConfig": "config",
     "StageContext": "context",
     "EventLog": "events",

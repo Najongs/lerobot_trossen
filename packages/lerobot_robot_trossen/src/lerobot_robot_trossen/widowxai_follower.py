@@ -46,6 +46,27 @@ class WidowXAIFollower(Robot):
         # Per-joint hard velocity limits, cached in configure() once the driver
         # is connected. Empty until then, which disables velocity pacing.
         self._joint_velocity_max: list[float] = []
+        # The LAST trajectory this object handed the driver: when it began, on
+        # the time.perf_counter() clock, and how long it runs. None until the
+        # first command. Read by stage_runner.reposition before a long move.
+        #
+        # Why anyone needs it: trossen_arm 1.9.0 builds each new trajectory
+        # (set_all_positions / set_arm_positions) from the COMMANDED position,
+        # velocity and acceleration of the trajectory still running, not from
+        # the measured state, and the start acceleration's influence grows with
+        # the new horizon squared. A 3 s move commanded while a ~0.1 s frame is
+        # mid-course inherits that frame's acceleration ~900x amplified -- the
+        # start pose swing of up to 160 deg seen on 2026-10-20. Waiting until
+        # sent + goal_time has passed makes the inherited state (target, 0, 0).
+        # The driver exposes neither value (its getters return measured robot
+        # output) and its object rejects new attributes, so the record lives
+        # here, the one place every follower command goes through.
+        #
+        # Only commands sent BY THIS OBJECT are recorded. reposition's own move
+        # drives self.driver directly and is not; it ends in a blocking call
+        # and a settle check, so it has expired before anything else is sent.
+        self.last_command_sent_s: float | None = None
+        self.last_command_goal_time_s: float | None = None
 
     @property
     def _joint_ft(self) -> dict[str, type]:
@@ -124,11 +145,13 @@ class WidowXAIFollower(Robot):
     def configure(self) -> None:
         # Set the arm to position control mode
         self.driver.set_all_modes(trossen_arm.Mode.position)
+        sent_s = time.perf_counter()
         self.driver.set_all_positions(
             self.config.staged_positions,
             goal_time=2.0,
             blocking=True,
         )
+        self._record_command(sent_s, 2.0)
         # Cache the per-joint hard velocity limits (rad/s for the arm joints,
         # m/s for the gripper carriage) so send_action can pace large position
         # jumps below the controller's limit.
@@ -148,6 +171,25 @@ class WidowXAIFollower(Robot):
                 )
             )
         )
+
+    def _record_command(self, sent_s: float, goal_time: float) -> None:
+        """Remember the trajectory just handed to the driver (see __init__).
+
+        ``sent_s`` is the host's best estimate of when the driver started it:
+
+        * blocking=True -- taken BEFORE the call. The call returns once the goal
+          is reached, so its return time would add a second goal_time; the
+          estimate errs early by the link latency, which the reader's margin
+          covers.
+        * blocking=False -- taken right AFTER the call returns. The driver
+          cannot have started a trajectory it had not yet been handed, so this
+          errs late, i.e. towards waiting a little too long.
+
+        A float and a timestamp per command: cheap enough for every policy
+        frame, and nothing reads them on the hot path.
+        """
+        self.last_command_sent_s = sent_s
+        self.last_command_goal_time_s = float(goal_time)
 
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
@@ -302,6 +344,7 @@ class WidowXAIFollower(Robot):
             goal_time=goal_time,
             blocking=False,
         )
+        self._record_command(time.perf_counter(), goal_time)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     def disconnect(self):
@@ -309,17 +352,21 @@ class WidowXAIFollower(Robot):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         # Move the arm to the staged positions before disconnecting
+        sent_s = time.perf_counter()
         self.driver.set_all_positions(
             self.config.staged_positions,
             goal_time=2.0,
             blocking=True,
         )
+        self._record_command(sent_s, 2.0)
         # Move the arm to the sleep position (all positions to 0.0)
+        sent_s = time.perf_counter()
         self.driver.set_all_positions(
             [0.0] * len(self.config.joint_names),
             goal_time=2.0,
             blocking=True,
         )
+        self._record_command(sent_s, 2.0)
 
         self.driver.cleanup()
         for cam in self.cameras.values():

@@ -11,6 +11,7 @@ YAML, not bugs in the package. Each message names the key to change.
 """
 
 import logging
+import math
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -21,6 +22,10 @@ from lerobot.robots import Robot
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STATE
 from lerobot.utils.control_utils import is_headless, sanity_check_dataset_name
 
+# Module scope, unlike the executors import in check_stage_definitions: reposition
+# reaches only transitions -> lerobot.robots, which this module imports already,
+# so it adds neither torch nor a cycle to the gate.
+from stage_runner import reposition
 from stage_runner.config import (
     LATEST_CONFIG_VERSION,
     TERMINATOR_MANUAL,
@@ -230,6 +235,40 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                 "value records zero frames without raising."
             )
 
+        # The robot-independent half of the start pose gate; which KEYS the pose
+        # may carry needs the constructed robot and is check_stage_start_poses.
+        start_pose = stage.start_pose
+        if start_pose is not None:
+            if not start_pose.positions:
+                problems.append(
+                    f"{where} ({stage.id!r}): `start_pose.positions` is empty. "
+                    "Generate the block with `python -m stage_runner.start_pose`, "
+                    "or delete `start_pose:` to start the stage where the previous "
+                    "one left the arms."
+                )
+            if not (
+                math.isfinite(start_pose.min_goal_time_s)
+                and start_pose.min_goal_time_s > 0
+            ):
+                # 0 would hand the driver a zero-length trajectory: the pacing
+                # stretches it only for joints that actually move, so a pose a
+                # few mrad away would be a step command.
+                problems.append(
+                    f"{where} ({stage.id!r}): `start_pose.min_goal_time_s: "
+                    f"{start_pose.min_goal_time_s}` must be a positive number of "
+                    "seconds."
+                )
+            if not (
+                math.isfinite(start_pose.position_tolerance_rad)
+                and start_pose.position_tolerance_rad > 0
+            ):
+                problems.append(
+                    f"{where} ({stage.id!r}): `start_pose.position_tolerance_rad: "
+                    f"{start_pose.position_tolerance_rad}` must be a positive "
+                    "number of radians -- 0 can never be met, so every trial "
+                    "would abort at this stage."
+                )
+
     if problems:
         raise PreflightError(
             "invalid stage definitions:\n  - " + "\n  - ".join(problems)
@@ -348,6 +387,70 @@ def check_stage_dimensions(
         raise PreflightError(
             "policy/robot dimension mismatch:\n  - " + "\n  - ".join(problems)
         )
+
+
+def check_stage_start_poses(config: StageRunnerConfig, robot: Robot) -> None:
+    """Refuse a start pose this robot cannot be moved to, before it is energised.
+
+    Rejects a pose whose keys are not exactly this robot's arm joints, one that
+    names a gripper or a base key, and one with a non-finite value. The keys are
+    matched against what reposition.arm_handles reads off the CONSTRUCTED robot
+    (``robot.arms.<side>.config.joint_names``), and the same
+    reposition.start_pose_problems runs again right before the move, so this gate
+    and the motion cannot disagree about what a valid pose is.
+
+    A pose whose recorded provenance names a different checkpoint than the stage
+    runs only WARNS: a newer checkpoint of the same stage is usually trained on
+    the same demonstrations, and the operator is the one who knows.
+    """
+    posed = [stage for stage in config.stages if stage.start_pose is not None]
+    if not posed:
+        return
+    try:
+        handles = reposition.arm_handles(robot)
+    except reposition.StageRepositionError as error:
+        named = ", ".join(repr(stage.id) for stage in posed)
+        raise PreflightError(
+            f"stage(s) {named} set `start_pose`, but robot {robot.name!r} cannot be "
+            f"moved to one: {error}. Delete `start_pose:` from those stages."
+        ) from error
+
+    action_keys = set(robot.action_features)
+    absent = [
+        key for key in reposition.expected_arm_keys(handles) if key not in action_keys
+    ]
+    if absent:
+        # Would mean the per-arm drivers and the action features disagree about
+        # the arm joint names, which no shipped robot does; refused rather than
+        # assumed, because the pose is keyed by action feature names.
+        raise PreflightError(
+            f"robot {robot.name!r}: arm joint keys {absent} derived from the arm "
+            "drivers are not action features, so a start pose cannot be keyed by "
+            "them."
+        )
+
+    problems: list[str] = []
+    for stage in posed:
+        for problem in reposition.start_pose_problems(
+            stage.start_pose.positions, handles
+        ):
+            problems.append(f"stage {stage.id!r} `start_pose.positions`: {problem}")
+        source_policy = stage.start_pose.source.policy_path
+        if source_policy and source_policy != stage.policy_path:
+            logger.warning(
+                f"stage {stage.id!r}: start_pose was computed from the training "
+                f"dataset of {source_policy!r}, but the stage runs "
+                f"{stage.policy_path!r}. Regenerate it if that checkpoint was "
+                "trained on other demonstrations."
+            )
+        if not stage.start_pose.source.dataset_repo_id:
+            logger.warning(
+                f"stage {stage.id!r}: start_pose carries no `source.dataset_repo_id`, "
+                "so the stage_reposition events cannot say which demonstration "
+                "the pose came from."
+            )
+    if problems:
+        raise PreflightError("invalid start pose:\n  - " + "\n  - ".join(problems))
 
 
 def check_manual_terminator_is_reachable(config: StageRunnerConfig) -> None:
@@ -531,6 +634,7 @@ def run_preflight(
     check_config_version(config)
     check_stage_definitions(config)
     check_stage_dimensions(robot, config.stages, policy_configs)
+    check_stage_start_poses(config, robot)
     check_manual_terminator_is_reachable(config)
     check_dataset_name(config, policy_configs)
     check_dataset_root_is_free(config)
