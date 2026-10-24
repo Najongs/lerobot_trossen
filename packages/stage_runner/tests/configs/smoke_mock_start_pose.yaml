@@ -13,6 +13,8 @@
 # happen cannot pass for one that did.
 
 version: 1
+# Silent: the suite runs headless and on machines without spd-say.
+play_sounds: false
 
 robot:
   type: stage_runner_mock_robot

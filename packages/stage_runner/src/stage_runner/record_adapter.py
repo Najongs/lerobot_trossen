@@ -34,6 +34,7 @@ from lerobot.teleoperators import (
 )
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.import_utils import register_third_party_plugins
+from lerobot.utils.utils import log_say
 
 from stage_runner.config import (
     TERMINATOR_MANUAL,
@@ -202,6 +203,18 @@ def make_keyboard_events() -> tuple[Any | None, dict[str, bool]]:
     """
     listener, events = init_keyboard_listener()
     return listener, events
+
+
+def announce_stage(stage: StageConfig, play_sounds: bool) -> None:
+    """Say which stage starts, the way lerobot-record says "Recording episode N".
+
+    Core's own log_say, so ``play_sounds`` means what lerobot-record's
+    ``--play_sounds`` means and the text also lands in the log when it is off.
+    Non-blocking: spd-say runs beside the control loop, not in front of it.
+    """
+    what = stage.name.replace("_", " ")
+    text = f"Stage {stage.id}, {what}" if what else f"Stage {stage.id}"
+    log_say(text, play_sounds)
 
 
 def plan_stage(stage: StageConfig, defaults: DefaultsConfig) -> StagePlan:

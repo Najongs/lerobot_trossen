@@ -431,6 +431,8 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 - ⚠️ **강제 종료(SIGKILL·정전) 시 베이스를 세우는 코드는 없다** — 정상 종료도 예외도 `finally`의 `disconnect()`가 `set_cmd_vel(0, 0)`으로 세우지만, 그 층은 하드킬에 안 걸린다. 제대로 된 처방은 베이스 펌웨어의 명령 타임아웃이고 이 실행기의 층이 아니다. **P1의 대비는 옆에서 비상정지를 잡고 있는 사람이다.**
 - ⚠️ **temporal ensembling을 실행기가 안 건드린다** — §3-3의 eval 명령은 `--policy.temporal_ensemble_coeff=0.01 --policy.n_action_steps=1`을 강제하지만, 체이닝 실행은 체크포인트 `config.json`의 값을 그대로 쓴다(60k ACT 체크포인트 둘 다 `null`·`100` = ensembling 꺼짐 + 100스텝 청크) → [Eval](#eval). **단계별 eval과 체이닝 결과를 나란히 놓으면 추론 설정부터 다르다.** 회차별 실제 값은 `events.jsonl`의 `trial_start.policies[].temporal_ensemble_coeff`·`n_action_steps`에 기록된다.
 - ⚠️ **단계와 단계 사이에 누른 `→`는 버려진다** — 단계가 끝나고 다음 단계가 시작되기 전(종료 판정·`stage_end` 기록·베이스 정지·전환 기록) 구간엔 돌고 있는 루프가 없어서 그 키를 소비할 데가 없다. 그냥 두면 다음 단계가 첫 프레임에서 끊겨 **0프레임짜리 단계**가 기록되므로, 실행기가 그 플래그를 지우고 콘솔에 `WARNING`을 남긴다. **`ESC`·`←`(중단)는 반대로 버리지 않는다** — 그건 시행 전체에 대한 의사표시라 다음 단계 시작 전에 읽혀 시행이 중단된다.
+- **단계마다 시작할 때 「Stage s4, pour liquid from tubes to beaker」처럼 단계 `id`와 `name`을 소리로 읽는다** — 팔이 시작 자세로 움직이기 전이다. lerobot-record의 「Recording episode N」과 같은 `log_say`라, 끄려면 YAML 맨 위에 `play_sounds: false`(꺼도 같은 문장이 로그에 남는다).
+	- `spd-say`가 없는 기기에선 `play_sounds: false`로 둘 것 — 켠 채면 첫 단계 시작에서 시행이 죽는다.
 - ⚠️ **회차 이름은 YAML에 적는다** — draccus는 모든 필드를 점 표기 CLI로도 받으므로 `--dataset.repo_id=…`로 덮어써도 돈다. 다만 그 값은 입력 파일 그대로의 사본인 `config.source.yaml`에 안 남고 `config.resolved.yaml`(재파싱 불가)에만 남아, 재현하려면 사람이 그 인자를 다시 쳐야 한다. YAML에 적어 두면 **사본 하나로 회차가 재현된다.**
 - ⚠️ **재실행은 `config.source.yaml`로 한다** — run 디렉터리의 두 스냅샷 중 `config.resolved.yaml`은 **기록 전용**이다. `draccus.dump`가 카메라 enum을 `!!python/object/apply:` 태그로 적어 다시 파싱하면 `ConstructorError`로 죽는다. 「내가 뭘 고쳤나」는 source가, 「CLI 오버라이드까지 합쳐 무엇이 돌았나」는 resolved가 답한다.
 

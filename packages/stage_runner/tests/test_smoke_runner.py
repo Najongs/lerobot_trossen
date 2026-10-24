@@ -977,6 +977,37 @@ def test_the_writer_and_the_reader_share_one_stop_base_vocabulary() -> None:
     )
 
 
+def test_every_stage_start_is_announced(tmp_path: Path) -> None:
+    """Each stage is said once, in order, as "Stage <id>, <name with spaces>".
+
+    log_say is called whether play_sounds is on or off -- off only silences
+    spd-say, the sentence still reaches the log, as in lerobot-record.
+    """
+    for play_sounds in (False, True):
+        said: list[tuple[str, bool]] = []
+        root = tmp_path / str(play_sounds)
+        argv = [
+            "--config_path",
+            str(CONFIG_PATH),
+            f"--dataset.repo_id={REPO_ID}",
+            f"--dataset.root={root / 'dataset'}",
+            f"--output.root={root / 'outputs'}",
+            f"--play_sounds={str(play_sounds).lower()}",
+        ]
+        with mock.patch.object(
+            record_adapter,
+            "log_say",
+            lambda text, sounds, said=said: said.append((text, sounds)),
+        ):
+            exit_code = cli.main(argv)
+
+        assert exit_code == cli.EXIT_OK, f"cli.main returned {exit_code}"
+        assert said == [
+            ("Stage s4, mock stage four", play_sounds),
+            ("Stage s5, mock stage five", play_sounds),
+        ]
+
+
 if __name__ == "__main__":
     # No pytest in this venv and it must not be mutated, so the file is its own
     # runner. Each case gets its own temporary root: they all write a dataset
@@ -990,6 +1021,7 @@ if __name__ == "__main__":
         test_an_abort_before_the_first_frame_is_recorded_not_silent,
         test_both_stop_paths_failing_is_visible_in_the_log,
         test_a_ctrl_c_inside_stop_base_is_labelled_fallback_not_failed,
+        test_every_stage_start_is_announced,
     ]
     for case in TESTS:
         with tempfile.TemporaryDirectory() as directory:
