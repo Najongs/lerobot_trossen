@@ -17,6 +17,7 @@ from lerobot_robot_trossen.config_mobileai import MobileAIRobotConfig
 from lerobot_robot_trossen.base_vel_log import flush as flush_base_vel_log
 from lerobot_robot_trossen.base_vel_log import record_sample as record_base_vel_sample
 from lerobot_robot_trossen.loop_rate_log import add_loop_section, record_loop_tick
+from lerobot_robot_trossen.parking import park_at_exit, park_in_place
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +273,9 @@ class MobileAIRobot(Robot):
 
     def connect(self, calibrate: bool = True) -> None:
         self.arms.connect(calibrate=calibrate)
+        # Before anything below can raise: a start that fails part way leaves
+        # the arms up, and the exit sweep parks them with any leader arm.
+        park_at_exit(self, rank=0)
         base_init_success, message = self.base.init_base()
         if not base_init_success:
             raise ConnectionError(f"Failed to connect to Mobile AI base: {message}")
@@ -344,14 +348,13 @@ class MobileAIRobot(Robot):
             return
         if self._read_base_state(latch=False) != SlateBaseSystemState.SYS_ESTOP:
             return
-        # Both record()'s finally and Robot.__del__ guard on is_connected, which is
-        # False here because the cameras are connected further down, so neither
-        # would release the arms: without this they stay torque-enabled and never
-        # run their sleep-pose sequence.
-        try:
-            self.arms.disconnect()
-        except Exception as e:
-            logger.warning(f"Error while disconnecting arms after e-stop: {e}")
+        # The arms stay connected. Both record()'s finally and Robot.__del__ guard
+        # on is_connected, which is False here because the cameras are connected
+        # further down, so neither releases them; the exit sweep does
+        # (parking.py), together with a leader arm left connected by
+        # lerobot-teleoperate, and a caller that disconnects -- the stage
+        # runner's teardown -- parks them the usual way. Parking them here
+        # started them before the leader and made a refused start take 10 s.
         raise RuntimeError(
             "Robot is in emergency stop state. Please release the emergency stop "
             "button and try again. Pass --robot.estop_check=false to start anyway."
@@ -406,6 +409,22 @@ class MobileAIRobot(Robot):
     def configure(self) -> None:
         # Set the arm to position control mode
         self.arms.configure()
+
+    def wait_for_arrival(self) -> float:
+        """Block until both arms' connect moves have ended; the seconds waited.
+
+        get_observation and send_action already wait; this is for code that
+        drives an arm's driver directly.
+        """
+        return self.arms.wait_for_arrival()
+
+    def wait_for_disconnect(self, timeout: float | None = None) -> list[BaseException]:
+        """Join the arms' park threads; what they raised, empty if both parked.
+
+        The base is stopped synchronously inside disconnect(), before the arms
+        start parking, so this says nothing about the base.
+        """
+        return self.arms.wait_for_disconnect(timeout)
 
     def get_observation(self) -> dict[str, Any]:
         obs_dict = {}
@@ -519,5 +538,18 @@ class MobileAIRobot(Robot):
             # We log a warning but continue with disconnect
             logger.warning(f"Error while disconnecting arms: {e}")
 
+        # Skip cameras that never came up: a start refused before them (e-stop)
+        # still reaches here, and their disconnect() would raise after the arms.
         for cam in self.cameras.values():
-            cam.disconnect()
+            if cam.is_connected:
+                cam.disconnect()
+
+    def needs_park_at_exit(self) -> bool:
+        """For the exit sweep: the arms are up, whatever the cameras did."""
+        return self.arms.is_connected
+
+    def __del__(self) -> None:
+        # Robot.__del__ disconnects an object dropped while connected; the arms must
+        # park in place there, not on threads (parking.py).
+        with park_in_place():
+            super().__del__()

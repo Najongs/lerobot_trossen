@@ -58,6 +58,10 @@ EXIT_PREFLIGHT: int = 2
 # measurement", this says "stop the batch and go look at the robot".
 EXIT_BASE_STOP_FAILED: int = 3
 
+# How long the teardown waits for the arms to park: up to 2 s left of the
+# connect move, then 2 s to the staged and 2 s to the sleep pose, with slack.
+PARK_TIMEOUT_S: float = 15.0
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one trial and return a process exit code.
@@ -205,9 +209,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             # robot that is energised and NOT is_connected.
             #
             # The leader arm FIRST: a leader that is off or unplugged then fails
-            # before the follower is energised. Its connect() moves the leader to
-            # its staged pose (2 s) and leaves it in gravity compensation, as
-            # lerobot-record's does.
+            # before the follower is energised. Neither connect() waits for its
+            # 2 s move to the staged pose, so all four arms move together; each
+            # arm waits for its own move on first use, and the leader enters
+            # gravity compensation then (widowxai_leader.py wait_for_arrival).
             if teleop is not None:
                 teleop.connect()
             robot.connect()
@@ -282,6 +287,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                         teleop.disconnect()
                 except Exception:
                     logger.exception("leader arm disconnect() failed")
+            # Both disconnect() calls return once the arms have STARTED parking
+            # (on background threads), which is what lets all four park together.
+            # Wait here so a park that failed lands in this run's log rather than
+            # after it. getattr: the mock robot has no park threads.
+            for device, label in ((robot, "robot"), (teleop, "leader arm")):
+                wait_for_disconnect = getattr(device, "wait_for_disconnect", None)
+                if not callable(wait_for_disconnect):
+                    continue
+                try:
+                    for error in wait_for_disconnect(PARK_TIMEOUT_S):
+                        logger.error(
+                            f"{label} did not park: {error!r} -- CHECK THE ARMS"
+                        )
+                except Exception:
+                    logger.exception(f"{label} wait_for_disconnect() failed")
             if listener is not None and not is_headless():
                 try:
                     listener.stop()

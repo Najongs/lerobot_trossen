@@ -2,6 +2,7 @@ import logging
 from functools import cached_property
 
 from lerobot.teleoperators.teleoperator import Teleoperator
+from lerobot_robot_trossen.parking import park_at_exit, park_in_place
 
 from lerobot_teleoperator_trossen.config_bi_widowxai_leader import (
     BiWidowXAILeaderRobotConfig,
@@ -62,6 +63,7 @@ class BiWidowXAILeaderRobot(Teleoperator):
     def connect(self, calibrate: bool = True) -> None:
         self.left_arm.connect(calibrate)
         self.right_arm.connect(calibrate)
+        park_at_exit(self, rank=1)
 
     @property
     def is_calibrated(self) -> bool:
@@ -135,5 +137,26 @@ class BiWidowXAILeaderRobot(Teleoperator):
             self.right_arm.send_feedback(right_feedback)
 
     def disconnect(self) -> None:
+        # Each call returns once its arm's park thread has started, so the two
+        # arms park together.
         self.left_arm.disconnect()
         self.right_arm.disconnect()
+
+    def wait_for_arrival(self) -> float:
+        """Block until both arms' connect moves have ended and gravity
+        compensation is on; the seconds waited."""
+        return self.left_arm.wait_for_arrival() + self.right_arm.wait_for_arrival()
+
+    def wait_for_disconnect(self, timeout: float | None = None) -> list[BaseException]:
+        """Join both arms' park threads; what they raised, empty if both parked."""
+        errors = (
+            self.left_arm.wait_for_disconnect(timeout),
+            self.right_arm.wait_for_disconnect(timeout),
+        )
+        return [error for error in errors if error is not None]
+
+    def __del__(self) -> None:
+        # Teleoperator.__del__ disconnects an object dropped while connected; the arms must
+        # park in place there, not on threads (parking.py).
+        with park_in_place():
+            super().__del__()
