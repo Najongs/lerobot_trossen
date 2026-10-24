@@ -18,6 +18,7 @@ import draccus
 import draccus.cfgparsing
 
 from lerobot.robots.config import RobotConfig
+from lerobot.teleoperators.config import TeleoperatorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ logger = logging.getLogger(__name__)
 # direction needs no bump either -- an older stage_runner handed a YAML that HAS
 # start_pose dies in draccus on the unknown field at parse time, before preflight
 # and long before the robot moves, which is the failure a bump would have bought.
+# The same rule, and the same answer, for the `leader_reset` executor and the
+# top-level `teleop:` block (2026-10-19): both are opt-in, and a YAML without
+# them means what it meant.
 LATEST_CONFIG_VERSION: int = 1
 
 TERMINATOR_TIMEOUT: str = "timeout"
@@ -38,6 +42,15 @@ TERMINATOR_MANUAL: str = "manual"
 TERMINATOR_TYPES: tuple[str, ...] = (TERMINATOR_TIMEOUT, TERMINATOR_MANUAL)
 
 EXECUTOR_LEROBOT_POLICY: str = "lerobot_policy"
+# A stage that runs NO policy: the operator drives the arms with the leader arm
+# (the `teleop:` block) to hand the robot an object and set its pose, the way
+# lerobot-record's reset section does between episodes. Records no frames, and
+# ends on the right arrow or its ceiling -- see executors.run_leader_reset_stage.
+# The same string is pinned in aggregate.py, which keeps such stages off the
+# success-metric axis.
+EXECUTOR_LEADER_RESET: str = "leader_reset"
+# Executors that run a checkpoint, i.e. need a policy_path and a bundle.
+POLICY_EXECUTORS: frozenset[str] = frozenset({EXECUTOR_LEROBOT_POLICY})
 
 # draccus owns this flag; we only scan argv for it so the verbatim source copy
 # in snapshot_configs knows which file to copy (draccus does not expose it).
@@ -137,6 +150,7 @@ class StageConfig:
     name: str = ""
     executor: str = EXECUTOR_LEROBOT_POLICY
     # Hub repo id, local directory, or mock://<name> for the hardware-free path.
+    # Empty for a `leader_reset` stage, which runs no checkpoint.
     policy_path: str = ""
     # Becomes frame["task"] for every frame this stage records. ACT ignores it;
     # it is recorded so a VLA executor and the per-stage segmentation of one
@@ -193,6 +207,13 @@ class StageRunnerConfig:
     # registry that record_adapter.register_plugins() populates. Registering our
     # own subclass here instead would fork the robot schema.
     robot: RobotConfig
+    # The leader arm a `leader_reset` stage drives the robot with -- the same
+    # block lerobot-record takes as `--teleop.*`, resolved by its `type:` key
+    # against TeleoperatorConfig's registry (register_plugins() populates it).
+    # None (the default, and every YAML written before 2026-10-19) = no leader
+    # arm is constructed or connected; preflight refuses a leader_reset stage
+    # without one.
+    teleop: TeleoperatorConfig | None = None
     version: int = LATEST_CONFIG_VERSION
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
@@ -218,8 +239,10 @@ def parse_config(argv: Sequence[str] | None = None) -> StageRunnerConfig:
     # stage_runner.aggregate stays importable without lerobot or torch, which
     # moved the import here. Function scope, not module scope: nothing else in
     # this module needs it, and the smoke path must not depend on some other
-    # module having been imported first.
-    from stage_runner import mock_robot  # noqa: F401
+    # module having been imported first. mock_teleop is the same for the leader
+    # arm: `type: stage_runner_mock_teleop` resolves here, out of
+    # TeleoperatorConfig's registry.
+    from stage_runner import mock_robot, mock_teleop  # noqa: F401
 
     return draccus.parse(config_class=StageRunnerConfig, args=argv)
 
@@ -313,15 +336,18 @@ def snapshot_configs(
 
 
 def resolved_config_text(config: StageRunnerConfig) -> str:
-    """``draccus.dump(config)`` minus every ``start_pose: null``.
+    """``draccus.dump(config)`` minus every ``start_pose: null`` and ``teleop: null``.
 
     draccus.dump is ``save_config(encode(config))`` (draccus/cfgparsing.py), so
     dropping the key from the encoded stage dicts before saving yields exactly
     the dump a config without the field produced. A config with no start pose
-    therefore snapshots byte-for-byte as it did before StageConfig.start_pose
-    existed, and the absent key still reads as "no start pose" (its default).
+    and no leader arm therefore snapshots byte-for-byte as it did before
+    StageConfig.start_pose and StageRunnerConfig.teleop existed, and an absent
+    key still reads as its default (None).
     """
     encoded = draccus.encode(config)
+    if encoded.get("teleop") is None:
+        encoded.pop("teleop", None)
     for stage in encoded.get("stages") or []:
         if isinstance(stage, dict) and stage.get("start_pose") is None:
             stage.pop("start_pose", None)

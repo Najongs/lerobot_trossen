@@ -1,5 +1,6 @@
-"""Seam 1 of 2 to installed lerobot: the single call site of ``record_loop``, plus
-the robot, processor, dataset and keyboard construction that feeds it.
+"""Seam 1 of 2 to installed lerobot: the only file that calls ``record_loop`` (once
+for a policy stage, once for a leader reset), plus the robot, leader arm,
+processor, dataset and keyboard construction that feeds it.
 
 If an upstream signature moves, this file is the only one that changes. Nothing
 else in the package imports ``lerobot.scripts.lerobot_record``.
@@ -26,6 +27,11 @@ from lerobot.processor import (
 )
 from lerobot.robots import Robot, RobotConfig, make_robot_from_config
 from lerobot.scripts.lerobot_record import record_loop
+from lerobot.teleoperators import (
+    Teleoperator,
+    TeleoperatorConfig,
+    make_teleoperator_from_config,
+)
 from lerobot.utils.control_utils import init_keyboard_listener
 from lerobot.utils.import_utils import register_third_party_plugins
 
@@ -97,6 +103,16 @@ def make_robot(robot_config: RobotConfig) -> Robot:
     dimension preflight can read them with the arms unpowered.
     """
     return make_robot_from_config(robot_config)
+
+
+def make_teleop(teleop_config: TeleoperatorConfig) -> Teleoperator:
+    """Construct the leader arm, NOT connect -- the counterpart of make_robot.
+
+    upstream record() builds its teleop the same way (lerobot_record.py:445).
+    ``action_features`` is config-derived, so preflight can compare it against
+    the robot's before anything is powered.
+    """
+    return make_teleoperator_from_config(teleop_config)
 
 
 def make_processors() -> RecordProcessors:
@@ -235,7 +251,7 @@ def call_record_loop(
     single_task: str,
     display_data: bool = False,
 ) -> None:
-    """THE call site of lerobot's record_loop. Nothing else in this repo calls it.
+    """THE policy call site of lerobot's record_loop; call_reset_loop is the other.
 
     Every argument goes by keyword, and ``dataset=`` by keyword specifically:
     ``@safe_stop_image_writer`` reads ``kwargs.get("dataset")``
@@ -265,6 +281,49 @@ def call_record_loop(
         policy=bundle.policy,
         preprocessor=bundle.preprocessor,
         postprocessor=bundle.postprocessor,
+        control_time_s=control_time_s,
+        single_task=single_task,
+        display_data=display_data,
+    )
+
+
+def call_reset_loop(
+    *,
+    robot: Robot,
+    events: dict[str, bool],
+    fps: int,
+    processors: RecordProcessors,
+    teleop: Teleoperator,
+    teleop_action_processor: Any,
+    control_time_s: float,
+    single_task: str,
+    display_data: bool = False,
+) -> None:
+    """record_loop driven by the leader arm with NO dataset -- upstream's reset section.
+
+    The second call site, and the same function: lerobot_record.py:564-574 runs
+    exactly this between episodes (teleop, no policy, no dataset). With
+    ``dataset=None`` record_loop builds no observation frame and adds none
+    (``if policy is not None or dataset is not None`` / ``if dataset is not
+    None``), so nothing reaches the episode buffer and the episode stays one
+    chain of policy frames.
+
+    ``teleop_action_processor`` replaces the identity pipeline for this call
+    only. record_loop calls it as ``teleop_action_processor((act, obs))`` and
+    sends what it returns through the (identity) robot_action processor
+    (lerobot_record.py:372-375, :399-400), which makes it the one place that sees
+    every command the reset sends -- leader_reset uses it to zero the base and
+    to remember the last gripper goal.
+    """
+    record_loop(
+        robot=robot,
+        events=events,
+        fps=fps,
+        teleop_action_processor=teleop_action_processor,
+        robot_action_processor=processors.robot_action,
+        robot_observation_processor=processors.robot_observation,
+        dataset=None,
+        teleop=teleop,
         control_time_s=control_time_s,
         single_task=single_task,
         display_data=display_data,

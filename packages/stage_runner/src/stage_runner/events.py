@@ -41,6 +41,13 @@ EVENT_TRIAL_END: str = "trial_end"
 # skips event names it does not branch on -- reads its reposition_s only to keep
 # the stage_end -> stage_start residual meaning what it meant before.
 EVENT_STAGE_REPOSITION: str = "stage_reposition"
+# What a leader_reset stage did to the hardware around its teleop loop: the
+# leader arm aligned to the follower, base torque released and restored, the
+# last gripper command. Written INSIDE that stage, between its stage_start and
+# stage_end, so it changes no residual. Additive within schema_version 1 for
+# the same reason as stage_reposition: aggregate skips names it does not
+# branch on.
+EVENT_STAGE_RESET: str = "stage_reset"
 EVENT_NAMES: tuple[str, ...] = (
     EVENT_TRIAL_START,
     EVENT_STAGE_START,
@@ -48,6 +55,7 @@ EVENT_NAMES: tuple[str, ...] = (
     EVENT_TRANSITION,
     EVENT_TRIAL_END,
     EVENT_STAGE_REPOSITION,
+    EVENT_STAGE_RESET,
 )
 
 # Present on every line whatever the event is. Per-event fields are additive on

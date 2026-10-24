@@ -812,7 +812,7 @@ def test_a_ctrl_c_inside_stop_base_is_labelled_fallback_not_failed(
 
 
 class _StubStage:
-    """The two attributes load_bundles reads off a stage.
+    """The three attributes load_bundles reads off a stage.
 
     Duck-typed rather than a real StageConfig because the wiring under test is
     "does the warm-up result reach the bundle", and a real StageConfig would drag
@@ -822,6 +822,8 @@ class _StubStage:
     def __init__(self, stage_id: str, policy_path: str) -> None:
         self.id = stage_id
         self.policy_path = policy_path
+        # load_bundles skips stages whose executor runs no checkpoint.
+        self.executor = "lerobot_policy"
 
 
 def test_load_bundles_records_whether_the_warm_up_ran() -> None:

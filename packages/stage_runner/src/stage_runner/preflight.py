@@ -25,9 +25,11 @@ from lerobot.utils.control_utils import is_headless, sanity_check_dataset_name
 # Module scope, unlike the executors import in check_stage_definitions: reposition
 # reaches only transitions -> lerobot.robots, which this module imports already,
 # so it adds neither torch nor a cycle to the gate.
-from stage_runner import reposition
+from stage_runner import reposition, transitions
 from stage_runner.config import (
+    EXECUTOR_LEADER_RESET,
     LATEST_CONFIG_VERSION,
+    POLICY_EXECUTORS,
     TERMINATOR_MANUAL,
     TERMINATOR_TIMEOUT,
     TERMINATOR_TYPES,
@@ -199,6 +201,28 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                 f"{where} ({stage.id!r}): unknown `executor: {stage.executor}`. "
                 f"Known executors: {known}."
             )
+        elif stage.executor == EXECUTOR_LEADER_RESET:
+            # A reset runs no checkpoint and moves the arms by hand, so both of
+            # these would be silently ignored -- refused instead, with the fix.
+            if stage.policy_path:
+                problems.append(
+                    f"{where} ({stage.id!r}): a `{EXECUTOR_LEADER_RESET}` stage "
+                    f"runs no policy, but `policy_path: {stage.policy_path}` is "
+                    "set. Delete it, or make this a `lerobot_policy` stage."
+                )
+            if stage.start_pose is not None:
+                problems.append(
+                    f"{where} ({stage.id!r}): a `{EXECUTOR_LEADER_RESET}` stage "
+                    "is posed by hand, so `start_pose` would be overwritten the "
+                    "moment the leader takes over. Put the `start_pose` on the "
+                    "policy stage that follows the reset."
+                )
+            if config.teleop is None:
+                problems.append(
+                    f"{where} ({stage.id!r}): a `{EXECUTOR_LEADER_RESET}` stage "
+                    "needs the leader arm: add a top-level `teleop:` block (the "
+                    "values lerobot-record takes as --teleop.*)."
+                )
         elif not stage.policy_path:
             # Without this the blank path reaches
             # PreTrainedConfig.from_pretrained(""), which raises
@@ -269,9 +293,66 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                     "would abort at this stage."
                 )
 
+    if config.stages and not any(
+        stage.executor in POLICY_EXECUTORS for stage in config.stages
+    ):
+        # A chain of resets only would record an empty episode and trip the
+        # dataset-name rule the wrong way round (check_dataset_name's no-policy
+        # branch); it is not an eval at all.
+        problems.append(
+            "every stage is a `leader_reset` stage: add at least one "
+            "`lerobot_policy` stage -- a reset alone records nothing."
+        )
+
     if problems:
         raise PreflightError(
             "invalid stage definitions:\n  - " + "\n  - ".join(problems)
+        )
+
+
+def check_leader_reset_stages(
+    config: StageRunnerConfig, robot: Robot, teleop: object | None
+) -> None:
+    """The robot-dependent half of the leader_reset gate, before anything connects.
+
+    The leader's action goes to the follower UNCHANGED (record_adapter.call_reset_loop
+    uses identity pipelines), so every leader key must be a follower action key
+    and every follower arm key must come from the leader -- a missing one would
+    hold that joint at a stale goal for the whole reset, an extra one raises
+    inside send_action with the arms energised. And the leader must be able to
+    align itself to the follower first (leader_reset.align_leader_to_follower).
+    """
+    if not any(stage.executor == EXECUTOR_LEADER_RESET for stage in config.stages):
+        return
+    if teleop is None:
+        raise PreflightError(
+            "a `leader_reset` stage needs the leader arm, and none was constructed "
+            "-- add a top-level `teleop:` block."
+        )
+    problems: list[str] = []
+    base_keys = set(transitions.BASE_VELOCITY_KEYS)
+    leader_keys = set(getattr(teleop, "action_features", {}) or {}) - base_keys
+    follower_keys = set(robot.action_features) - base_keys
+    if leader_keys - follower_keys:
+        problems.append(
+            f"leader key(s) {sorted(leader_keys - follower_keys)} are not action "
+            f"features of {robot.name}"
+        )
+    if follower_keys - leader_keys:
+        problems.append(
+            f"{robot.name} action key(s) {sorted(follower_keys - leader_keys)} "
+            "get no command from the leader"
+        )
+    if not callable(getattr(teleop, "align_to", None)):
+        problems.append(
+            f"{type(teleop).__name__} has no align_to(), so the leader cannot be "
+            "moved to the follower before the hand-over (the follower's first "
+            "copied command would be a jump)"
+        )
+    if problems:
+        raise PreflightError(
+            f"the `teleop:` leader arm ({type(teleop).__name__}) cannot drive this "
+            "robot in a leader_reset stage:\n  - " + "\n  - ".join(problems)
         )
 
 
@@ -563,12 +644,13 @@ def check_dataset_name(
             )
         return
 
-    # Currently unreachable, and kept: check_stage_definitions now rejects an
-    # empty `policy_path` for every known executor, so "no stage declares a
-    # policy_path" cannot get this far. It stays as the explicit no-policy branch
-    # for the first executor that legitimately runs without a checkpoint (a
-    # teleop reset stage, a start-state randomizer), which is the P2 case that
-    # would otherwise re-invert this rule by accident.
+    # Currently unreachable, and kept: check_stage_definitions rejects an empty
+    # `policy_path` for every policy executor and a chain with no policy stage at
+    # all, so "no stage declares a policy_path" cannot get this far -- the
+    # leader_reset executor, which runs without a checkpoint, only ever sits
+    # beside a policy stage. It stays as the explicit no-policy branch for an
+    # executor that may one day legitimately make up a whole run (a start-state
+    # randomizer), which would otherwise re-invert this rule by accident.
     try:
         sanity_check_dataset_name(repo_id, None)
     except ValueError as error:
@@ -617,6 +699,7 @@ def run_preflight(
     config: StageRunnerConfig,
     robot: Robot,
     policy_configs: Mapping[str, PreTrainedConfig],
+    teleop: object | None = None,
 ) -> None:
     """Run every gate that needs the constructed robot and the checkpoint configs.
 
@@ -635,6 +718,7 @@ def run_preflight(
     check_stage_definitions(config)
     check_stage_dimensions(robot, config.stages, policy_configs)
     check_stage_start_poses(config, robot)
+    check_leader_reset_stages(config, robot, teleop)
     check_manual_terminator_is_reachable(config)
     check_dataset_name(config, policy_configs)
     check_dataset_root_is_free(config)

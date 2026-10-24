@@ -116,6 +116,14 @@ EVENT_TRIAL_END: str = "trial_end"
 # build_trial), so a run with start poses reports the same seam numbers as one
 # without, and the arm move is reported on its own as stage_reposition_s.
 EVENT_STAGE_REPOSITION: str = "stage_reposition"
+# The stage_start `executor` values this reader branches on, pinned like the
+# event names. A leader_reset stage (2026-10-19) is the operator driving the
+# leader arm: it records no frames and has no outcome to label, so it is kept
+# off the success-metric axis (stage_order) and its time is reported apart. A
+# log written before the field existed reads as lerobot_policy throughout.
+EXECUTOR_LEROBOT_POLICY: str = "lerobot_policy"
+EXECUTOR_LEADER_RESET: str = "leader_reset"
+UNSCORED_EXECUTORS: frozenset[str] = frozenset({EXECUTOR_LEADER_RESET})
 # wall_clock_iso carries milliseconds and isoformat TRUNCATES to them
 # (events.wall_clock_iso, timespec="milliseconds"), so a window between two
 # stamps is exact only to within one step of this.
@@ -228,6 +236,9 @@ class StageRecord:
     end_frame_idx: int
     start_wall_clock_iso: str
     end_wall_clock_iso: str
+    # stage_start's `executor`. Defaulted so a log without it -- every log before
+    # 2026-10-19 -- reads as the policy stages it was.
+    executor: str = EXECUTOR_LEROBOT_POLICY
 
     @property
     def hertz(self) -> float:
@@ -657,6 +668,7 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
                     end_frame_idx=int(event["frame_idx"]),
                     start_wall_clock_iso=str(pending["wall_clock_iso"]),
                     end_wall_clock_iso=str(event["wall_clock_iso"]),
+                    executor=str(pending.get("executor") or EXECUTOR_LEROBOT_POLICY),
                 )
             )
             pending = None
@@ -1023,15 +1035,22 @@ def load_standalone_rates(path: Path) -> dict[str, StandaloneRate]:
 
 
 def stage_order(trials: Sequence[TrialRecord]) -> list[str]:
-    """Stage ids in execution order, unioned across trials.
+    """POLICY stage ids in execution order, unioned across trials.
 
     Ordered by the stage_index the runner emitted, not by first appearance, so a
     trial that aborted at stage 1 does not reorder the axis every later metric
     is indexed by.
+
+    A leader_reset stage is NOT on this axis. Nobody labels a reset -- there is
+    no policy outcome to label -- and every success metric keys off the axis'
+    FIRST stage: a reset placed first would make every trial unscored. Its wall
+    time is reported on its own, as timing's leader_reset_s.
     """
     first_index: dict[str, int] = {}
     for trial in trials:
         for stage in trial.stages:
+            if stage.executor in UNSCORED_EXECUTORS:
+                continue
             known = first_index.get(stage.stage_id)
             if known is None or stage.stage_index < known:
                 first_index[stage.stage_id] = stage.stage_index
@@ -1208,6 +1227,29 @@ def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
         for trial in trials
         for stage_id in trial.reposition_failed_stage_ids
     ]
+    resets = [
+        stage
+        for trial in trials
+        for stage in trial.stages
+        if stage.executor == EXECUTOR_LEADER_RESET
+    ]
+    leader_reset = _spread(
+        [stage.elapsed_s for stage in resets if stage.elapsed_s > 0.0]
+    )
+    leader_reset["definition"] = (
+        "seconds the operator drove the arms with the leader in a leader_reset "
+        "stage (stage_end.elapsed_s, the teleop loop only -- the leader's own "
+        "alignment move before it is in the stage_reset event). Operator time, "
+        "not robot time: kept out of per_stage and every success metric"
+    )
+    reset_terminators: dict[str, int] = {}
+    for stage in resets:
+        reset_terminators[stage.terminated_by] = (
+            reset_terminators.get(stage.terminated_by, 0) + 1
+        )
+    # "timeout" here means the reset ran to its ceiling without the right arrow
+    # and the chain moved on regardless -- worth seeing, not an error.
+    leader_reset["terminators"] = reset_terminators
     return {
         "trial_count": len(trials),
         "completed_trial_count": sum(1 for trial in trials if trial.completed),
@@ -1252,6 +1294,8 @@ def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
         # each was not run and the trial ended there.
         "stage_reposition_failed_n": len(reposition_failed),
         "stage_reposition_failed": reposition_failed,
+        # Additive (2026-10-19); n=0 for every run without a leader_reset stage.
+        "leader_reset_s": leader_reset,
     }
 
 

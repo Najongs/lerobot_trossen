@@ -20,7 +20,7 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import PolicyAction, PolicyProcessorPipeline
 from lerobot.utils.constants import ACTION, OBS_STATE
 
-from stage_runner.config import StageConfig
+from stage_runner.config import POLICY_EXECUTORS, StageConfig
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,10 @@ def load_policy_configs(stages: Sequence[StageConfig]) -> dict[str, PreTrainedCo
     """
     configs: dict[str, PreTrainedConfig] = {}
     for stage in stages:
+        if stage.executor not in POLICY_EXECUTORS:
+            # A leader_reset stage runs no checkpoint; preflight's dimension
+            # check skips it by its absence here, like a mock stage.
+            continue
         if stage.policy_path.startswith(MOCK_POLICY_SCHEME):
             # No config.json exists anywhere for a mock path; preflight skips
             # the dimension check for these stages by their absence here.
@@ -154,6 +158,8 @@ def load_bundles(
     """
     bundles: dict[str, PolicyBundle] = {}
     for stage in stages:
+        if stage.executor not in POLICY_EXECUTORS:
+            continue
         if stage.policy_path.startswith(MOCK_POLICY_SCHEME):
             # Imported here, not at module top: mock_policy imports PolicyBundle
             # from this module, so a top-level import is a cycle.

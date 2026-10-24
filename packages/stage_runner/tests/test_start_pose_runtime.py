@@ -113,10 +113,12 @@ def test_the_resolved_snapshot_of_an_old_yaml_is_unchanged() -> None:
     text = config.resolved_config_text(smoke)
     assert "start_pose" not in text
     full = draccus.dump(smoke)
+    # `teleop: null` is dropped the same way (StageRunnerConfig.teleop, the same
+    # day); test_leader_reset covers that half.
     assert text == "".join(
         line
         for line in full.splitlines(keepends=True)
-        if "start_pose: null" not in line
+        if "start_pose: null" not in line and line != "teleop: null\n"
     )
 
     posed = config.parse_config(["--config_path", str(POSED_CONFIG)])

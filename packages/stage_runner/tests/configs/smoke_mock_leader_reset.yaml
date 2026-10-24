@@ -1,0 +1,92 @@
+# Hardware-free smoke config for the LEADER RESET stage. The posed chain of
+# smoke_mock_start_pose.yaml with a leader_reset stage in front of EACH policy
+# stage, so both cases run:
+#
+# * reset_first -- right after connect, where leader and follower sit in the
+#   same staged pose;
+# * reset_mid -- after s4's policy, where the follower is wherever the policy
+#   left it and the leader must be aligned to it first.
+#
+# Both resets end on their ceiling (`timeout`), which is the decided behaviour:
+# the chain moves on. Tests press the right arrow through the mock leader's
+# get_action hook where they need a `manual` end. Start poses are on the policy
+# stages, never on a reset (preflight refuses that).
+
+version: 1
+
+robot:
+  type: stage_runner_mock_robot
+  id: smoke
+  joint_count: 14
+  include_base_in_state: true
+  arm_layout: bimanual
+
+teleop:
+  type: stage_runner_mock_teleop
+  id: leader
+
+dataset:
+  repo_id: local/eval_smoke_chain
+  fps: 30
+  video: false
+
+defaults:
+  executor: lerobot_policy
+  manual_ceiling_s: 5.0
+
+output:
+  root: /tmp/stage_runner_smoke/outputs
+
+stages:
+  - id: reset_first
+    name: hand the tube over
+    executor: leader_reset
+    terminator:
+      type: timeout
+      timeout_s: 0.5
+
+  - id: s4
+    name: mock_stage_four
+    executor: lerobot_policy
+    policy_path: mock://sine
+    instruction: "mock stage four"
+    terminator:
+      type: timeout
+      timeout_s: 1.0
+    start_pose:
+      positions:
+        left_joint_0.pos: -0.25
+        left_joint_1.pos: 1.25
+        left_joint_2.pos: 0.45
+        left_joint_3.pos: 0.5
+        left_joint_4.pos: 0.35
+        left_joint_5.pos: -0.3
+        right_joint_0.pos: 0.55
+        right_joint_1.pos: 1.3
+        right_joint_2.pos: 0.5
+        right_joint_3.pos: 0.4
+        right_joint_4.pos: -0.25
+        right_joint_5.pos: -0.2
+      source:
+        dataset_repo_id: "local/hand_written_smoke_pose"
+        policy_path: "mock://sine"
+        episode_index: 0
+        n_episodes: 1
+        method: "hand_written_test_value"
+        distance: 0.0
+
+  - id: reset_mid
+    name: re-grip the beaker
+    executor: leader_reset
+    terminator:
+      type: timeout
+      timeout_s: 0.5
+
+  - id: s5
+    name: mock_stage_five
+    executor: lerobot_policy
+    policy_path: mock://hold
+    instruction: "mock stage five"
+    terminator:
+      type: timeout
+      timeout_s: 1.0

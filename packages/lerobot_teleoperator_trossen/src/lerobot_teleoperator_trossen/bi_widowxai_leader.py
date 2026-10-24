@@ -91,6 +91,28 @@ class BiWidowXAILeaderRobot(Teleoperator):
 
         return action_dict
 
+    def align_to(self, positions: dict[str, float], goal_time: float) -> None:
+        """Move both leader arms to ``positions``, then back to gravity compensation.
+
+        ``positions`` carries the same keys as :meth:`get_action`. Both arms move
+        together: the left arm is commanded non-blocking and the right blocking
+        with the same goal_time, so the right arm's call is the wait.
+        """
+        left = {
+            key.removeprefix("left_"): value
+            for key, value in positions.items()
+            if key.startswith("left_")
+        }
+        right = {
+            key.removeprefix("right_"): value
+            for key, value in positions.items()
+            if key.startswith("right_")
+        }
+        self.left_arm.align_to(left, goal_time, blocking=False)
+        self.right_arm.align_to(right, goal_time, blocking=True)
+        self.left_arm.release()
+        self.right_arm.release()
+
     def send_feedback(self, feedback: dict[str, float]) -> None:
         # Note that feedback is currently not implemented upstream huggingface/lerobot.
         # Remove "left_" prefix

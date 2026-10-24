@@ -1,6 +1,6 @@
 # Trossen-LeRobot Stage Chaining Runner
 
-실행 명령·종료 코드·함정의 정본은 루트 README — [3-4. 단계 체이닝 실행](../../README.md#3-4-단계-체이닝-실행-stage_runner) · [단계 체이닝 실행](../../README.md#단계-체이닝-실행). 이 문서는 **단계별 팔 시작 자세(`start_pose`)** 만 다룬다.
+실행 명령·종료 코드·함정의 정본은 루트 README — [3-4. 단계 체이닝 실행](../../README.md#3-4-단계-체이닝-실행-stage_runner) · [단계 체이닝 실행](../../README.md#단계-체이닝-실행). 이 문서는 **단계별 팔 시작 자세(`start_pose`)** 와 **리더암 리셋 단계(`leader_reset`)** 만 다룬다.
 
 ## 단계 시작 자세 (start_pose)
 
@@ -62,6 +62,53 @@ uv run python -m stage_runner --config_path configs/chain_task45.yaml
 - `reached`가 아니면 그 단계 정책은 **돌지 않고** 시행이 중단된다(종료 코드 `1`) — `reason`에 어느 관절이 얼마나 어긋났는지 → [stage_reposition 이벤트](#stage_reposition-이벤트)
 - 자세가 잘못돼 있으면 connect 전에 종료 코드 `2` → [preflight 거부](#preflight-거부)
 
+## 리더암 리셋 단계 (leader_reset)
+
+`stages:` 목록 **아무 자리에나** 넣는 단계 종류. 정책 없이 리더암으로 팔을 움직여 튜브·비커를 쥐여 주고 자세를 잡은 뒤 `→`로 끝낸다 — `lerobot-record`의 리셋 구간과 같다. 기록하지 않는다.
+
+- 🛑 **리셋이 시작되면 리더암이 먼저 저절로 움직인다**(팔로워의 현재 자세로, 2초 이상) — 멈출 때까지 리더암에서 손을 뗀다
+- 🛑 **베이스 토크가 꺼진다**(손으로 밀 수 있음) — 리셋이 끝나면 다시 켠다. 연결 때 토크를 켜는 설정(`enable_base_motor_torque: true`)에서만
+
+### 1. 설정 파일에 넣기
+
+```yaml
+teleop:
+  type: mobileai_leader_teleop
+  left_arm_ip_address: 192.168.1.3
+  right_arm_ip_address: 192.168.1.2
+  id: leader
+
+stages:
+  - id: reset_tube
+    name: 튜브 쥐여 주기
+    executor: leader_reset
+    terminator:
+      type: manual
+      timeout_s: 120.0
+  - id: s4
+    # … 정책 단계 그대로(start_pose 포함)
+```
+
+- `teleop:` = `lerobot-record`의 `--teleop.*`와 같은 값, 최상위에 한 번
+- `start_pose`는 리셋 **다음** 정책 단계에 둘 것 — 리셋 단계에 두면(`policy_path`도) connect 전에 종료 코드 `2` → [리셋 단계 preflight 거부](#리셋-단계-preflight-거부)
+- `timeout_s` = 상한(초). 상한에 닿으면 `→`를 누른 것처럼 다음 단계로 넘어간다
+
+### 2. 실행
+
+```shell
+uv run python -m stage_runner --config_path <설정 파일>
+```
+
+리셋 단계마다:
+
+1. 리더암이 팔로워 자세로 움직였다가 멈춤 — 콘솔 `aligning the leader arm …`
+2. 콘솔 `leader arm in control` — 리더암으로 물체를 쥐여 주고 자세를 잡는다(베이스는 손으로)
+3. `→` — 다음 단계로. 다음 정책 단계에 `start_pose`가 있으면 팔이 그 자세로 옮겨지고 그리퍼는 방금 쥔 명령 그대로
+4. `ESC`·`←` — 시행 중단(정책 안 돎, 종료 코드 `1`)
+
+- 통과 기준 = `events.jsonl`에서 리셋 단계의 `stage_start`·`stage_end` 사이에 `stage_reset` 한 줄, `base_torque`가 `released`(토크 켠 설정) 또는 `not_released`
+- 리셋 다음 `stage_reposition`의 `gripper_goal_source`가 `previous_command`이고 `gripper_goal`이 `stage_reset.gripper_goals`와 같음
+
 ---
 
 ## 레퍼런스
@@ -87,7 +134,7 @@ uv run python -m stage_runner --config_path configs/chain_task45.yaml
 - **팔 관절만** — `TrossenArmDriver.set_arm_positions`(팔 관절 벡터만 받고 그리퍼는 그대로 둔다). 값은 이름으로 드라이버 관절 순서에 매핑한다.
 - **그리퍼 안 움직임** — 이동 중 그리퍼 목표 = 앞 단계 정책의 마지막 명령.
 	- 경계의 베이스 정지(`stop_base`)는 팔 관절·그리퍼 목표를 **측정 위치**로 다시 보낸다. 물체를 쥔 그리퍼의 측정 위치는 물체 폭이라, 그대로면 위치 오차가 0이 돼 쥔 힘이 거의 사라진 채 몇 초 이동한다(위치 제어 원리로 본 추정 — 실측 없음).
-	- 그래서 **다음 단계에 `start_pose`가 있는 경계만** 정지 명령의 그리퍼 값을 앞 단계 마지막 명령(에피소드 버퍼의 마지막 `action`)으로 둔다. `start_pose` 없는 경계는 이전과 같다.
+	- 그래서 **다음 단계에 `start_pose`가 있는 경계만** 정지 명령의 그리퍼 값을 앞 단계 마지막 명령(에피소드 버퍼의 마지막 `action`, 앞 단계가 리셋 단계면 리셋의 마지막 명령)으로 둔다. `start_pose` 없는 경계는 이전과 같다.
 	- 어느 값이 걸렸는지 = `stage_reposition.gripper_goal_source`(아래 표).
 - **베이스 안 움직임** — 속도 제어라 「자세」가 없고, 위치는 앞 단계의 결과다.
 - 이동 시간 = `max(min_goal_time_s, 관절별 이동량 / (velocity_max × velocity_safety_factor))` — 정책 구동 중 `WidowXAIFollower.send_action`과 같은 페이싱 규칙(`velocity_safety_factor` 0.4).
@@ -150,10 +197,53 @@ connect 전, 체크포인트를 내려받기 전에 종료 코드 `2`로 막는 
 - `version: 1` 그대로 — `start_pose`는 선택 필드이고 기본값 `null`이 이전 동작이라 옛 YAML의 뜻이 바뀌지 않는다(`config.py` `LATEST_CONFIG_VERSION` 주석). 거꾸로 `start_pose`가 든 YAML을 옛 실행기에 주면 draccus가 모르는 필드로 파싱 단계에서 죽는다.
 - `start_pose`가 없는 단계는 `config.resolved.yaml`에도 그 키를 쓰지 않는다 — 실로봇 YAML(`chain_task45.yaml` 등)의 스냅샷은 이 기능 전과 같은 바이트다. mock 로봇 YAML은 `arm_layout: flat` 한 줄이 더 찍힌다.
 
+### 리셋 단계가 하는 일
+
+구현 = `src/stage_runner/executors.py` `run_leader_reset_stage` · `src/stage_runner/leader_reset.py`.
+
+1. **리더암 정렬** — 리더암을 위치 제어로 팔로워의 **측정 자세**(그리퍼 포함)로 옮긴 뒤 중력 보상으로 되돌린다(`BiWidowXAILeaderRobot.align_to`). 이동 시간 = `max(2초, 팔 관절 최대 이동량 / 0.5 rad/s)`.
+	- 왜 — `record_loop`은 첫 틱에 리더 자세를 그대로 팔로워에 보낸다. 연결 직후엔 둘이 같은 대기 자세지만, 체인 중간에선 팔로워가 정책이 끝난 자리에 있어 첫 명령이 큰 점프가 된다. 9월 27일 크래시 5회 중 3회가 이 「정책 → 리더암」 전환 순간이었다(`Joint 3 velocity limit exceeded` — 점프가 원인이라는 건 미검증).
+2. **베이스 토크 끔** — 속도 0 명령 뒤 `enable_motor_torque(False)`. 연결 때 토크를 켠 설정에서만 — 꺼 둔 설정은 손대지 않는다.
+3. **리더암 조종** — `record_loop`에 리더암만 주고 데이터셋 없이(`record_adapter.call_reset_loop`). 리셋 중 보내는 **베이스 속도는 항상 0** — 리더암이 내는 `x.vel`·`theta.vel`은 베이스의 *측정* 속도라(`mobileai_leader.py`), 토크가 켜진 베이스에 되돌려 보내면 밀린 만큼 계속 움직이는 되먹임이 된다.
+4. **베이스 토크 복구** — 속도 0 명령 뒤 `enable_motor_torque(True)`, 어떻게 끝났든(예외 포함). **복구가 실패하면 시행 중단**(다음 정책을 돌리지 않는다).
+5. 끝난 이유 = 정책 단계와 같은 판정 — `→` `manual`, 상한 `timeout`(둘 다 다음 단계로), `ESC` `stop_recording`·`←` `rerecord_requested`(중단). 정렬 실패는 `error`(중단).
+
+- 리셋의 **마지막 그리퍼 명령**이 다음 경계의 정지 명령·시작 자세 이동 동안 그대로 유지된다 — 쥐여 준 물체를 놓지 않게.
+- 리더암은 리셋 단계가 하나라도 있을 때만 만들고 연결한다 — **팔로워보다 먼저** 연결해, 리더암이 꺼져 있으면 팔로워에 전원이 들어가기 전에 실패한다. 종료 땐 팔로워(베이스 정지) 다음.
+
+### stage_reset 이벤트
+
+리셋 단계마다 그 단계 `stage_start`·`stage_end` 사이에 한 줄.
+
+| 필드 | 뜻 |
+|---|---|
+| `outcome` | 끝난 이유(`manual`·`timeout`·`stop_recording`·`rerecord_requested`·`error`), 정렬 중 `ESC`면 `aborted`, 루프 예외면 `interrupted` |
+| `align_goal_time_s`·`align_max_arm_error_rad` | 리더암 정렬 이동 시간·정렬 후 최대 팔 관절 오차(기록만, 판정 안 함) |
+| `align_target`·`leader_before` | 정렬 목표(팔로워 측정 자세)·정렬 전 리더 자세 |
+| `base_torque` | `released`(껐다 켬)·`not_released`(안 건드림)·`restore_failed`(복구 실패 — 시행 중단) |
+| `base_torque_error` | 복구 실패 사유, 정상이면 `null` |
+| `sent_actions` | 리셋 중 보낸 명령 수 |
+| `gripper_goals` | 마지막 그리퍼 명령 — 다음 시작 자세 이동 동안 유지되는 값 |
+| `loop_s` | 리더암 조종 시간 |
+
+### 집계에서의 리셋 단계
+
+- 성공률 축(`stage_ids`)·`per_stage`에서 **빠진다** — 라벨을 달 정책 결과가 없고, 축의 첫 단계 라벨로 채점 대상을 고르므로 리셋이 첫 단계면 모든 시행이 채점에서 빠지게 된다.
+- 리셋 시간은 따로 `timing.leader_reset_s`(사람이 조종한 시간 — 로봇 시간 아님), 끝난 이유 분포 `terminators`.
+- 옛 로그(`stage_start`에 `executor`가 없는 것)는 전부 정책 단계로 읽는다.
+
+### 리셋 단계 preflight 거부
+
+- `policy_path`·`start_pose`가 있음 / 최상위 `teleop:`이 없음 / 모든 단계가 리셋
+- 리더암 키와 로봇 행동 키(베이스 제외)가 정확히 같지 않음, 리더암에 `align_to`가 없음
+
 ### 실기에서 아직 안 잰 것
 
-mock 드라이버는 즉시·정확하게 도착하므로 아래는 첫 실기 회차의 `stage_reposition`에서 읽는다.
+mock 드라이버는 즉시·정확하게 도착하므로 아래는 첫 실기 회차의 `stage_reposition`·`stage_reset`에서 읽는다.
 
+- 리더암 정렬 이동이 손에 위험하지 않은 속도인지(0.5 rad/s 평균은 실측 근거 없는 보수값), 정렬 후 중력 보상으로 넘어갈 때 리더가 처지는 정도(`align_max_arm_error_rad`)
+- 베이스 토크를 껐다 켤 때 베이스가 튀지 않는지, `enable_motor_torque`가 실패를 제대로 돌려주는지
+- 리셋 → 정책 전환에서 크래시가 나는지(반대 방향 전환은 9월 27일 기록이 있고, 이 방향은 기록 없음)
 - `position_tolerance_rad` 0.05·확인 대기 1초가 실제 정착 오차·시간에 맞는지(`max_abs_error_rad`)
 - 물체를 쥔 채 움직일 때의 정착 오차
 - 쥔 물체가 이동 중에 미끄러지지 않는지(`gripper_goal_source: "previous_command"`일 때) — mock 그리퍼엔 쥐는 힘이 없어 시험에서 못 본다
