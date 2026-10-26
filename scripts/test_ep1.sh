@@ -11,12 +11,15 @@
 #        REPO=kiroaiseoul/TEST_EP2 scripts/test_ep1.sh record    # 다른 이름으로
 #        TIMING=fixed scripts/test_ep1.sh replay                 # 예전처럼 표기 fps(21)로 고정 재생
 #        HEADING_KP=0 scripts/test_ep1.sh replay                 # 방향 보정 끔 (open-loop)
+#        HEADING_MIN_RATE=0 scripts/test_ep1.sh replay           # 정지 중 최소 회전 속도 끔
 #
 # 녹화는 베이스 토크 끔(손으로 밀고 실측 속도가 action 으로 남는다), 재생은 토크 켬(그 속도를 명령으로 보낸다).
 # 재생은 명령만 따라간다(open-loop) — 녹화를 시작한 자리·자세에 맞춰 놓고 돌려야 같은 궤적이 나온다.
 # 재생은 녹화 때의 실제 틱 시각을 따른다(test_ep1_replay.py) — 리더암 녹화는 표기 21 fps 보다 느린
 # ≈19.5 Hz 로 돌아서, 21 fps 로 고정 재생하면 7~8 % 빨라진다(10/26 PC2). 시각은 가장 최근 record 로그에서 읽는다.
 # 같은 로그의 실측 방향을 목표로 회전 명령을 보정한다(HEADING_KP, 기본 1.5 /s — test_ep1_replay.py 방향 보정).
+# 베이스는 정지에서 작은 회전 명령을 무시하므로 정지 중 보정은 최소 회전 속도로 올린다
+# (HEADING_MIN_RATE °/s, 기본 4 — 10/26 PC2 measure_base.py deadband: ≤2°/s 0 · 3°/s 문턱 · 4~5°/s ≈2°/s 양방향 일정).
 # 같은 이름이 이미 있으면 lerobot-record 가 거부한다 — 지우거나 REPO 를 바꾼다.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -72,7 +75,8 @@ case "$MODE" in
         TIMING_CSV=$(ls -1 "${LOG_PREFIX}"_record_*.csv 2>/dev/null | sort | tail -n 1 || true)
         [[ -n "$TIMING_CSV" ]] || { echo "!! 녹화 로그(${LOG_PREFIX}_record_*.csv) 없음 — 다시 record 하거나 TIMING=fixed" >&2; exit 3; }
         HEADING_KP=${HEADING_KP:-1.5}
-        TIMING_ARG=("--timing_csv=$TIMING_CSV" "--heading_kp=$HEADING_KP") ;;
+        HEADING_MIN_RATE=${HEADING_MIN_RATE:-4}
+        TIMING_ARG=("--timing_csv=$TIMING_CSV" "--heading_kp=$HEADING_KP" "--heading_min_rate_deg_s=$HEADING_MIN_RATE") ;;
       fixed)
         [[ "${HEADING_KP:-0}" == 0 ]] || { echo "방향 보정은 녹화 로그가 필요하다 — TIMING=fixed 와 같이 못 쓴다" >&2; exit 2; }
         HEADING_KP=0 ;;
@@ -88,7 +92,7 @@ case "$MODE" in
       "--dataset.episode=$EP"
       "${TIMING_ARG[@]}")
     BASE_LOG="${LOG_PREFIX}_replay_$(date +%m%d_%H%M%S).csv"
-    echo "== $TROSSEN_PC · 재생 $REPO 에피소드 $EP · 시각 ${TIMING_CSV:-고정 ${FPS} fps} · 방향 보정 Kp $HEADING_KP  🚨 팔·베이스가 움직인다 — 녹화 시작 자리에 두었나?"
+    echo "== $TROSSEN_PC · 재생 $REPO 에피소드 $EP · 시각 ${TIMING_CSV:-고정 ${FPS} fps} · 방향 보정 Kp $HEADING_KP · 정지 중 최소 ${HEADING_MIN_RATE:-0}°/s  🚨 팔·베이스가 움직인다 — 녹화 시작 자리에 두었나?"
     ;;
   compare)
     exec uv run python scripts/test_ep1_compare.py "$LOG_PREFIX" ;;

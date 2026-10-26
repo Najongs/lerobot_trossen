@@ -17,6 +17,9 @@ lerobot 이 명목 fps 로 만들어 낸 **합성값**이라(dt std = 0.00ms) �
     odom      get_pose() 로 90도 회전을 반복해 드리프트를 본다. 오도메트리를 관측에
               넣을지 판단하는 전제 -- 드리프트가 크면 넣어도 소용없다.
     rate      set_cmd_vel/get_vel 왕복에 드는 시간. 제어 루프의 베이스 몫 하한선.
+    deadband  정지 상태에서 작은 회전 명령(0.5~10°/s)을 계단으로 넣어, 어디서부터 실제로
+              도는지 본다. 10/26 PC2 재생에서 3°/s 미만 회전 명령 합 −11.2° 가 실측 −0.9° 였다
+              → test_ep1_replay.py 방향 보정의 최소 회전 속도(--heading_min_rate_deg_s) 근거.
 
 사용법::
 
@@ -24,10 +27,11 @@ lerobot 이 명목 fps 로 만들어 낸 **합성값**이라(dt std = 0.00ms) �
     uv run --extra pi0 python scripts/measure_base.py latency
     uv run --extra pi0 python scripts/measure_base.py odom --turns 6
     uv run --extra pi0 python scripts/measure_base.py rate
+    uv run python scripts/measure_base.py deadband          # 제자리 ±16° 이내 왕복, ≈1 분
 
 전부 베이스만 쓴다 (팔 IP 불필요). ``--dry-run`` 은 로봇 없이 흐름만 확인한다.
 
-🚨 latency 와 odom 은 **베이스를 실제로 움직인다.** 진행 방향을 비우고 비상정지에
+🚨 latency · odom · deadband 는 **베이스를 실제로 움직인다.** 진행 방향을 비우고 비상정지에
    손이 닿는 위치에서 실행할 것. 비상정지가 걸려 있으면 모터 토크가 안 걸려 측정이
    조용히 0 만 읽는다 -- 스크립트가 그 상태를 감지해 중단한다.
 """
@@ -227,6 +231,50 @@ def measure_odom(base, turns: int, cmd: float, target_deg: float):
     return {"turns": rows, "net_xy_m": math.hypot(dx, dy), "net_theta_deg": dth}
 
 
+def measure_deadband(base, levels_deg, hold: float, rest: float, poll: float = 0.02):
+    """정지에서 출발한 작은 회전 명령에 대한 정상상태 응답 비율.
+
+    레벨마다 +, − 를 번갈아 넣어 제자리로 돌아오게 한다. 정상상태 = 유지 구간 후반 50 % 의
+    평균 실측. 비율(실측/명령)이 0.5 를 처음 넘는 레벨을 「움직이기 시작하는 회전 속도」로 본다.
+    """
+    print(f"\n=== 회전 데드밴드: {', '.join(f'{v:g}' for v in levels_deg)} °/s, 각 ±, 유지 {hold}s ===")
+    rows = []
+    for deg in levels_deg:
+        for sign in (1.0, -1.0):
+            cmd = math.radians(deg) * sign
+            base.set_cmd_vel(0.0, 0.0)
+            time.sleep(rest)
+            samples = []
+            t0 = time.perf_counter()
+            base.set_cmd_vel(0.0, cmd)
+            while time.perf_counter() - t0 < hold:
+                base.update_state()
+                samples.append((time.perf_counter() - t0, base.get_vel()[1]))
+                time.sleep(poll)
+            base.set_cmd_vel(0.0, 0.0)
+            tail = [v for t, v in samples if t > hold * 0.5]
+            ss = sum(tail) / len(tail) if tail else 0.0
+            ratio = ss / cmd
+            rows.append({"cmd_deg_s": deg * sign, "steady_deg_s": math.degrees(ss), "ratio": ratio})
+            print(f"  명령 {deg * sign:+5.1f}°/s → 실측 {math.degrees(ss):+6.2f}°/s  (비율 {ratio:.2f})")
+    base.set_cmd_vel(0.0, 0.0)
+
+    start = {}
+    for sign, label in ((1.0, "+"), (-1.0, "-")):
+        moving = [abs(r["cmd_deg_s"]) for r in rows
+                  if math.copysign(1.0, r["cmd_deg_s"]) == sign and r["ratio"] >= 0.5]
+        start[label] = min(moving) if moving else None
+    print(f"\n  움직이기 시작하는 회전 속도(비율 ≥ 0.5): + {start['+']} °/s · − {start['-']} °/s")
+    both = [v for v in start.values() if v is not None]
+    if len(both) == 2:
+        # 문턱 레벨은 방향마다 들쭉날쭉하다(10/26 PC2: 3°/s 에서 +1.23 · −0.79) — 한 단계 위를 권한다.
+        # 그 위에서 응답이 명령보다 작아도(PC2 4~5°/s → ≈2°/s) 방향만 확실하면 된다: 크기는 Kp 가 맞춘다
+        above = [v for v in levels_deg if v > max(both)]
+        pick = above[0] if above else max(both)
+        print(f"  → test_ep1 방향 보정 최소 회전 속도: HEADING_MIN_RATE={pick:g}  (문턱 {max(both):g} 의 한 단계 위)")
+    return {"levels": rows, "start_deg_s": start}
+
+
 def measure_rate(base, n: int):
     """베이스 왕복(set_cmd_vel + update_state + get_vel) 에 드는 시간.
 
@@ -267,7 +315,7 @@ def _wrap(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["latency", "odom", "rate", "all"])
+    ap.add_argument("mode", choices=["latency", "odom", "rate", "deadband", "all"])
     ap.add_argument("--dry-run", action="store_true", help="로봇 없이 흐름만 확인")
     ap.add_argument("--cmd-linear", type=float, default=0.15, help="전진 계단 입력 (m/s)")
     ap.add_argument("--cmd-angular", type=float, default=0.5, help="회전 계단 입력 (rad/s)")
@@ -279,10 +327,13 @@ def main():
     ap.add_argument("--turns", type=int, default=4, help="odom: 회전 횟수 (짝수 권장)")
     ap.add_argument("--turn-deg", type=float, default=90.0)
     ap.add_argument("--samples", type=int, default=200, help="rate: 반복 횟수")
+    ap.add_argument("--deadband-levels", default="0.5,1,1.5,2,3,4,5,6,8,10",
+                    help="deadband: 회전 명령 레벨 (°/s, 쉼표)")
+    ap.add_argument("--deadband-hold", type=float, default=2.0, help="deadband: 레벨당 유지 (s)")
     ap.add_argument("--out", default=None, help="결과 JSON 저장 경로")
     args = ap.parse_args()
 
-    if not args.dry_run and args.mode in ("latency", "odom", "all"):
+    if not args.dry_run and args.mode in ("latency", "odom", "deadband", "all"):
         print("🚨 베이스가 실제로 움직인다. 진행 방향을 비우고 비상정지에 손이 닿는 위치에서.")
         print("   중단하려면 Ctrl-C (스크립트가 정지 명령을 보낸다).")
         input("   준비되면 Enter: ")
@@ -301,6 +352,10 @@ def main():
             res["odom"] = measure_odom(base, args.turns, args.cmd_angular, args.turn_deg)
         if args.mode in ("rate", "all"):
             res["rate"] = measure_rate(base, args.samples)
+        if args.mode == "deadband":
+            _check_alive(base, 1)
+            levels = [float(v) for v in args.deadband_levels.split(",") if v.strip()]
+            res["deadband"] = measure_deadband(base, levels, args.deadband_hold, args.rest)
     except KeyboardInterrupt:
         print("\n중단됨 -- 베이스를 정지시킨다.")
     finally:

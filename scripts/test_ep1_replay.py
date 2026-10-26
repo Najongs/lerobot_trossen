@@ -23,6 +23,14 @@ lerobot-replay 는 데이터셋 표기 fps(21)로 고정 재생한다. 그런데
 바퀴 오도메트리라 바퀴가 미끄러진 만큼은 못 잡는다. L(기본 3 틱 ≈ 150 ms)은 명령→실측 지연:
 목표를 그만큼 늦춰 비교해야 회전 중의 정상 지연을 오차로 보고 더 돌리지 않는다.
 전진(x.vel)은 손대지 않는다.
+
+최소 회전 속도 (--heading_min_rate_deg_s > 0)
+--------------------------------------------
+베이스는 정지에서 작은 회전 명령을 무시한다(10/26 TEST_EP3 재생: 3°/s 미만 명령 354 틱 합 −11.2° →
+실측 −0.9°). 그래서 정지 중 남은 1~2° 오차에 Kp 만 쓰면 명령만 쌓이고 방향은 그대로다. 녹화 명령이
+정지(|x.vel| < 0.03 m/s, |θ.vel| < 최소)일 때 오차가 시작 문턱(기본 1°) 을 넘으면 회전 명령을 최소
+회전 속도로 올리고, 오차가 데드밴드(0.5°) 안에 들거나 부호가 바뀌면 내린다(히스테리시스 — 문턱 하나면
+지연 3 틱 동안 넘어가 왕복 떨림이 난다). 값은 scripts/measure_base.py deadband 로 잰다.
 """
 
 import csv
@@ -63,6 +71,10 @@ class TimedReplayConfig:
     # 보정 회전 속도 상한(°/s)과 데드밴드(°).
     heading_max_correction_deg_s: float = 15.0
     heading_deadband_deg: float = 0.5
+    # 정지 중 보정에 쓰는 최소 회전 속도(°/s) — 베이스 데드밴드 위. 0 이면 끔.
+    heading_min_rate_deg_s: float = 0.0
+    # 최소 회전 속도를 켜는 오차 문턱(°). 끄는 쪽은 heading_deadband_deg.
+    heading_min_rate_start_deg: float = 1.0
 
 
 def load_record_log(path: str) -> tuple[list[float], list[float]]:
@@ -79,8 +91,12 @@ def load_record_log(path: str) -> tuple[list[float], list[float]]:
 class HeadingCorrector:
     """재생 중 실측 방향을 녹화 방향에 맞추는 P 제어 (모듈 docstring)."""
 
+    # 녹화 명령이 이보다 느린 전진이면 「정지」로 본다 (최소 회전 속도 판단용)
+    STILL_X_VEL = 0.03
+
     def __init__(self, reference: list[float], kp: float, lag_ticks: int,
-                 max_correction_deg_s: float, deadband_deg: float):
+                 max_correction_deg_s: float, deadband_deg: float,
+                 min_rate_deg_s: float = 0.0, min_rate_start_deg: float = 1.0):
         from lerobot_robot_trossen import mobileai
 
         self.mobileai = mobileai
@@ -89,6 +105,10 @@ class HeadingCorrector:
         self.lag_ticks = lag_ticks
         self.max_correction = math.radians(max_correction_deg_s)
         self.deadband = math.radians(deadband_deg)
+        self.min_rate = math.radians(min_rate_deg_s)
+        self.min_rate_start = math.radians(min_rate_start_deg)
+        self.min_rate_sign = 0.0   # 최소 회전 속도로 돌리는 중이면 그 방향(±1)
+        self.min_rate_ticks = 0
         self.heading = 0.0
         self.last_time: float | None = None
         self.last_rate = 0.0
@@ -96,7 +116,8 @@ class HeadingCorrector:
         self.max_applied = 0.0
         self.saturated_ticks = 0
 
-    def correct(self, idx: int, now: float, recorded_theta_vel: float) -> float:
+    def correct(self, idx: int, now: float, recorded_theta_vel: float,
+                recorded_x_vel: float = 0.0) -> float:
         """get_observation 직후에 부른다. 보정된 theta.vel(rad/s)을 돌려준다."""
         if self.last_time is not None:
             self.heading += self.last_rate * (now - self.last_time)
@@ -106,21 +127,37 @@ class HeadingCorrector:
         target = self.reference[max(idx - self.lag_ticks, 0)]
         error = target - self.heading
         self.max_error = max(self.max_error, abs(error))
+
+        still = (
+            self.min_rate > 0
+            and abs(recorded_x_vel) < self.STILL_X_VEL
+            and abs(recorded_theta_vel) < self.min_rate
+        )
+        if not still or abs(error) < self.deadband or error * self.min_rate_sign < 0:
+            self.min_rate_sign = 0.0
+        elif self.min_rate_sign == 0.0 and abs(error) >= self.min_rate_start:
+            self.min_rate_sign = math.copysign(1.0, error)
+
         if abs(error) < self.deadband:
             return recorded_theta_vel
         correction = self.kp * error
         if abs(correction) > self.max_correction:
             correction = math.copysign(self.max_correction, correction)
             self.saturated_ticks += 1
+        command = recorded_theta_vel + correction
+        if self.min_rate_sign != 0.0 and abs(command) < self.min_rate:
+            command = self.min_rate_sign * self.min_rate
+            correction = command - recorded_theta_vel
+            self.min_rate_ticks += 1
         self.max_applied = max(self.max_applied, abs(correction))
-        return recorded_theta_vel + correction
+        return command
 
     def summary(self) -> str:
         final_error = self.reference[-1] - self.heading
         return (
             f"방향 보정: 끝 오차 {math.degrees(final_error):+.1f}° · 최대 오차 "
             f"{math.degrees(self.max_error):.1f}° · 최대 보정 {math.degrees(self.max_applied):.1f}°/s · "
-            f"상한 걸린 틱 {self.saturated_ticks}"
+            f"상한 걸린 틱 {self.saturated_ticks} · 최소 회전 속도 틱 {self.min_rate_ticks}"
         )
 
 
@@ -160,10 +197,12 @@ def replay(cfg: TimedReplayConfig):
             corrector = HeadingCorrector(
                 reference_headings, cfg.heading_kp, cfg.heading_lag_ticks,
                 cfg.heading_max_correction_deg_s, cfg.heading_deadband_deg,
+                cfg.heading_min_rate_deg_s, cfg.heading_min_rate_start_deg,
             )
             logging.info(
                 f"방향 보정 켬: Kp {cfg.heading_kp} · 지연 {cfg.heading_lag_ticks} 틱 · 상한 "
                 f"{cfg.heading_max_correction_deg_s}°/s · 데드밴드 {cfg.heading_deadband_deg}° · "
+                f"정지 중 최소 {cfg.heading_min_rate_deg_s}°/s(오차 ≥ {cfg.heading_min_rate_start_deg}°) · "
                 f"녹화 끝 방향 {math.degrees(reference_headings[-1]):+.1f}°"
             )
     else:
@@ -186,7 +225,8 @@ def replay(cfg: TimedReplayConfig):
             robot_obs = robot.get_observation()
             if corrector is not None:
                 action["theta.vel"] = corrector.correct(
-                    idx, time.perf_counter(), float(action["theta.vel"])
+                    idx, time.perf_counter(), float(action["theta.vel"]),
+                    float(action["x.vel"]),
                 )
             processed_action = robot_action_processor((action, robot_obs))
             robot.send_action(processed_action)
