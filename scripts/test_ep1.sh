@@ -4,6 +4,7 @@
 #   scripts/test_ep1.sh record [길이 s=30]    # kiroaiseoul/TEST_EP1 에 1 에피소드 (허브 업로드 안 함)
 #   scripts/test_ep1.sh replay [에피소드=0]   # 🚨 기록 궤적대로 팔·베이스 실제 구동
 #   scripts/test_ep1.sh compare               # 가장 최근 record·replay 의 베이스 이동·루프 속도 비교 (로봇 무접촉)
+#   scripts/test_ep1.sh check [에피소드=0]    # 재생 뒤: cam_high 로 녹화 끝 장면과 비교 → 방향 오차(°)·앞뒤(확대 %)
 #
 #   예)  TROSSEN_PC=pc2 DRY_RUN=1 scripts/test_ep1.sh record   # 명령만 출력
 #        TROSSEN_PC=pc2 scripts/test_ep1.sh record 20
@@ -12,6 +13,8 @@
 #        TIMING=fixed scripts/test_ep1.sh replay                 # 예전처럼 표기 fps(21)로 고정 재생
 #        HEADING_KP=0 scripts/test_ep1.sh replay                 # 방향 보정 끔 (open-loop)
 #        HEADING_MIN_RATE=0 scripts/test_ep1.sh replay           # 정지 중 최소 회전 속도 끔
+#        DISTANCE_KP=0 scripts/test_ep1.sh replay                # 거리 보정 끔
+#        CALIB=0 scripts/test_ep1.sh replay                      # 실측 보정비(configs/base_calib_<pc>.json) 안 씀
 #
 # 녹화는 베이스 토크 끔(손으로 밀고 실측 속도가 action 으로 남는다), 재생은 토크 켬(그 속도를 명령으로 보낸다).
 # 재생은 명령만 따라간다(open-loop) — 녹화를 시작한 자리·자세에 맞춰 놓고 돌려야 같은 궤적이 나온다.
@@ -20,6 +23,8 @@
 # 같은 로그의 실측 방향을 목표로 회전 명령을 보정한다(HEADING_KP, 기본 1.5 /s — test_ep1_replay.py 방향 보정).
 # 베이스는 정지에서 작은 회전 명령을 무시하므로 정지 중 보정은 최소 회전 속도로 올린다
 # (HEADING_MIN_RATE °/s, 기본 4 — 10/26 PC2 measure_base.py deadband: ≤2°/s 0 · 3°/s 문턱 · 4~5°/s ≈2°/s 양방향 일정).
+# 전진·후진 거리도 같은 방식으로 보정한다(DISTANCE_KP, 기본 1.5 /s). configs/base_calib_<TROSSEN_PC>.json
+# (measure_base.py calib — 줄자로 잰 실제/오도메트리 비)이 있으면 바퀴 미끄러짐 몫까지 맞춘다.
 # 같은 이름이 이미 있으면 lerobot-record 가 거부한다 — 지우거나 REPO 를 바꾼다.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -76,10 +81,18 @@ case "$MODE" in
         [[ -n "$TIMING_CSV" ]] || { echo "!! 녹화 로그(${LOG_PREFIX}_record_*.csv) 없음 — 다시 record 하거나 TIMING=fixed" >&2; exit 3; }
         HEADING_KP=${HEADING_KP:-1.5}
         HEADING_MIN_RATE=${HEADING_MIN_RATE:-4}
-        TIMING_ARG=("--timing_csv=$TIMING_CSV" "--heading_kp=$HEADING_KP" "--heading_min_rate_deg_s=$HEADING_MIN_RATE") ;;
+        DISTANCE_KP=${DISTANCE_KP:-1.5}
+        TIMING_ARG=("--timing_csv=$TIMING_CSV" "--heading_kp=$HEADING_KP" "--heading_min_rate_deg_s=$HEADING_MIN_RATE"
+                    "--distance_kp=$DISTANCE_KP")
+        CALIB_FILE="configs/base_calib_${TROSSEN_PC}.json"
+        if [[ "${CALIB:-1}" != 0 && -f "$CALIB_FILE" ]]; then
+          TIMING_ARG+=("--base_calib=$CALIB_FILE")
+        else
+          CALIB_FILE=""
+        fi ;;
       fixed)
         [[ "${HEADING_KP:-0}" == 0 ]] || { echo "방향 보정은 녹화 로그가 필요하다 — TIMING=fixed 와 같이 못 쓴다" >&2; exit 2; }
-        HEADING_KP=0 ;;
+        HEADING_KP=0; DISTANCE_KP=0 ;;
       *) echo "TIMING 은 recorded 또는 fixed" >&2; exit 2 ;;
     esac
     CMD=(uv run python scripts/test_ep1_replay.py
@@ -92,11 +105,15 @@ case "$MODE" in
       "--dataset.episode=$EP"
       "${TIMING_ARG[@]}")
     BASE_LOG="${LOG_PREFIX}_replay_$(date +%m%d_%H%M%S).csv"
-    echo "== $TROSSEN_PC · 재생 $REPO 에피소드 $EP · 시각 ${TIMING_CSV:-고정 ${FPS} fps} · 방향 보정 Kp $HEADING_KP · 정지 중 최소 ${HEADING_MIN_RATE:-0}°/s  🚨 팔·베이스가 움직인다 — 녹화 시작 자리에 두었나?"
+    echo "== $TROSSEN_PC · 재생 $REPO 에피소드 $EP · 시각 ${TIMING_CSV:-고정 ${FPS} fps} · 방향 보정 Kp $HEADING_KP · 정지 중 최소 ${HEADING_MIN_RATE:-0}°/s · 거리 Kp ${DISTANCE_KP:-0} · 보정비 ${CALIB_FILE:-없음}  🚨 팔·베이스가 움직인다 — 녹화 시작 자리에 두었나?"
     ;;
   compare)
     exec uv run python scripts/test_ep1_compare.py "$LOG_PREFIX" ;;
-  *) echo "record · replay · compare" >&2; exit 2 ;;
+  check)
+    EP=${2:-0}
+    exec uv run python scripts/test_ep1_check.py --repo "$REPO" --episode "$EP" --serial "$CAM_HIGH" \
+      --out "${LOG_PREFIX}_check_$(date +%m%d_%H%M%S).png" ;;
+  *) echo "record · replay · compare · check" >&2; exit 2 ;;
 esac
 
 if [[ "$DRY_RUN" == 1 ]]; then

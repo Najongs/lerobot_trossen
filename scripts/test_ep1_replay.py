@@ -31,9 +31,23 @@ lerobot-replay 는 데이터셋 표기 fps(21)로 고정 재생한다. 그런데
 정지(|x.vel| < 0.03 m/s, |θ.vel| < 최소)일 때 오차가 시작 문턱(기본 1°) 을 넘으면 회전 명령을 최소
 회전 속도로 올리고, 오차가 데드밴드(0.5°) 안에 들거나 부호가 바뀌면 내린다(히스테리시스 — 문턱 하나면
 지연 3 틱 동안 넘어가 왕복 떨림이 난다). 값은 scripts/measure_base.py deadband 로 잰다.
+
+거리 보정 (--distance_kp > 0)
+-----------------------------
+전진·후진도 같은 꼴: x.vel_cmd = x.vel_녹화 + clip(Kp · (x_목표[i − L] − x_현재), ±상한). x 는 몸 방향
+이동량(실측 x.vel 적분, 후진 음수). 지연 L 기본 1 틱(전진 지연 ≈48 ms). 10/26 TEST_EP4: 방향은 정지마다
+±0.6° 안인데 거리는 구간마다 −1~−3 % 모자랐다(총 주행 4.82 → 4.74 m).
+
+실측 보정비 (--base_calib)
+--------------------------
+위 둘은 바퀴 오도메트리끼리 맞춘다. 손으로 민 녹화는 바퀴가 끌려 굴러 미끄러짐이 없지만 모터로 굴린
+재생은 미끄러진다 — 그 몫은 오도메트리에 안 보인다. scripts/measure_base.py calib 가 잰
+실제/오도메트리 비(전진·후진·+회전·−회전)를 주면, 목표와 녹화 명령을 그 비로 나눠 「오도메트리가
+그만큼 더 가야 실제로 녹화만큼 간다」 로 맞춘다. 비가 없는 축은 1.0.
 """
 
 import csv
+import json
 import logging
 import math
 import time
@@ -75,17 +89,104 @@ class TimedReplayConfig:
     heading_min_rate_deg_s: float = 0.0
     # 최소 회전 속도를 켜는 오차 문턱(°). 끄는 쪽은 heading_deadband_deg.
     heading_min_rate_start_deg: float = 1.0
+    # 거리 보정 비례 이득 (1/s). 0 이면 끔.
+    distance_kp: float = 0.0
+    distance_lag_ticks: int = 1
+    # 보정 전진 속도 상한(m/s)과 데드밴드(m).
+    distance_max_correction_m_s: float = 0.1
+    distance_deadband_m: float = 0.01
+    # measure_base.py calib 결과 JSON (configs/base_calib_<pc>.json). 비우면 비 1.0.
+    base_calib: str | None = None
 
 
-def load_record_log(path: str) -> tuple[list[float], list[float]]:
-    """(틱 시각 t_mono, 그 틱까지의 실측 방향 rad) — 방향은 틱 i 직전까지의 적분."""
+class BaseCalibration:
+    """실제/오도메트리 비 (measure_base.py calib). 녹화 값을 이 비로 나눠 오도메트리 목표로 바꾼다."""
+
+    def __init__(self, ratios: dict | None = None):
+        ratios = ratios or {}
+        self.forward = ratios.get("forward") or 1.0
+        self.backward = ratios.get("backward") or 1.0
+        self.turn_pos = ratios.get("turn_pos") or 1.0
+        self.turn_neg = ratios.get("turn_neg") or 1.0
+
+    @classmethod
+    def load(cls, path: str | None) -> "BaseCalibration":
+        if not path:
+            return cls()
+        with open(path) as fh:
+            return cls(json.load(fh)["ratio"])
+
+    def x(self, value: float) -> float:
+        return value / (self.forward if value >= 0 else self.backward)
+
+    def theta(self, value: float) -> float:
+        return value / (self.turn_pos if value >= 0 else self.turn_neg)
+
+    def __str__(self) -> str:
+        return (f"전진 {self.forward:.3f} · 후진 {self.backward:.3f} · "
+                f"+회전 {self.turn_pos:.3f} · −회전 {self.turn_neg:.3f}")
+
+
+def load_record_log(path: str, calibration: BaseCalibration | None = None):
+    """(틱 시각 t_mono, 방향 목표 rad, 거리 목표 m) — 목표는 틱 i 직전까지의 녹화 실측 적분을
+    보정비로 나눈 오도메트리 값."""
+    calibration = calibration or BaseCalibration()
     with open(path) as fh:
         rows = list(csv.DictReader(fh))
     times = [float(row["t_mono"]) for row in rows]
     headings = [0.0]
+    distances = [0.0]
     for row, t0, t1 in zip(rows, times, times[1:]):
-        headings.append(headings[-1] + float(row["meas_theta_vel"]) * (t1 - t0))
-    return times, headings
+        dt = t1 - t0
+        headings.append(headings[-1] + calibration.theta(float(row["meas_theta_vel"])) * dt)
+        distances.append(distances[-1] + calibration.x(float(row["meas_x_vel"])) * dt)
+    return times, headings, distances
+
+
+class DistanceCorrector:
+    """재생 중 몸 방향 이동량을 녹화에 맞추는 P 제어 (모듈 docstring 「거리 보정」)."""
+
+    def __init__(self, reference: list[float], kp: float, lag_ticks: int,
+                 max_correction_m_s: float, deadband_m: float):
+        from lerobot_robot_trossen import mobileai
+
+        self.mobileai = mobileai
+        self.reference = reference
+        self.kp = kp
+        self.lag_ticks = lag_ticks
+        self.max_correction = max_correction_m_s
+        self.deadband = deadband_m
+        self.distance = 0.0
+        self.last_time: float | None = None
+        self.last_rate = 0.0
+        self.max_error = 0.0
+        self.max_applied = 0.0
+        self.saturated_ticks = 0
+
+    def correct(self, idx: int, now: float, recorded_x_vel: float) -> float:
+        """get_observation 직후에 부른다. 보정된 x.vel(m/s)을 돌려준다."""
+        if self.last_time is not None:
+            self.distance += self.last_rate * (now - self.last_time)
+        self.last_time = now
+        self.last_rate = float(self.mobileai._latest_base_velocity["x.vel"])
+
+        error = self.reference[max(idx - self.lag_ticks, 0)] - self.distance
+        self.max_error = max(self.max_error, abs(error))
+        if abs(error) < self.deadband:
+            return recorded_x_vel
+        correction = self.kp * error
+        if abs(correction) > self.max_correction:
+            correction = math.copysign(self.max_correction, correction)
+            self.saturated_ticks += 1
+        self.max_applied = max(self.max_applied, abs(correction))
+        return recorded_x_vel + correction
+
+    def summary(self) -> str:
+        return (
+            f"거리 보정: 끝 오차 {(self.reference[-1] - self.distance) * 100:+.1f} cm · 최대 오차 "
+            f"{self.max_error * 100:.1f} cm · 최대 보정 {self.max_applied:.3f} m/s · "
+            f"상한 걸린 틱 {self.saturated_ticks}"
+        )
 
 
 class HeadingCorrector:
@@ -178,11 +279,17 @@ def replay(cfg: TimedReplayConfig):
     names = dataset.features[ACTION]["names"]
     frame_count = len(episode_frames)
 
-    if cfg.heading_kp > 0 and not cfg.timing_csv:
-        raise ValueError("방향 보정(--heading_kp)은 녹화 로그(--timing_csv)가 있어야 한다")
+    if (cfg.heading_kp > 0 or cfg.distance_kp > 0) and not cfg.timing_csv:
+        raise ValueError("방향·거리 보정은 녹화 로그(--timing_csv)가 있어야 한다")
+    calibration = BaseCalibration.load(cfg.base_calib)
+    if cfg.base_calib:
+        logging.info(f"실측 보정비 {cfg.base_calib}: {calibration}")
     corrector = None
+    distance_corrector = None
     if cfg.timing_csv:
-        tick_times, reference_headings = load_record_log(cfg.timing_csv)
+        tick_times, reference_headings, reference_distances = load_record_log(
+            cfg.timing_csv, calibration
+        )
         if len(tick_times) != frame_count:
             raise ValueError(
                 f"{cfg.timing_csv} 는 {len(tick_times)} 틱인데 에피소드 {cfg.dataset.episode} 는 "
@@ -205,6 +312,16 @@ def replay(cfg: TimedReplayConfig):
                 f"정지 중 최소 {cfg.heading_min_rate_deg_s}°/s(오차 ≥ {cfg.heading_min_rate_start_deg}°) · "
                 f"녹화 끝 방향 {math.degrees(reference_headings[-1]):+.1f}°"
             )
+        if cfg.distance_kp > 0:
+            distance_corrector = DistanceCorrector(
+                reference_distances, cfg.distance_kp, cfg.distance_lag_ticks,
+                cfg.distance_max_correction_m_s, cfg.distance_deadband_m,
+            )
+            logging.info(
+                f"거리 보정 켬: Kp {cfg.distance_kp} · 지연 {cfg.distance_lag_ticks} 틱 · 상한 "
+                f"{cfg.distance_max_correction_m_s} m/s · 데드밴드 {cfg.distance_deadband_m * 100:.0f} cm · "
+                f"녹화 끝 이동 {reference_distances[-1]:+.3f} m"
+            )
     else:
         offsets = [i / dataset.fps for i in range(frame_count)]
         logging.info(f"고정 fps 재생: {frame_count} 프레임 · {dataset.fps} fps")
@@ -223,11 +340,15 @@ def replay(cfg: TimedReplayConfig):
             action_array = actions[idx][ACTION]
             action = {name: action_array[i] for i, name in enumerate(names)}
             robot_obs = robot.get_observation()
+            now = time.perf_counter()
+            # 녹화 명령도 목표와 같은 보정비로 나눈다 (비가 없으면 그대로)
+            recorded_x = calibration.x(float(action["x.vel"]))
+            recorded_theta = calibration.theta(float(action["theta.vel"]))
+            action["x.vel"], action["theta.vel"] = recorded_x, recorded_theta
             if corrector is not None:
-                action["theta.vel"] = corrector.correct(
-                    idx, time.perf_counter(), float(action["theta.vel"]),
-                    float(action["x.vel"]),
-                )
+                action["theta.vel"] = corrector.correct(idx, now, recorded_theta, recorded_x)
+            if distance_corrector is not None:
+                action["x.vel"] = distance_corrector.correct(idx, now, recorded_x)
             processed_action = robot_action_processor((action, robot_obs))
             robot.send_action(processed_action)
         elapsed = time.perf_counter() - start
@@ -236,6 +357,8 @@ def replay(cfg: TimedReplayConfig):
         )
         if corrector is not None:
             logging.info(corrector.summary())
+        if distance_corrector is not None:
+            logging.info(distance_corrector.summary())
     finally:
         robot.disconnect()
 

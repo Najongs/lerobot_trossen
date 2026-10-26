@@ -20,6 +20,10 @@ lerobot 이 명목 fps 로 만들어 낸 **합성값**이라(dt std = 0.00ms) �
     deadband  정지 상태에서 작은 회전 명령(0.5~10°/s)을 계단으로 넣어, 어디서부터 실제로
               도는지 본다. 10/26 PC2 재생에서 3°/s 미만 회전 명령 합 −11.2° 가 실측 −0.9° 였다
               → test_ep1_replay.py 방향 보정의 최소 회전 속도(--heading_min_rate_deg_s) 근거.
+    calib     베이스가 스스로 전진 → 후진 → +회전 → −회전 하고, 동작마다 사람이 줄자·각도기로 잰
+              실제 이동을 입력한다. 실제/오도메트리 비를 configs/base_calib_<TROSSEN_PC>.json 에 쓴다.
+              오도메트리는 바퀴가 미끄러진 만큼을 모른다 — 손으로 민 녹화(바퀴가 끌려 굴러 미끄러짐
+              없음)와 모터로 굴린 재생의 차이가 바로 이 비다. test_ep1_replay.py --base_calib 가 읽는다.
 
 사용법::
 
@@ -28,10 +32,11 @@ lerobot 이 명목 fps 로 만들어 낸 **합성값**이라(dt std = 0.00ms) �
     uv run --extra pi0 python scripts/measure_base.py odom --turns 6
     uv run --extra pi0 python scripts/measure_base.py rate
     uv run python scripts/measure_base.py deadband          # 제자리 ±16° 이내 왕복, ≈1 분
+    TROSSEN_PC=pc2 uv run python scripts/measure_base.py calib   # 앞 1 m · 뒤 1 m · ±90°, 동작마다 실측 입력
 
 전부 베이스만 쓴다 (팔 IP 불필요). ``--dry-run`` 은 로봇 없이 흐름만 확인한다.
 
-🚨 latency · odom · deadband 는 **베이스를 실제로 움직인다.** 진행 방향을 비우고 비상정지에
+🚨 latency · odom · deadband · calib 는 **베이스를 실제로 움직인다.** 진행 방향을 비우고 비상정지에
    손이 닿는 위치에서 실행할 것. 비상정지가 걸려 있으면 모터 토크가 안 걸려 측정이
    조용히 0 만 읽는다 -- 스크립트가 그 상태를 감지해 중단한다.
 """
@@ -275,6 +280,91 @@ def measure_deadband(base, levels_deg, hold: float, rest: float, poll: float = 0
     return {"levels": rows, "start_deg_s": start}
 
 
+def _ask_measured(prompt: str):
+    """사람이 잰 값(숫자) 또는 Enter(건너뜀 → None)."""
+    while True:
+        raw = input(prompt).strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            print("   숫자만 (건너뛰려면 Enter)")
+
+
+def _drive_to(base, axis: int, target: float, speed: float, slow_zone: float, timeout: float):
+    """오도메트리로 target(m 또는 rad, 부호 = 방향)만큼 움직이고 멈춘 뒤 0.8 s 기다려
+    관성까지 포함한 오도메트리 이동량을 준다. 끝 slow_zone 구간은 속도를 1/3 로 줄여 넘침을 줄인다."""
+    base.update_state()
+    x0, y0, th0 = base.get_pose()
+    sign = 1.0 if target >= 0 else -1.0
+
+    def moved():
+        base.update_state()
+        x, y, th = base.get_pose()
+        if axis == 0:
+            # 몸 방향으로 투영한 이동량 (뒤로 가면 음수)
+            return (x - x0) * math.cos(th0) + (y - y0) * math.sin(th0)
+        return _wrap(th - th0)
+
+    t0 = time.perf_counter()
+    while True:
+        m = moved()
+        left = abs(target) - m * sign
+        if left <= 0:
+            break
+        if time.perf_counter() - t0 > timeout:
+            print("  시간 초과 -- 멈춘다")
+            break
+        v = speed if left > slow_zone else max(speed / 3, speed * 0.2)
+        cmd = [0.0, 0.0]
+        cmd[axis] = v * sign
+        base.set_cmd_vel(*cmd)
+        time.sleep(0.02)
+    base.set_cmd_vel(0.0, 0.0)
+    time.sleep(0.8)
+    return moved()
+
+
+def measure_calib(base, distance: float, linear_speed: float, angle_deg: float,
+                  angular_speed_deg: float):
+    """전진·후진·±회전을 오도메트리로 하고, 동작마다 사람이 잰 실제 값을 받아 비를 낸다."""
+    print(f"\n=== 베이스 보정: 전진 {distance} m · 후진 {distance} m ({linear_speed} m/s) · "
+          f"+{angle_deg}° · −{angle_deg}° ({angular_speed_deg}°/s) ===")
+    print("  동작 전에 바닥에 표시: 베이스 앞 모서리(또는 바퀴 중심)에 테이프 선, 옆에 줄자.")
+    print("  회전은 앞 모서리 선과 바닥 선 사이 각도를 각도기로 — 못 재면 Enter(건너뜀).")
+    steps = [
+        ("forward", 0, distance, "실제로 앞으로 간 거리 (cm)? ", 0.01),
+        ("backward", 0, -distance, "실제로 뒤로 간 거리 (cm, 양수)? ", 0.01),
+        ("turn_pos", 1, math.radians(angle_deg), "실제로 돈 각도 (°, 양수)? ", 1.0),
+        ("turn_neg", 1, -math.radians(angle_deg), "실제로 돈 각도 (°, 양수)? ", 1.0),
+    ]
+    out = {}
+    for name, axis, target, prompt, unit in steps:
+        input(f"\n  [{name}] 표시 확인 후 Enter (시작): ")
+        if axis == 0:
+            odom = _drive_to(base, 0, target, linear_speed, 0.15, abs(target) / linear_speed * 3 + 5)
+            odom_disp = abs(odom) * 100
+            print(f"  오도메트리 {odom_disp:.1f} cm (목표 {abs(target) * 100:.0f})")
+        else:
+            w = math.radians(angular_speed_deg)
+            odom = _drive_to(base, 1, target, w, math.radians(15), abs(target) / w * 3 + 5)
+            odom_disp = abs(math.degrees(odom))
+            print(f"  오도메트리 {odom_disp:.1f}° (목표 {abs(math.degrees(target)):.0f})")
+        real = _ask_measured("  " + prompt)
+        ratio = (real / odom_disp) if real is not None and odom_disp > 0 else None
+        out[name] = {"odom": odom_disp, "real": real, "ratio": ratio,
+                     "unit": "cm" if axis == 0 else "deg"}
+        if ratio is not None:
+            print(f"  실제/오도메트리 = {ratio:.3f}")
+    print("\n  요약 (실제/오도메트리 — 1.00 보다 작으면 바퀴가 미끄러져 덜 간 것):")
+    for name, r in out.items():
+        real = "—" if r["real"] is None else f"{r['real']:6.1f}"
+        ratio = "—" if r["ratio"] is None else f"{r['ratio']:.3f}"
+        print(f"    {name:9s} 오도 {r['odom']:6.1f} {r['unit']} · 실제 {real} · 비 {ratio}")
+    return out
+
+
 def measure_rate(base, n: int):
     """베이스 왕복(set_cmd_vel + update_state + get_vel) 에 드는 시간.
 
@@ -315,7 +405,7 @@ def _wrap(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=["latency", "odom", "rate", "deadband", "all"])
+    ap.add_argument("mode", choices=["latency", "odom", "rate", "deadband", "calib", "all"])
     ap.add_argument("--dry-run", action="store_true", help="로봇 없이 흐름만 확인")
     ap.add_argument("--cmd-linear", type=float, default=0.15, help="전진 계단 입력 (m/s)")
     ap.add_argument("--cmd-angular", type=float, default=0.5, help="회전 계단 입력 (rad/s)")
@@ -330,10 +420,14 @@ def main():
     ap.add_argument("--deadband-levels", default="0.5,1,1.5,2,3,4,5,6,8,10",
                     help="deadband: 회전 명령 레벨 (°/s, 쉼표)")
     ap.add_argument("--deadband-hold", type=float, default=2.0, help="deadband: 레벨당 유지 (s)")
+    ap.add_argument("--calib-distance", type=float, default=1.0, help="calib: 전진·후진 거리 (m)")
+    ap.add_argument("--calib-speed", type=float, default=0.3, help="calib: 직진 속도 (m/s)")
+    ap.add_argument("--calib-angle", type=float, default=90.0, help="calib: 회전 각도 (°)")
+    ap.add_argument("--calib-angular-speed", type=float, default=30.0, help="calib: 회전 속도 (°/s)")
     ap.add_argument("--out", default=None, help="결과 JSON 저장 경로")
     args = ap.parse_args()
 
-    if not args.dry_run and args.mode in ("latency", "odom", "deadband", "all"):
+    if not args.dry_run and args.mode in ("latency", "odom", "deadband", "calib", "all"):
         print("🚨 베이스가 실제로 움직인다. 진행 방향을 비우고 비상정지에 손이 닿는 위치에서.")
         print("   중단하려면 Ctrl-C (스크립트가 정지 명령을 보낸다).")
         input("   준비되면 Enter: ")
@@ -356,6 +450,21 @@ def main():
             _check_alive(base, 1)
             levels = [float(v) for v in args.deadband_levels.split(",") if v.strip()]
             res["deadband"] = measure_deadband(base, levels, args.deadband_hold, args.rest)
+        if args.mode == "calib":
+            _check_alive(base, 1)
+            res["calib"] = measure_calib(base, args.calib_distance, args.calib_speed,
+                                         args.calib_angle, args.calib_angular_speed)
+            import os
+            pc = os.environ.get("TROSSEN_PC", "pc1")
+            calib_path = _REPO_ROOT / "configs" / f"base_calib_{pc}.json"
+            ratios = {k: v["ratio"] for k, v in res["calib"].items()}
+            if not args.dry_run and any(r is not None for r in ratios.values()):
+                calib_path.write_text(json.dumps({
+                    "trossen_pc": pc, "measured": time.strftime("%Y-%m-%d %H:%M"),
+                    "ratio": ratios, "detail": res["calib"],
+                    "note": "실제/오도메트리 (모터 구동). test_ep1_replay.py --base_calib 가 읽는다",
+                }, indent=2, ensure_ascii=False))
+                print(f"\n-> {calib_path}")
     except KeyboardInterrupt:
         print("\n중단됨 -- 베이스를 정지시킨다.")
     finally:
