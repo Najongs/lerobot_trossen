@@ -34,6 +34,7 @@
 # 로그 소음 억제: 상한 경고는 loop_rate_log 가 걸러 clamped=N 으로 센다, 인코더 배너는 SVT_LOG=2.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/robot_hw.sh   # PC별 팔 IP·카메라 시리얼 (TROSSEN_PC=pc1|pc2)
 
 MODEL=${1:?모델 (M1|M2|M3|<허브 repo id>)}
 STAGE=${2:?단계 1-11}
@@ -102,7 +103,7 @@ fi
 [[ "$BASE_TORQUE" == 0 ]] && RUN="${RUN}_nobase"
 LOGDIR=~/eval_logs; mkdir -p "$LOGDIR"
 
-echo "== 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL · 베이스 회전 예산 ${BASE_BUDGET_DEG:-끔}${BASE_BUDGET_DEG:+ (${BASE_BUDGET_SRC:-cmd} 기준)}$([[ "$BASE_TORQUE" == 0 ]] && echo ' · 베이스 토크 끔(진단)')"
+echo "== $TROSSEN_PC · 모델 $REPO · 단계 task$NN · exec $EXEC · ${EPISODES}ep · 원핫 ${ONEHOT:-없음} · 팔 한 틱 상한 $MAX_REL · 베이스 회전 예산 ${BASE_BUDGET_DEG:-끔}${BASE_BUDGET_DEG:+ (${BASE_BUDGET_SRC:-cmd} 기준)}$([[ "$BASE_TORQUE" == 0 ]] && echo ' · 베이스 토크 끔(진단)')"
 
 # 1) 체크포인트 받기 (루트형/pretrained_model 중첩형 모두)
 POLICY=$(uv run python -c "
@@ -236,19 +237,15 @@ fi
 
 CMD=(uv run lerobot-record
   --robot.type=mobileai_robot
-  --robot.left_arm_ip_address=192.168.1.5
-  --robot.right_arm_ip_address=192.168.1.4
+  "--robot.left_arm_ip_address=$ROBOT_LEFT_IP"
+  "--robot.right_arm_ip_address=$ROBOT_RIGHT_IP"
   --robot.id=follower
-  "--robot.cameras={
-    cam_high: {type: intelrealsense, serial_number_or_name: \"230422273501\", width: 640, height: 480, fps: 30},
-    cam_left_wrist: {type: intelrealsense, serial_number_or_name: \"230422271234\", width: 640, height: 480, fps: 30},
-    cam_right_wrist: {type: intelrealsense, serial_number_or_name: \"230322274369\", width: 640, height: 480, fps: 30}
-}"
+  "--robot.cameras=$ROBOT_CAMERAS"
   "--robot.enable_base_motor_torque=$([[ "$BASE_TORQUE" == 0 ]] && echo false || echo true)"
   "--robot.include_base_in_state=$INCLUDE_BASE"
   --teleop.type=mobileai_leader_teleop
-  --teleop.left_arm_ip_address=192.168.1.3
-  --teleop.right_arm_ip_address=192.168.1.2
+  "--teleop.left_arm_ip_address=$LEADER_LEFT_IP"
+  "--teleop.right_arm_ip_address=$LEADER_RIGHT_IP"
   --teleop.id=leader
   --display_data=true
   "--dataset.repo_id=kiroaiseoul/eval_najy_${RUN}"
@@ -283,18 +280,7 @@ if [[ "$DRY_RUN" == 1 ]]; then
   exit 0
 fi
 
-# 팔 4대 사전 확인 — 유선이 끊긴 채 띄우면 lerobot 이 팔 연결에서 130 s 넘게 기다리다 죽는다(10/15·10/20).
-# 1 s 안에 알린다. 로봇에 쓰지 않는다(TCP 연결만 열었다 닫는다). SKIP_NETCHECK=1 로 끈다.
-if [[ "${SKIP_NETCHECK:-0}" != 1 ]]; then
-  _down=()
-  for _ip in 192.168.1.5 192.168.1.4 192.168.1.3 192.168.1.2; do
-    timeout 1 bash -c "exec 3<>/dev/tcp/$_ip/50001" 2>/dev/null || _down+=("$_ip")
-  done
-  if (( ${#_down[@]} )); then
-    echo "!! 팔 컨트롤러 연결 안 됨: ${_down[*]} (TCP 50001) — 유선 링크·스위치·로봇 전원 확인 (ip -br link show enp129s0)" >&2
-    exit 4
-  fi
-fi
+check_arms   # scripts/robot_hw.sh — SKIP_NETCHECK=1 로 끈다
 
 echo "== 로그 $LOGDIR/$RUN.log  (리셋 구간은 리더암, 끝나면 →)"
 # 로그는 파일로 직접 쓰고 tail 로 보여 준다. `| tee` 를 쓰면 --display_data 가 띄운 rerun 뷰어가 파이프를
