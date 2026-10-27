@@ -114,15 +114,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         # action_features are config-derived and readable already, which is what
         # lets the dimension check run before anything is powered.
         robot = record_adapter.make_robot(cfg.robot)
-        # The leader arm, constructed only when a stage drives the robot with it
-        # -- a YAML without a leader_reset stage never touches 192.168.1.2/.3,
-        # even if it carries a `teleop:` block. Constructed, not connected, for
-        # the same reason as the robot: preflight reads its action_features.
+        # The leader arm, constructed only when something drives the robot with
+        # it -- a leader_reset stage, or an intervention on the space bar
+        # (LEROBOT_INTERVENTION_REPO_ID). A demo run with neither never touches
+        # 192.168.1.2/.3, even if its YAML carries a `teleop:` block. Constructed,
+        # not connected, for the same reason as the robot: preflight reads its
+        # action_features.
         teleop = (
             record_adapter.make_teleop(cfg.teleop)
             if cfg.teleop is not None
-            and any(
-                stage.executor == config.EXECUTOR_LEADER_RESET for stage in cfg.stages
+            and (
+                any(
+                    stage.executor == config.EXECUTOR_LEADER_RESET
+                    for stage in cfg.stages
+                )
+                or preflight.intervention_requested()
             )
             else None
         )

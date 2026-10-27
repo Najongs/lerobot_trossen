@@ -23,6 +23,7 @@ SWITCH_VARIABLES = (
     "LEROBOT_REPLAY_RUN_POLICY",
     "LEROBOT_CHUNK_EXECUTION_LOG",
     "LEROBOT_LOOP_HZ_LOG",
+    "LEROBOT_INTERVENTION_REPO_ID",
 )
 
 
@@ -72,6 +73,29 @@ def test_installed_wrappers(environment, expect_ours, expect_loop_rate):
     assert (LOOP_RATE in chain) == expect_loop_rate, chain
     if expect_ours:
         assert chain[0] == OURS, "ours must wrap the loop rate wrapper, not under it"
+
+
+INTERVENTION = "intervention_patch.py"
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [{}, {"LEROBOT_CHUNK_PREFETCH_TICKS": "3"}, {"LEROBOT_LOOP_HZ_LOG": "0"}],
+)
+def test_intervention_wrapper_is_outermost(environment):
+    report, stderr = probe(
+        {**environment, "LEROBOT_INTERVENTION_REPO_ID": "local/intervention_probe"}
+    )
+    chain = report["chain"]
+    # Outermost, so the intervention loop it starts runs through the others. A
+    # trailing "*" only means functools.wraps copied the chunk wrapper's marker.
+    assert chain[0].rstrip("*") == INTERVENTION, chain
+    assert "space bar during a policy episode" in stderr
+
+
+def test_intervention_wrapper_is_off_by_default():
+    report, _ = probe({})
+    assert INTERVENTION not in report["chain"]
 
 
 def test_real_record_loop_without_switches_leaves_the_policy_alone():

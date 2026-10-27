@@ -79,6 +79,7 @@ def run_lerobot_policy_stage(context: StageContext, stage: StageConfig) -> Stage
         control_time_s=plan.control_time_s,
         single_task=stage.instruction or stage.name,
         display_data=context.config.display_data,
+        teleop=context.teleop,
     )
     elapsed_s = time.perf_counter() - started
     frames = context.buffered_frame_count() - frames_before

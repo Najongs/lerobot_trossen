@@ -584,6 +584,17 @@ def _task_string_collisions(stages: Sequence[StageConfig]) -> list[str]:
     return problems
 
 
+# lerobot_robot_trossen's intervention patch is switched on by this variable, the
+# same one lerobot-record runs take. Read here by name only, so the gate does not
+# import that package.
+INTERVENTION_ENV_VAR = "LEROBOT_INTERVENTION_REPO_ID"
+
+
+def intervention_requested() -> bool:
+    """True when this run hands policy stages to the leader arm on the space bar."""
+    return bool(os.environ.get(INTERVENTION_ENV_VAR, "").strip())
+
+
 def check_leader_reset_stages(
     config: StageRunnerConfig, robot: Robot, teleop: object | None
 ) -> None:
@@ -595,12 +606,21 @@ def check_leader_reset_stages(
     hold that joint at a stale goal for the whole reset, an extra one raises
     inside send_action with the arms energised. And the leader must be able to
     align itself to the follower first (leader_reset.align_leader_to_follower).
+
+    An intervention (``LEROBOT_INTERVENTION_REPO_ID``) drives the follower from
+    the leader the same way after aligning it, so it needs the same leader. Without
+    one the patch would find out only at the space bar, and stop the run there.
     """
-    if not any(stage.executor == EXECUTOR_LEADER_RESET for stage in config.stages):
+    users: list[str] = []
+    if any(stage.executor == EXECUTOR_LEADER_RESET for stage in config.stages):
+        users.append("a `leader_reset` stage")
+    if intervention_requested():
+        users.append(f"{INTERVENTION_ENV_VAR} (intervention on the space bar)")
+    if not users:
         return
     if teleop is None:
         raise PreflightError(
-            "a `leader_reset` stage needs the leader arm, and none was constructed "
+            f"{' and '.join(users)} needs the leader arm, and none was constructed "
             "-- add a top-level `teleop:` block."
         )
     problems: list[str] = []
@@ -626,7 +646,7 @@ def check_leader_reset_stages(
     if problems:
         raise PreflightError(
             f"the `teleop:` leader arm ({type(teleop).__name__}) cannot drive this "
-            "robot in a leader_reset stage:\n  - " + "\n  - ".join(problems)
+            f"robot for {' and '.join(users)}:\n  - " + "\n  - ".join(problems)
         )
 
 

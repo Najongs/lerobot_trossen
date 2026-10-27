@@ -263,6 +263,7 @@ def call_record_loop(
     control_time_s: float,
     single_task: str,
     display_data: bool = False,
+    teleop: Teleoperator | None = None,
 ) -> None:
     """THE policy call site of lerobot's record_loop; call_reset_loop is the other.
 
@@ -282,6 +283,15 @@ def call_record_loop(
     (lerobot_record.py:332-335), so the previous stage's ACT chunk queue is
     flushed for free -- re-entering per stage IS the transition semantics we
     want, not an accident.
+
+    ``teleop`` is the connected leader arm, or None when the YAML has no
+    ``teleop:`` block. upstream record() passes it to its policy episodes too
+    (lerobot_record.py:534-548), and record_loop does not read it while a policy
+    is given (the policy branch comes first, :357 / :371), so passing it changes
+    nothing about the stage itself. It is there for lerobot_robot_trossen's
+    intervention patch (opt-in, ``LEROBOT_INTERVENTION_REPO_ID``), which hands
+    the stage to this leader arm on the space bar and stops the run when there
+    is none.
     """
     record_loop(
         robot=robot,
@@ -291,6 +301,7 @@ def call_record_loop(
         robot_action_processor=processors.robot_action,
         robot_observation_processor=processors.robot_observation,
         dataset=dataset,
+        teleop=teleop,
         policy=bundle.policy,
         preprocessor=bundle.preprocessor,
         postprocessor=bundle.postprocessor,

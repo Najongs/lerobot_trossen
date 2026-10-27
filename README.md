@@ -298,6 +298,56 @@ uv run python -m stage_runner --config_path configs/chain_task45.yaml
 - 단계 앞에서 리더암으로 튜브·비커를 쥐여 주고 시작하려면(선택, 체인 아무 자리) → [packages/stage_runner/README.md](packages/stage_runner/README.md#리더암-리셋-단계-leader_reset)
 - 이동 단계를 정책 대신 데모 경로 재생 + 도착 화면 정렬로 돌리려면(선택, 이동마다 한 쌍) → [packages/stage_runner/README.md](packages/stage_runner/README.md#베이스-이동-단계-base_replay--base_align) · 로봇 예 `configs/chain_stage12_align.yaml`
 
+### 3-5. 실패 지점에서 넘겨받아 녹화 (개입 취득)
+
+3-3 명령 맨 앞에 변수 한 줄. 정책이 실패하면 **스페이스바** → 리더암이 넘겨받고 리셋 구간 → `→`로 eval과 별개인 데이터셋에 녹화 시작.
+
+```shell
+LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run lerobot-record \
+  --robot.type=mobileai_robot \
+  --robot.left_arm_ip_address=192.168.1.5 \
+  --robot.right_arm_ip_address=192.168.1.4 \
+  --robot.id=follower \
+  --robot.cameras='{
+    cam_high: {type: intelrealsense, serial_number_or_name: "230422273501", width: 640, height: 480, fps: 30},
+    cam_left_wrist: {type: intelrealsense, serial_number_or_name: "230422271234", width: 640, height: 480, fps: 30},
+    cam_right_wrist: {type: intelrealsense, serial_number_or_name: "230322274369", width: 640, height: 480, fps: 30}
+}' \
+  --robot.enable_base_motor_torque=true \
+  --teleop.type=mobileai_leader_teleop \
+  --teleop.left_arm_ip_address=192.168.1.3 \
+  --teleop.right_arm_ip_address=192.168.1.2 \
+  --teleop.id=leader \
+  --display_data=true \
+  --dataset.repo_id=kiroaiseoul/eval_act_<단계>_<회차> \
+  --dataset.single_task="<본인 단계 지시문>" \
+  --policy.path="$POLICY" \
+  --dataset.episode_time_s=120 \
+  --dataset.reset_time_s=90 \
+  --dataset.num_episodes=10 \
+  --dataset.fps=21
+```
+
+- `<개입_데이터셋>` = **단계마다 따로**, eval repo와 다른 이름. 있으면 이어 쓰고 없으면 새로 만듦
+- pi0면 `LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4`도 같은 줄 앞에 → [Chunk Seam Smoothing](#chunk-seam-smoothing)
+- 시작 로그에 `LEROBOT_INTERVENTION_REPO_ID=… space bar during a policy episode …` 한 줄이면 켜진 것
+
+| 키 | 언제 | 동작 |
+| --- | --- | --- |
+| 스페이스바 | 정책 구간 | 정책 정지 → 리더암이 팔로워 자세로 자동 이동 → 개입 리셋(녹화 안 함) |
+| `→` | 개입 리셋 | 녹화 시작 — `--dataset.reset_time_s`가 지나도 시작 |
+| `ESC` | 개입 리셋 | 녹화 없이 종료 |
+| `→` | 개입 녹화 중 | 개입 저장 → 원래 흐름(eval 에피소드 저장 → 리셋) |
+| `←` | 개입 녹화 중 | 개입 리셋으로 → `→`로 처음부터 다시 녹화(직전 녹화본 버림) |
+| `ESC` | 개입 녹화 중 | 개입 저장 후 종료 |
+
+- 🚨 **스페이스바 뒤 리더암에서 손을 뗄 것** — 리더암이 스스로 움직임(2초 이상). 잡는 시점 = `Reset, not recording …` 로그
+- 베이스는 손으로 밀 것 — 개입 중엔 베이스 토크 꺼짐
+- 로그 `eval episode N … stopped by the operator` = 그 eval 에피소드는 실패로 셀 것
+- 마지막 eval 에피소드에서 개입했으면 `→` 전에 손을 뗄 것 — 저장 직후 종료라 팔·리더암이 대기 자세로 이동
+- 개입 구간은 취득과 같은 조건(30 fps 표기, 실제 약 20 Hz)으로 녹화 — 이유·실패 시 동작 → [Intervention Recording](#intervention-recording)
+- 단계 실행기(3-4)에서 쓸 땐 → [stage_runner README 정책 단계 개입 취득](packages/stage_runner/README.md#정책-단계-개입-취득-선택)
+
 ---
 
 ## 4. 데이터셋 확인·편집
@@ -590,6 +640,7 @@ uv run accelerate launch \
 | **`LEROBOT_BASE_SERIAL_REARM`** | Removes a 20 ms dead wait from each of the two base Modbus transactions per tick, caused by a `trossen_slate` 0.0.3 driver bug; on the robot 20.4 ms → 10.0 ms per transaction. On by default (#62); acts only in a policy phase at `--dataset.fps` ≤ 21. | [below](#base-serial-re-arm) |
 | **Base latency switches** (experimental) | Switches for two latency causes of base over-rotation during eval — the chunk boundary stall and the command-to-velocity lag — plus a demo replay bench, for A/B runs with one checkpoint. All off by default; with none set nothing is installed. | [below](#base-latency-switches) |
 | **Chunk seam smoothing** (experimental) | RTC guidance for the prefetched chunk and a quintic blend of the arm jump at each chunk swap, plus arm-seam columns in the execution log. Off by default. | [below](#chunk-seam-smoothing) |
+| **Intervention recording** (experimental) | The space bar during a policy episode hands the eval over to the leader arm, aligned to the follower first, and records the correction into a separate dataset at 30 fps, as acquisition does. Off unless `LEROBOT_INTERVENTION_REPO_ID` is set. | [below](#intervention-recording) - [#76](https://github.com/kiro-ai-division/lerobot_trossen/issues/76) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
 | **Stage runner** | Chains trained policies stage by stage into one episode and logs every transition as JSONL, so the stage boundary is measurable afterwards. Separate entry point (`python -m stage_runner`); `lerobot-record` is untouched. | [above](#단계-체이닝-실행) - [#48](https://github.com/kiro-ai-division/lerobot_trossen/pull/48) |
 
@@ -1011,6 +1062,81 @@ The episode summary line adds their medians and maxima.
   first sent step carries about 3/4 of a velocity difference between the chunks; the window
   controls the position jump.
 
+## Intervention Recording
+
+**Experimental, off by default; first run on the robot on 10/21** (results at the end of this
+section). `LEROBOT_INTERVENTION_REPO_ID=<repo>`
+installs a `record_loop` wrapper: the space bar during a policy episode hands the eval over to the
+leader arm, and the operator's correction is recorded into `<repo>` -- a dataset separate from the
+eval one -- in the same form as an acquisition episode. Usage → [3-5](#3-5-실패-지점에서-넘겨받아-녹화-개입-취득).
+
+What the space bar does, in order:
+
+1. The policy loop exits as on `→`; its episode up to that point is saved to the eval dataset.
+2. The base is commanded zero at once (it holds its last velocity until the next command).
+3. The leader is driven to the follower's **measured** joints, grippers included, then back to
+   gravity compensation (`align_to` / `release`, [#74](https://github.com/kiro-ai-division/lerobot_trossen/issues/74)).
+   The move takes `max(2 s, largest arm joint delta / 0.5 rad/s)`.
+4. Base torque is switched off so the base can be pushed by hand -- only when the robot was
+   connected with `--robot.enable_base_motor_torque=true`.
+5. A reset runs first, as `lerobot-record`'s own reset between episodes: no dataset, leader →
+   follower, nothing recorded, for `--dataset.reset_time_s`. The operator takes the leader there;
+   recording starts at its boundary with `→` (or `←`, or the time limit). `ESC` in this reset
+   stops the run with nothing recorded.
+6. `record_loop` runs again without the policy, leader → follower, into `<repo>`. The action is the
+   leader's joints plus the base's measured velocity, as in acquisition; the task is the eval's
+   `--dataset.single_task`.
+7. On `→` (or `--dataset.episode_time_s`) the intervention is saved and the run goes on as before;
+   `←` goes to a reset, then throws the take away and records again (`ESC` in that reset throws
+   it away and stops); `ESC` saves it and stops.
+8. The base is zeroed and its torque restored.
+
+**Why a reset before recording** — operators start and end every acquisition take at a reset
+boundary with `→` or `ESC`. In the first robot trial, recording that began by itself once the
+leader was aligned, and a `←` that re-recorded on the spot, broke that habit; the keys now behave
+as in acquisition. The reset and a thrown-away take never reach the dataset.
+
+**Why the leader is aligned first** — `record_loop` sends the leader's pose to the follower on its
+first tick. Mid-episode the follower is wherever the policy left it, so without the alignment that
+first command is a jump of up to a radian per joint -- the policy → leader hand-over is where
+three of the five 9/27 `Joint 3 velocity limit exceeded` crashes happened.
+
+**Loop rate: as in acquisition** — the intervention loop runs at `fps=30` on a dataset labelled
+30, exactly as `lerobot-record` ran acquisition; the eval's `--dataset.fps=21` is not passed on.
+The acquisition loops really ran at about 20.4 Hz because of the base driver's 20 ms receive wait
+([Base Serial Re-arm](#base-serial-re-arm)). The re-arm removes that wait only in a policy phase;
+the intervention loop has no policy, so it is a teleop phase and the wait stays, as in acquisition.
+The 30 fps label is required anyway: LeRobot 0.4.4 merges only datasets with equal fps
+(`aggregate.validate_all_metadata`), and `record_loop` refuses a dataset whose fps differs from
+the loop's (`lerobot_record.py:303-304`).
+
+**The intervention dataset** — opened on the first intervention of a run: appended to if it exists
+locally or on the Hub (downloaded first, as `--resume=true` does), created otherwise. It must be
+labelled 30 fps and have the run's features, or the run stops with the mismatch listed. It is
+finalized and pushed with the eval dataset, with the same `--dataset.push_to_hub`,
+`--dataset.private` and `--dataset.tags`. Use one per stage; merge with the acquisition datasets
+only for training.
+
+**When the run stops instead** — if anything before the hand-over fails (no `--teleop.*`, the
+leader cannot be aligned, the dataset cannot be opened), nothing is recorded and the run stops:
+the reset that would follow copies an unaligned leader to the follower. A failed base torque
+restore also stops the run, since the next policy episode would command a base that does not move.
+
+**Measured on the robot (10/21)** — robot PC, `pi0full_bs32_s30k_all11_14D` on stage 10
+(`Move to the beaker storage shelf`: turning and driving while holding the beaker), chunk prefetch
+on; 10 hand-overs before the reset was added, 2 after.
+
+| What | Where to read it | 10/21 |
+| --- | --- | --- |
+| Space bar → policy loop stopped / base zero command sent | `intervention: after the space bar, the policy loop stopped in N ms and the base zero command went out at M ms` | 5-36 ms / 15-46 ms |
+| Base stopped before the leader moved | by eye | yes |
+| Leader alignment at 0.5 rad/s with hands near | by eye, `largest arm error` | no jump, 0.000-0.002 rad |
+| Beaker kept in the gripper during the hand-over | by eye | yes |
+| Intervention loop rate | `phase=teleop, target=30 Hz` summary | 20.0-20.6 Hz, as in acquisition |
+| Re-arm off in the intervention | `LEROBOT_BASE_SERIAL_REARM: off again` | every hand-over |
+| Intervention dataset | the dataset | 12 episodes, all dt 0.0333 s, pushed base non-zero in `action[14:16]` |
+| Merge with acquisition (0.4.4) | `lerobot-edit-dataset --operation.type merge` | 107 + 8 = `Episodes: 115` |
+
 ## Upstream flags (not fork changes)
 
 ### Optional Observation Features
@@ -1043,6 +1169,7 @@ e.g. `left_<joint>.eff` and `right_<joint>.eff`.
 | `LEROBOT_BASE_LEAD_TICKS` | unset (off) | Integer `d`: send the base's action `d` ticks ahead of the arms' |
 | `LEROBOT_REPLAY_DATASET` · `LEROBOT_REPLAY_EPISODES` · `LEROBOT_REPLAY_RUN_POLICY` | unset (off) · all episodes · `1` | Replay bench: demo repo id, episode list, whether the checkpoint's real inference still runs |
 | `LEROBOT_CHUNK_EXECUTION_LOG` | unset (off) | Path of a per-tick CSV of the chunk schedule, base commands and arm seams |
+| `LEROBOT_INTERVENTION_REPO_ID` | unset (off) | Repo id of the intervention dataset: the space bar during a policy episode hands over to the leader arm and records into it → [Intervention Recording](#intervention-recording) |
 | `LEROBOT_CHUNK_RTC` | unset (off) | With `LEROBOT_CHUNK_PREFETCH_TICKS`: steer the prefetched chunk toward the old chunk's remaining actions → [Chunk Seam Smoothing](#chunk-seam-smoothing) |
 | `LEROBOT_CHUNK_RTC_MAX_GUIDANCE` | unset (10) | RTC guidance clip |
 | `LEROBOT_CHUNK_SEAM_BLEND_TICKS` | unset (off) | Integer `m`: fade the arm jump at each swap over at least `m` ticks |

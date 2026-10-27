@@ -109,6 +109,29 @@ uv run python -m stage_runner --config_path <설정 파일>
 - 통과 기준 = `events.jsonl`에서 리셋 단계의 `stage_start`·`stage_end` 사이에 `stage_reset` 한 줄, `base_torque`가 `released`(토크 켠 설정) 또는 `not_released`
 - 리셋 다음 `stage_reposition`의 `gripper_goal_source`가 `previous_command`이고 `gripper_goal`이 `stage_reset.gripper_goals`와 같음
 
+## 정책 단계 개입 취득 (선택)
+
+정책 단계에서 **스페이스바** → 리더암이 넘겨받아 개입 데이터셋에 녹화. 키·동작은 `lerobot-record`와 같다 → [루트 README 3-5](../../README.md#3-5-실패-지점에서-넘겨받아-녹화-개입-취득)
+
+```yaml
+teleop:
+  type: mobileai_leader_teleop
+  left_arm_ip_address: 192.168.1.3
+  right_arm_ip_address: 192.168.1.2
+  id: leader
+```
+
+```shell
+LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run python -m stage_runner --config_path <설정 파일>
+```
+
+- 켜고 끄기 = 변수 한 줄. 없으면 리더암을 연결하지 않음 — `teleop:` 블록이 있어도 시연은 그대로
+- 변수가 있는데 `teleop:` 블록이 없으면 연결 전에 종료 코드 `2`
+- 스페이스바는 정책 단계에서만 — 베이스 이동·정렬 단계에선 아무 일 없음
+- 개입 녹화 상한·개입 리셋 상한 각 60초(`lerobot-record` 기본값) — 단계 타이머와 무관
+- `→`로 저장하면 체인이 다음 단계로 이어짐, `ESC`로 저장하면 시행 종료
+- 개입 데이터셋은 로컬에만 — 올릴 땐 `LeRobotDataset(<repo>).push_to_hub()`
+
 ## 베이스 이동 단계 (base_replay · base_align)
 
 이동 단계를 정책 대신 두 단계 한 쌍으로 돈다 — **데모 경로 재생**(`base_replay`) → **도착 화면 정렬**(`base_align`, cam_high를 데모 도착 화면과 비교해 헤딩 먼저, 거리는 고정물 크기로). 체인 아무 자리에, 이동마다 한 쌍씩. 둘 다 기록한다(프레임의 task 문자열 = 단계 `name`).

@@ -34,6 +34,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
+import yaml
 from lerobot.robots import Robot
 from lerobot.robots.config import RobotConfig
 from stage_runner import aggregate, cli, config, mock_policy, preflight, record_adapter
@@ -649,6 +650,60 @@ def test_preflight_matches_the_leader_keys_to_the_robot() -> None:
 
     with pytest.raises(preflight.PreflightError, match="no align_to"):
         preflight.check_leader_reset_stages(parsed, robot, NoAlign())
+
+
+def test_an_intervention_run_needs_the_leader_arm(monkeypatch: Any) -> None:
+    parsed = config.parse_config(["--config_path", str(CONFIGS / "smoke_mock.yaml")])
+    robot = MockRobot(MockRobotConfig(id="unit", arm_layout="bimanual"))
+    teleop = MockTeleop(MockTeleopConfig(id="unit"))
+    # Off -- a demo run: no reset stage, so no leader is needed.
+    monkeypatch.delenv(preflight.INTERVENTION_ENV_VAR, raising=False)
+    preflight.check_leader_reset_stages(parsed, robot, None)
+
+    monkeypatch.setenv(preflight.INTERVENTION_ENV_VAR, "local/intervention_smoke")
+    with pytest.raises(
+        preflight.PreflightError,
+        match=f"{preflight.INTERVENTION_ENV_VAR} .*needs the leader arm",
+    ):
+        preflight.check_leader_reset_stages(parsed, robot, None)
+    preflight.check_leader_reset_stages(parsed, robot, teleop)
+
+
+@pytest.mark.parametrize("intervention", [False, True])
+def test_policy_stages_get_the_leader_only_when_intervention_is_on(
+    tmp_path: Path, monkeypatch: Any, intervention: bool
+) -> None:
+    # The reset config without its resets: a `teleop:` block and policy stages
+    # only, as a recovery run's YAML is.
+    data = yaml.safe_load(RESET_CONFIG.read_text())
+    data["stages"] = [
+        stage for stage in data["stages"] if stage.get("executor") != "leader_reset"
+    ]
+    path = tmp_path / "policy_only_with_teleop.yaml"
+    path.write_text(yaml.safe_dump(data))
+
+    seen: list[Any] = []
+    real_call = record_adapter.call_record_loop
+
+    def call_record_loop(**kwargs: Any) -> Any:
+        seen.append(kwargs.get("teleop"))
+        return real_call(**kwargs)
+
+    # The switch itself, not the variable: setting the variable would also arm
+    # lerobot_robot_trossen's patch if this test is the first to import it.
+    monkeypatch.setattr(preflight, "intervention_requested", lambda: intervention)
+    with mock.patch.object(record_adapter, "call_record_loop", call_record_loop):
+        result = _run(tmp_path, config_path=path)
+
+    assert result["exit_code"] == cli.EXIT_OK
+    assert seen
+    if intervention:
+        assert result["teleop"] is not None
+        assert all(teleop is result["teleop"] for teleop in seen)
+    else:
+        # A demo: the leader is never built, so the policy stages run as before.
+        assert result["teleop"] is None
+        assert all(teleop is None for teleop in seen)
 
 
 def test_a_yaml_without_a_reset_never_builds_the_leader(tmp_path: Path) -> None:
