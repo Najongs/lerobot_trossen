@@ -181,6 +181,50 @@ uv run accelerate launch \
 2. [`모델 체크포인트` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510)에 한 줄 — 레포 이름·보유상황·학습 로그·담당·파라미터(`batch_size` × 장 수 · `fp32`)
 3. → [3. Eval](#3-eval)
 
+### 2-6. KISTI 한강(GH200)에서 학습
+
+`sandia`·DGX-1 과 다르다 — **aarch64**, 공용 슈퍼컴이라 **로그인 노드에서 학습 금지**, Slurm(`sbatch`)으로 계산 노드(GH200 144G ×4)에 낸다.
+2-1 ~ 2-4 의 인자는 그대로고, 실행만 `scripts/train_hangang.sbatch` 로 감싼다.
+
+**설치 (한 번)** — 로그인 노드에서. venv·캐시는 홈(64G·50만 파일) 밖에 둔다.
+
+```shell
+cd ~/lerobot_trossen
+export UV_PROJECT_ENVIRONMENT=/appsdata/$USER/venvs/lerobot_trossen
+export UV_CACHE_DIR=/scratch/$USER/.cache/uv
+export UV_PYTHON_INSTALL_DIR=/appsdata/$USER/uv-python
+export UV_PYTHON_PREFERENCE=only-managed   # 시스템 python3.11 에 Python.h 가 없어 evdev 빌드가 깨진다
+export UV_LINK_MODE=copy                   # 캐시와 venv 가 다른 파일시스템
+uv sync --frozen --no-install-package torchcodec --no-install-package pyrealsense2
+hf auth login                              # ~/.cache/huggingface/token — Hub push·비공개 데이터셋용
+```
+
+- `torchcodec` 0.10·`pyrealsense2` 는 **aarch64 휠이 없다** — lock 은 그대로 두고 설치에서만 뺀다. 비디오 디코딩은 lerobot 이 자동으로 `pyav` 로 떨어진다(`'torchcodec' is not available in your platform, falling back to 'pyav'` 경고는 정상). FFmpeg 설치 불필요
+- 그래서 이후 `uv run` 은 **반드시 `--frozen --no-sync`** — 빼면 매번 sync 하다 torchcodec 에서 죽는다. 스크립트가 이미 붙인다
+- 확인: `uv run --frozen --no-sync python -c "import torch; print(torch.__version__, torch.cuda.is_available())"` → `2.10.0+cu128 True`
+
+**스모크 → 본 학습** — 제출은 `/scratch` 또는 `/appsdata` 아래에서만 받는다(홈에서 내면 거부).
+
+```shell
+cd /scratch/$USER
+# 2-1 스모크 (10 스텝, push 안 함)
+sbatch --export=ALL,DATASET=kiroaiseoul/<본인_단계_repo>,RUN=_smoke_<본인이름> \
+  ~/lerobot_trossen/scripts/train_hangang.sbatch
+# 2-2 본 학습
+sbatch --time=12:00:00 \
+  --export=ALL,DATASET=kiroaiseoul/<본인_단계_repo>,RUN=<본인_이름>_<본인_단계>,STEPS=60000,SAVE_FREQ=20000,POLICY_REPO=kiroaiseoul/act_<본인_단계>_<스텝> \
+  ~/lerobot_trossen/scripts/train_hangang.sbatch
+squeue -u $USER                       # 상태 — 촘촘히 돌리지 말 것(Slurm 명령 동시 50개 제한)
+tail -f /scratch/$USER/act-train-<잡번호>.out
+```
+
+- GPU 4장 × `BATCH=16` = 유효 배치 64 (2-2 와 같음). 출력은 `/appsdata/$USER/lerobot_trossen/outputs/<RUN>` — 자동 삭제 없음. 같은 `RUN` 이 있으면 스크립트가 거부한다
+- `STEPS` 를 안 주면 스모크, 주면 `POLICY_REPO` 필수(🛑 [2-4](#2-4-체크포인트에서-이어-학습-warm-start) 와 같은 이유로 부모 repo 재사용 금지). warm start 는 `POLICY_PATH=<체크포인트>` 를 더한다(`--policy.type` 대신 `--policy.path` 로 바뀜). 그 밖의 lerobot 인자는 `TRAIN_ARGS="…"` 로
+- 잡 최대 **24시간**, 실행 5개·제출 5개. 데이터셋 캐시는 `/scratch/$USER/.cache/huggingface` (15일 안 읽으면 지워지지만 다시 받으면 된다)
+- 스크립트는 `accelerate launch` 전에 **데이터셋을 단일 프로세스로 먼저 받는다** — 4 프로세스가 뜬 뒤 받으면 나머지 rank 가 NCCL 초기화에서 10분 제한으로 죽는다(477 MB 데이터셋이 한 파일에서 9분 멈춘 잡에서 실제로 났다)
+- 실측(2026-10-28, `kiroaiseoul/task07_open_refrigerator_new` 43 에피소드): 스모크 잡 전체 1분 26초, `Effective batch size: 16 x 4 = 64`, `model.safetensors` 207 MB
+- `#SBATCH --comment="field=robotics;appl=pytorch"` 는 필수(없으면 거부). 계산 노드도 인터넷이 돼서 Hub 다운로드·push 가 잡 안에서 된다
+
 ---
 
 ## 3. Eval
