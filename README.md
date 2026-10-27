@@ -188,7 +188,7 @@ uv run accelerate launch \
 > 🚨 베이스 진행 방향을 비우고, 비상정지에 손이 닿는 위치에서.
 
 - `<체크포인트>` → [`모델 체크포인트` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=259237510) · `<본인 단계 지시문>` → [`데이터 취득 현황` 탭](https://docs.google.com/spreadsheets/d/1pTFT3Cg3L735v0ujUAgG2XvwRv0q5obI8FIK4B0OZjw/edit#gid=1380290557)
-- `--dataset.repo_id` = `eval_` + 회차 식별자 → [eval 함정](#eval-함정)
+- eval 데이터셋 이름 = `eval_` + 회차 식별자 → [eval 함정](#eval-함정) — §3-3은 `--dataset.repo_id`로, §3-4는 YAML의 `dataset.repo_id`로 준다
 - 실행 중 뜨는 ERROR·경고 → [무해한 로그](#무해한-로그)
 
 ### 3-1. 연결 점검
@@ -250,6 +250,50 @@ uv run lerobot-record \
 - 리셋 구간 = 리더암으로 시작 자세·파지, 끝나면 `→`. 에피소드 구간은 정책 구동.
 - `--dataset.fps=21` = 녹화 주기(약 20.4 Hz)에 맞춘 페이싱 — base 과회전 처방이 이때만 켜진다 → [Base Serial Re-arm](#base-serial-re-arm)
 - ACT temporal ensembling은 **기본에서 뺐다**(제어 루프 20.8% 저하) — 붙이려면 [Eval](#eval)
+
+### 3-4. 단계 체이닝 실행 (stage_runner)
+
+**단계 4→5를 한 에피소드로 이어 돌리고 전환 시각을 JSONL로 남긴다** → [단계 체이닝 실행](#단계-체이닝-실행)
+
+**먼저 `configs/chain_task45.yaml`의 `dataset.repo_id`를 이번 회차 이름으로 바꾼다.**
+
+```yaml
+dataset:
+  repo_id: kiroaiseoul/eval_chain_task45_<본인_회차>   # 회차마다 새 이름
+```
+
+```shell
+uv run python -m stage_runner --config_path configs/chain_task45.yaml
+```
+
+- **회차마다 `dataset.repo_id`를 바꿀 것** — `LeRobotDataset.create()`가 `exist_ok=False`라 같은 이름이면 죽는다 → [eval 함정](#eval-함정)
+- **회차 이름은 YAML에 적는 것이 표준이다** — `--dataset.repo_id=…`로 덮어써도 똑같이 돌지만, 그러면 run 디렉터리의 `config.source.yaml`만으로 재현이 안 돼 그 인자를 사람이 다시 쳐야 한다 → [단계 체이닝 실행](#단계-체이닝-실행)
+- 통과 기준 = `outputs/stage_runner/<run_id>/events.jsonl`에 `trial_start` / `stage_start`×2 / `stage_end`×2 / **`transition`×2** / `trial_end`
+	- **전환 이벤트는 단계 수만큼 나온다(N-1이 아니다)** — 마지막 단계 뒤의 경계도 한 줄 남기고 거기선 `to_stage_id`가 `null`이다. 그 줄이 **베이스 정지 결과를 적는 유일한 자리**라(`stop_base_path` = `primary`·`fallback`·`failed`), 안 적으면 *마지막 정지가 조용히 실패한 회차*와 정상 회차가 파일 단위로 구별이 안 된다.
+- 마지막 단계는 **오른쪽 화살표**로 끝낸다(설정의 `terminator: type: manual`). 중간 단계는 타이머가 끊는다.
+- **종료 코드 4종** — 배치 스크립트는 JSONL을 안 열고 이 코드만 보므로, 코드마다 지시하는 행동이 다르다.
+
+| 코드 | 뜻 | 다음 행동 |
+|---|---|---|
+| `0` | 정상 종료 | 다음 회차 |
+| `1` | 시행 중단(`ESC`·`←`·단계 에러) — 측정으로 못 쓴다 | 회차를 다시 돌린다(YAML의 `dataset.repo_id` 새로) |
+| `2` | preflight 거부(설정·차원·run 디렉터리 충돌) — 로봇에 전원도 안 갔다 | 메시지가 가리키는 설정을 고친다 |
+| `3` | 🛑 **베이스 정지 실패 — 로봇이 계속 움직이는 중일 수 있다** | **배치를 멈추고 로봇을 직접 확인** |
+
+- 🛑 **`3`은 `1`보다 우선한다** — 중단이면서 베이스도 못 세운 회차는 `3`으로 나온다. `1`은 「이 시행은 측정이 아니다」, `3`은 「하드웨어를 보러 가라」로 지시가 다르고, `3`을 `1` 자리에 넣으면 배치가 그냥 재시도한다. 해당 경계는 `transition` 줄의 `stop_base_path: "failed"`이고, 정지 경로 둘(hold action·`set_cmd_vel` 직접 명령)이 **다 실패**했다는 뜻이다.
+	- 이 코드가 없던 동안 그런 회차는 **`0`으로 끝났다** — 단계는 전부 돌아 `trial_end`가 `reason: "completed"`였고, 종료 코드가 `terminated_by`에서만 유도돼 「베이스가 아직 돌고 있을 수 있다」는 결과만 코드에 닿지 못했다.
+	- ⚠️ **예외로 죽은 회차엔 `3`이 안 붙는다** — 트레이스백이 그대로 올라가 파이썬 자체 종료 코드로 끝나므로, 그 경우 베이스 정지 실패는 콘솔의 `stop_base: THE BASE MAY STILL BE MOVING` 에러 줄과 마지막 `transition` 줄로 확인한다.
+	- `stop_base_path: "fallback"`은 위험 표시가 **아니다**(`0`으로 끝난다) — 폴백이 베이스를 세웠다는 뜻이다(팔은 미명령·위치제어라 그대로 정지). 관측 읽기 도중 `Ctrl+C`를 누른 회차가 여기 해당한다.
+- ⚠️ **`ESC`·`←`는 시행 중단이고, 거기까지 찍힌 부분 에피소드는 그대로 저장된다** — `trial_end`가 `completed: false`로 남고 종료 코드는 1이다. 집계는 `completed`로 걸러내지만 **데이터셋엔 남으므로** 다음 회차는 YAML의 `dataset.repo_id`를 새로 준다.
+	- 🛑 **`←`는 재기록을 하지 않는다** — lerobot 리스너가 "Left arrow key pressed. Exiting loop and rerecord the last episode..."를 찍지만 이 실행기엔 재기록 분기가 없다. 그 메시지를 믿고 누르면 부분 체인이 eval 데이터셋에 들어간 채로 시행이 끝난다.
+- **성공·실패는 코드가 안 받는다** — 영상·필기로 남기고 이벤트의 `wall_clock_iso`로 붙인다
+- 집계는 따로 돌린다 — `uv run python -m stage_runner.aggregate outputs/stage_runner/*/events.jsonl --labels labels.csv --standalone standalone.csv`
+	- `labels.csv` = `run_id,stage_id,outcome` (회차별 단계 성패, 손으로 채움).
+	- `standalone.csv` = `stage_id,trials,successes,robot_type,fps,policy_path,measured_date` — **단계를 혼자 돌린 성공률**(시작 자세를 손으로 만들어 그 단계만 eval). **체이닝 손실비의 분모라 이 파일 없이는 손실비가 `UNAVAILABLE`로 찍힌다** — 체인 로그 안의 단계 성공률로 대신하면 비율이 `1/P(첫 단계)`로 붕괴해 이음매 정보가 하나도 안 남는다. 첫 단계는 예외(체인에서도 손으로 만든 시작 자세에서 출발하므로 그 값이 곧 standalone).
+		- 🛑 **뒤 네 열(provenance)은 필수다** — 이 행은 `stage_id` 하나로 체인 시행에 조인돼 분모가 되므로, 다른 로봇·다른 fps·다른 체크포인트에서 잰 성공률이 조용히 나눠 들어가도 몫은 여전히 「이음매에서 살아남은 비율」처럼 보인다. 체인 시행과 `robot_type`·`fps`·`policy_path`가 어긋나면 손실비는 계산하지 않고 `UNAVAILABLE`로 **거부**한다(축별로 양쪽 값을 찍어 준다).
+		- `measured_date`는 어긋나는 게 정상이라(별도 세션) 거부하지 않고 체인 시행과의 최대 간격을 일 단위로 보고하며, 14일을 넘기면 경고만 한다 — 검토 트리거지 유효기간이 아니다.
+		- ⚠️ **빈 칸은 「같은 조건」이 아니라 「모르는 조건」이라 열 이름을 대며 거부된다.** 열 세 개짜리 옛 파일도 빠진 열을 나열하며 거부되므로, 이미 손으로 만들어 둔 `standalone.csv`가 있으면 네 열을 채워 넣고 다시 돌린다.
+- **전체 인자는 이 README가 아니라 `configs/chain_task45.yaml` 주석이 정본** — 로봇 IP·카메라 시리얼·정책·타이머·회차별 저장 이름이 전부 거기 있고, 명령줄에 남는 것은 `--config_path` 하나뿐이다
 
 ---
 
@@ -372,6 +416,21 @@ eval도 `lerobot-record`로 돌린다. **`--policy.path` 유무가 데이터 취
 | `Control loop rate over last 30 frames (phase=policy, target=30 Hz): mean=20.9 Hz …` (초당 1줄) | 실주기 계측. 취득 파이프라인의 천장(카메라 USB 대역·base 시리얼)이 ~21.5 Hz라 **target 30에 못 미치는 것이 정상**이다. 취득 로그의 같은 줄과 나눠서 base 과회전 배수를 본다 → [Environment Variables](#environment-variables) |
 
 - 🛑 반대로 **`→`·`←`·`ESC`가 아무 반응이 없는데 에러도 없으면** 세션이 Wayland다. `echo $XDG_SESSION_TYPE`으로 확인하고 "GNOME on Xorg"로 재로그인 → [Quickstart Guide](https://github.com/kiro-ai-division/mobile-ai-quickstart-guide#작업-pc-준비)
+
+## 단계 체이닝 실행
+
+`lerobot-record`가 아니라 `python -m stage_runner`로 돈다. 학습된 정책을 단계 순서대로 이어 돌리고 전 구간을 **에피소드 하나**로 기록하며, 단계 시작·종료·전환을 `events.jsonl`에 남긴다. 인자는 전부 `configs/chain_task45.yaml`에 있으므로 여기엔 함정만 적는다.
+
+- 🛑 **타이머 값은 30 fps 전제다** — `timeout_s`는 P0 실측 p95를 「프레임 수 ÷ 30」으로 환산한 값이라, 실제 제어 루프가 그보다 느리면 같은 액션 시퀀스가 더 긴 벽시계 시간에 걸쳐 나가 **타이머가 단계를 덜 끝난 채로 자른다**(팔은 느려지고 속도명령을 받는 base는 반대로 과회전한다). 실행기는 이걸 대신 잡아 주지 않는다 — **첫 실행 뒤 `events.jsonl`의 단계별 `hertz`를 먼저 읽고** 타이머를 정한다.
+- ⚠️ **정책은 `connect` 전에 한 번 예열(더미 forward)된다** — 안 하면 각 정책의 **첫 `select_action`이 CUDA 커널 로드·cuDNN 알고리즘 선택 비용을 그 단계 첫 프레임 안에서** 물어 그 단계 `hertz`가 낮게 찍히고, 위 바로 그 값으로 타이머를 정하게 된다(짧은 단계일수록 왜곡이 크다). 예열이 실패하면 **경고 한 줄만 남기고 실행은 계속**된다.
+	- **예열 여부는 터미널이 아니라 `trial_start`의 `policies[].warmed_up`에서 확인한다** — `false`면 그 단계의 `hertz`는 첫 추론 비용을 포함한 **낮게 편향된 값**이라 타이머 근거로 쓰면 안 된다. 경고는 콘솔에만 뜨고 로그 파일로는 안 남아(`init_logging(log_file=None)`) 스크롤이 지나가면 사라지므로, **회차별 판정은 JSONL 쪽이 정본**이다.
+- 🛑 **정책·로봇 state 차원이 어긋나면 connect 전에 죽는다** — `robot.include_base_in_state`를 체크포인트의 state 차원과 맞춘다 → [Base Velocity in the Observation State](#base-velocity-in-the-observation-state). 차원은 막지만 **단위는 아무도 안 막는다** — `meta/info.json`에 단위 표기가 없어 rad 가정을 대조할 대상 자체가 없고, 그 가정은 실행마다 복사되는 `config.source.yaml` 주석에만 남는다.
+- 🛑 **lerobot은 `>=0.4.4,<0.5`로 고정** — 0.6.0에서 `lerobot-record`의 `--policy.path`가 사라지고 정책 구동이 `lerobot-rollout`으로 분리됐다. 이 실행기가 붙는 이음매(`record_loop`)가 upstream에서 이미 재편됐으므로, 시작할 때 버전을 다시 확인하고 벗어나면 거기서 죽는다.
+- ⚠️ **강제 종료(SIGKILL·정전) 시 베이스를 세우는 코드는 없다** — 정상 종료도 예외도 `finally`의 `disconnect()`가 `set_cmd_vel(0, 0)`으로 세우지만, 그 층은 하드킬에 안 걸린다. 제대로 된 처방은 베이스 펌웨어의 명령 타임아웃이고 이 실행기의 층이 아니다. **P1의 대비는 옆에서 비상정지를 잡고 있는 사람이다.**
+- ⚠️ **temporal ensembling을 실행기가 안 건드린다** — §3-3의 eval 명령은 `--policy.temporal_ensemble_coeff=0.01 --policy.n_action_steps=1`을 강제하지만, 체이닝 실행은 체크포인트 `config.json`의 값을 그대로 쓴다(60k ACT 체크포인트 둘 다 `null`·`100` = ensembling 꺼짐 + 100스텝 청크) → [Eval](#eval). **단계별 eval과 체이닝 결과를 나란히 놓으면 추론 설정부터 다르다.** 회차별 실제 값은 `events.jsonl`의 `trial_start.policies[].temporal_ensemble_coeff`·`n_action_steps`에 기록된다.
+- ⚠️ **단계와 단계 사이에 누른 `→`는 버려진다** — 단계가 끝나고 다음 단계가 시작되기 전(종료 판정·`stage_end` 기록·베이스 정지·전환 기록) 구간엔 돌고 있는 루프가 없어서 그 키를 소비할 데가 없다. 그냥 두면 다음 단계가 첫 프레임에서 끊겨 **0프레임짜리 단계**가 기록되므로, 실행기가 그 플래그를 지우고 콘솔에 `WARNING`을 남긴다. **`ESC`·`←`(중단)는 반대로 버리지 않는다** — 그건 시행 전체에 대한 의사표시라 다음 단계 시작 전에 읽혀 시행이 중단된다.
+- ⚠️ **회차 이름은 YAML에 적는다** — draccus는 모든 필드를 점 표기 CLI로도 받으므로 `--dataset.repo_id=…`로 덮어써도 돈다. 다만 그 값은 입력 파일 그대로의 사본인 `config.source.yaml`에 안 남고 `config.resolved.yaml`(재파싱 불가)에만 남아, 재현하려면 사람이 그 인자를 다시 쳐야 한다. YAML에 적어 두면 **사본 하나로 회차가 재현된다.**
+- ⚠️ **재실행은 `config.source.yaml`로 한다** — run 디렉터리의 두 스냅샷 중 `config.resolved.yaml`은 **기록 전용**이다. `draccus.dump`가 카메라 enum을 `!!python/object/apply:` 태그로 적어 다시 파싱하면 `ConstructorError`로 죽는다. 「내가 뭘 고쳤나」는 source가, 「CLI 오버라이드까지 합쳐 무엇이 돌았나」는 resolved가 답한다.
 
 ## 학습
 
@@ -526,6 +585,7 @@ uv run accelerate launch \
 | **Base latency switches** (experimental) | Switches for two latency causes of base over-rotation during eval — the chunk boundary stall and the command-to-velocity lag — plus a demo replay bench, for A/B runs with one checkpoint. All off by default; with none set nothing is installed. | [below](#base-latency-switches) |
 | **Chunk seam smoothing** (experimental) | RTC guidance for the prefetched chunk and a quintic blend of the arm jump at each chunk swap, plus arm-seam columns in the execution log. Off by default. | [below](#chunk-seam-smoothing) |
 | **Single-wheel torch pin** | `torch` 2.8–2.10 on the cu128 index with `torchcodec` left on PyPI, so one lockfile covers Volta (V100), Ampere (RTX 3090/A6000) and Blackwell (RTX 5090). `.python-version` pins the interpreter so every clone resolves alike. | [#28](https://github.com/kiro-ai-division/lerobot_trossen/pull/28), [#30](https://github.com/kiro-ai-division/lerobot_trossen/pull/30) |
+| **Stage runner** | Chains trained policies stage by stage into one episode and logs every transition as JSONL, so the stage boundary is measurable afterwards. Separate entry point (`python -m stage_runner`); `lerobot-record` is untouched. | [above](#단계-체이닝-실행) - [#48](https://github.com/kiro-ai-division/lerobot_trossen/pull/48) |
 
 See the [LeRobot documentation](https://huggingface.co/docs/lerobot) and the [Trossen AI documentation](https://docs.trossenrobotics.com/trossen_arm/main/tutorials/lerobot_plugin.html) for anything beyond this fork.
 
