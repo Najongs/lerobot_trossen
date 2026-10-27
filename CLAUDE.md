@@ -10,6 +10,10 @@
 > `docs/HANDOFF_najy_1006.md`(DGX 경로·오프라인 도구·주의사항).
 > DGX 에서는 이 레포 패키지를 import 하지 마라(로봇 SDK 를 끌어온다), push 는 `najongs` 원격(fork)으로.
 
+> **KISTI 한강(`/home01/t591a06/NAS/lerobot_trossen`)에서 열었다면** — 학습 전용이다. 맨 위 머리말(`CLAUDE_CONFIG_DIR`)은 해당 없다.
+> 로봇 코드는 설치·import 만 되고 실행 대상이 아니다. 학습은 로그인 노드가 아니라 `sbatch` 로 (전역 host 파일 「이 머신」 절).
+> 설치는 아래 「실행 규약」의 aarch64 항목대로. push 는 `origin`(fork).
+
 Trossen Mobile AI(WidowX AI 팔 4대 + SLATE 베이스 + RealSense 3대)용 lerobot 플러그인 fork.
 11단계 실험실 작업(튜브→비커→냉장고→선반)을 ACT 로 녹화·학습·실기 eval 한다.
 명령·인자의 정본은 `README.md`. 학습 쪽 배경은 `docs/` 의 NAJY 문서들(아래 「실험」).
@@ -18,6 +22,10 @@ Trossen Mobile AI(WidowX AI 팔 4대 + SLATE 베이스 + RealSense 3대)용 lero
 - 환경: **uv + Python 3.11** (`.python-version`). conda 안 씀. 레포 루트에서 `uv run …` (README §0, 7429a76)
 - 실측 `.venv`: lerobot 0.4.4 · torch 2.10.0+cu128 · transformers 4.53.3(fork) · trossen_slate 0.0.3. `--extra pi0` 없이 sync 된 상태
 - torch 는 2.8~2.10 cu128 고정 — 올리지 마라 (dc52029, 4d8963a)
+- **aarch64(GH200 등)**: lock 의 `torchcodec` 0.10 · `pyrealsense2` 는 aarch64 휠이 없다 — lock 은 그대로 두고
+  `uv sync --frozen --no-install-package torchcodec --no-install-package pyrealsense2`, 이후 실행은 `uv run --frozen --no-sync`
+  (`--no-sync` 를 빼면 매번 torchcodec 에서 실패). 시스템 Python 에 헤더가 없으면 evdev 빌드가 깨지니 `UV_PYTHON_PREFERENCE=only-managed`.
+  비디오 디코딩은 lerobot 이 자동으로 pyav 로 떨어진다 — FFmpeg 불필요. torch 2.10 cu128 · sm_90 동작 확인 (한강 GH200, 2026-10-27)
 - 환경변수 전체 표: README §Environment Variables. 기본 ON: `LEROBOT_FAST_OBS` · `LEROBOT_LOOP_HZ_LOG` · `LEROBOT_BASE_SERIAL_REARM`
 - 진입점: 녹화 `uv run lerobot-record` · 학습 `uv run accelerate launch -m lerobot.scripts.lerobot_train` ·
   다단계 ACT eval `scripts/eval_najy.sh <M1|M2|M3|repo> <단계> <exec> [ep]` (`DRY_RUN=1` 지원) · SmolVLA `scripts/eval_smolvla.sh`
