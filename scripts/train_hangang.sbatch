@@ -5,7 +5,7 @@
 #   cd /scratch/$USER && sbatch --export=ALL,DATASET=kiroaiseoul/<repo>,RUN=<name> \
 #       ~/lerobot_trossen/scripts/train_hangang.sbatch
 # Without STEPS it is the 10-step smoke run of §2-1 (no Hub push). For the real run:
-#   sbatch --time=12:00:00 --export=ALL,DATASET=...,RUN=...,STEPS=60000,SAVE_FREQ=20000,\
+#   $ sbatch --time=12:00:00 --export=ALL,DATASET=...,RUN=...,STEPS=60000,SAVE_FREQ=20000,\
 #       POLICY_REPO=kiroaiseoul/act_<stage>_<steps> ~/lerobot_trossen/scripts/train_hangang.sbatch
 #
 #SBATCH --job-name=act-train
@@ -39,6 +39,7 @@ export UV_CACHE_DIR=/scratch/$USER/.cache/uv
 export UV_PYTHON_INSTALL_DIR=/appsdata/$USER/uv-python
 export UV_PYTHON_PREFERENCE=only-managed
 export HF_HOME=/scratch/$USER/.cache/huggingface
+export TORCH_HOME=/scratch/$USER/.cache/torch   # ACT's resnet18 backbone weights
 # The token stays where `hf auth login` on the login node wrote it.
 export HF_TOKEN_PATH=${HF_TOKEN_PATH:-$HOME/.cache/huggingface/token}
 # Single node: no OFI plugin (it fails NCCL init on one node).
@@ -68,6 +69,13 @@ if [[ -n "${POLICY_PATH:-}" ]]; then
 else
   POLICY_ARGS=(--policy.type=act)
 fi
+# Fetch the dataset in ONE process first. Inside accelerate the other ranks wait
+# for rank 0 at NCCL init with a 10 min limit, and a slow Hub download (a 477 MB
+# dataset stalled 9 min on one file, job 1154115) kills the run there.
+uv run --frozen --no-sync python -c \
+  "import sys; from lerobot.datasets.lerobot_dataset import LeRobotDataset as D; d = D(sys.argv[1]); print('dataset', sys.argv[1], d.num_episodes, 'episodes', d.num_frames, 'frames')" \
+  "$DATASET"
+
 MULTI=()
 [[ "$NPROC" -gt 1 ]] && MULTI=(--multi_gpu)
 

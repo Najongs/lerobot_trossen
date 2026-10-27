@@ -221,6 +221,8 @@ tail -f /scratch/$USER/act-train-<잡번호>.out
 - GPU 4장 × `BATCH=16` = 유효 배치 64 (2-2 와 같음). 출력은 `/appsdata/$USER/lerobot_trossen/outputs/<RUN>` — 자동 삭제 없음. 같은 `RUN` 이 있으면 스크립트가 거부한다
 - `STEPS` 를 안 주면 스모크, 주면 `POLICY_REPO` 필수(🛑 [2-4](#2-4-체크포인트에서-이어-학습-warm-start) 와 같은 이유로 부모 repo 재사용 금지). warm start 는 `POLICY_PATH=<체크포인트>` 를 더한다(`--policy.type` 대신 `--policy.path` 로 바뀜). 그 밖의 lerobot 인자는 `TRAIN_ARGS="…"` 로
 - 잡 최대 **24시간**, 실행 5개·제출 5개. 데이터셋 캐시는 `/scratch/$USER/.cache/huggingface` (15일 안 읽으면 지워지지만 다시 받으면 된다)
+- 스크립트는 `accelerate launch` 전에 **데이터셋을 단일 프로세스로 먼저 받는다** — 4 프로세스가 뜬 뒤 받으면 나머지 rank 가 NCCL 초기화에서 10분 제한으로 죽는다(477 MB 데이터셋이 한 파일에서 9분 멈춘 잡에서 실제로 났다)
+- 실측(2026-10-28, `kiroaiseoul/task07_open_refrigerator_new` 43 에피소드): 스모크 잡 전체 1분 26초, `Effective batch size: 16 x 4 = 64`, `model.safetensors` 207 MB
 - `#SBATCH --comment="field=robotics;appl=pytorch"` 는 필수(없으면 거부). 계산 노드도 인터넷이 돼서 Hub 다운로드·push 가 잡 안에서 된다
 
 ---
