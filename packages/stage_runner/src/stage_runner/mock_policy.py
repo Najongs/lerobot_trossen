@@ -23,8 +23,6 @@ import torch
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.utils.constants import ACTION, OBS_STATE
 
-from stage_runner.completion import PROGRESS_KEY
-
 if TYPE_CHECKING:
     from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 
@@ -34,78 +32,13 @@ logger = logging.getLogger(__name__)
 
 MOCK_POLICY_HOLD: str = "hold"
 MOCK_POLICY_SINE: str = "sine"
-# The two chain modes. Both HOLD the arms -- a chain's motion comes from the
-# resets, and a mock that also swept a joint could not satisfy the completion
-# monitor's stall window, so the two failures would be inseparable.
-#
-# `progress` ramps the 17th action slot 0 -> 1 and holds 1: the monitor's
-# positive path (p held AND stalled AND past p10).
-# `stuck`    leaves it at 0.0 forever: the monitor NEVER fires, the stage runs
-#            to p90 x timeout_factor, and the chain fails. This is the only way
-#            to exercise the failure path without a real policy that refuses to
-#            finish -- which, per §93, M1 actually does on t04.
-#
-# `progress` also DEPARTS: it ramps one arm joint away from the pose the stage
-# started at over the first few ticks and then holds. That is not decoration --
-# `completion.CompletionMonitorStep` refuses to declare any stage complete
-# until the measured arm has left its designated start pose (or the base has
-# driven), because the designated START pose of t03, t04 and t10 is within
-# 0.001 rad of one of that stage's own END poses and a policy that predicts a
-# stop on the first chunk would otherwise "complete" eleven stages having moved
-# nothing. A mock that held still could not reach the success path at all, so a
-# mock that holds still is no longer a model of a policy that does the task.
-#
-# `stuck` departs NOTHING, which is now two failures in one fixture: no progress
-# AND no departure. Its timeout reason names the second.
-MOCK_POLICY_PROGRESS: str = "progress"
-MOCK_POLICY_STUCK: str = "stuck"
-# `nan` behaves exactly like `progress` for _NAN_AFTER_TICKS ticks and then puts a
-# NaN in one arm joint, forever. It exists for ONE path: the finite-action gate
-# (finite_gate.py), which is the last thing between a policy's output and the
-# arms. There is no other way to exercise it end to end -- a NaN is produced by a
-# corrupted normalizer or an fp16 overflow, and neither is something a test can
-# arrange in a real checkpoint. The delay matters: the stage has to have started
-# normally, so that what the run shows is a chain BROKEN mid-stage rather than one
-# that never began.
-MOCK_POLICY_NAN: str = "nan"
-MOCK_POLICY_NAMES: tuple[str, ...] = (
-    MOCK_POLICY_HOLD,
-    MOCK_POLICY_SINE,
-    MOCK_POLICY_PROGRESS,
-    MOCK_POLICY_STUCK,
-    MOCK_POLICY_NAN,
-)
-# How many ticks `nan` runs cleanly before it emits one.
-_NAN_AFTER_TICKS: int = 4
-# Modes that write the progress slot. A dataset whose action does not declare
-# `progress` makes these indistinguishable from `hold`, which is why
-# make_mock_bundle says so out loud.
-MOCK_POLICY_PROGRESS_MODES: tuple[str, ...] = (
-    MOCK_POLICY_PROGRESS,
-    MOCK_POLICY_STUCK,
-    MOCK_POLICY_NAN,
-)
-
-# How long `progress` takes to ramp p from 0 to 1. Shorter than any stage's p10
-# in tests/data/stage_params_mock.json, so the ramp is never what the completion
-# is waiting for -- the stall window and the p10 floor are.
-_PROGRESS_RAMP_S: float = 0.2
+MOCK_POLICY_NAMES: tuple[str, ...] = (MOCK_POLICY_HOLD, MOCK_POLICY_SINE)
 
 # Small and slow on purpose: the smoke stages are one second long, and a sweep
 # large enough to be visible per frame would look like a runaway command in the
 # recorded observation.state rather than a mock.
 _SINE_AMPLITUDE_RAD: float = 0.05
 _SINE_FREQUENCY_HZ: float = 0.2
-
-# `progress`'s departure: how far one joint leaves the stage's start pose, and
-# over how many ticks. 0.27 rad clears the monitor's 0.10 rad departure
-# threshold with room for the reset's own 0.05 rad arrival tolerance, and
-# 0.09 rad per tick stays under the real robot's 0.1 rad max_relative_target so
-# the trajectory is one the clamp would not have to touch. Three ticks, so the
-# arm is parked again well before the 0.4 s stall window the mock config asks
-# for can be covered -- the mock must not be what the completion is waiting on.
-_DEPART_RAD: float = 0.27
-_DEPART_TICKS: int = 3
 
 
 @dataclass
@@ -133,13 +66,10 @@ class MockPolicyConfig:
 class MockPolicy:
     """Emits an action built from the observation instead of from weights.
 
-    Every mode holds the arm joints at the position the observation reports and
-    forces the base velocity keys to 0.0, so the mock NEVER commands the base.
-    Two modes move one arm joint: ``sine`` sweeps it, and ``progress`` steps it
-    ``_DEPART_RAD`` away over ``_DEPART_TICKS`` and then holds (see
-    MOCK_POLICY_PROGRESS -- the completion monitor will not declare a stage
-    complete that never left its start pose). The mapping is by NAME, not by
-    index, because observation.state drops the base keys when
+    Both modes hold every arm joint at the position the observation reports and
+    force the base velocity keys to 0.0, so the mock never commands the base and
+    the only motion in a smoke run is the one joint ``sine`` sweeps. The mapping
+    is by NAME, not by index, because observation.state drops the base keys when
     ``include_base_in_state`` is false while the action never does.
 
     ``hold`` TRACKS THE PRESENT POSITION rather than anchoring to the first
@@ -174,18 +104,8 @@ class MockPolicy:
             (index for index, name in enumerate(action_names) if name.endswith(".pos")),
             None,
         )
-        # The 17th slot, when the dataset declares it. None means the action is
-        # 16-D, and then `progress` / `stuck` behave exactly like `hold` --
-        # make_mock_bundle warns, because a chain test that silently lost its
-        # progress signal would look like a monitor bug.
-        self._progress_index: int | None = (
-            list(action_names).index(PROGRESS_KEY)
-            if PROGRESS_KEY in action_names
-            else None
-        )
         self._step = 0
         self._sweep_anchor: float | None = None
-        self._depart_anchor: float | None = None
 
     def reset(self) -> None:
         # record_loop calls this on entry to EVERY stage, which is what flushes a
@@ -193,10 +113,6 @@ class MockPolicy:
         # what makes that per-stage reset observable in the recorded data.
         self._step = 0
         self._sweep_anchor = None
-        # Re-anchored per stage, so each stage departs from ITS OWN start pose
-        # (the one the boundary reset just drove to) rather than from the first
-        # stage's.
-        self._depart_anchor = None
 
     def select_action(self, batch: dict[str, Any]) -> torch.Tensor:
         state = batch[OBS_STATE].squeeze(0).tolist()
@@ -216,38 +132,6 @@ class MockPolicy:
             values[self._sweep_index] = (
                 self._sweep_anchor + _SINE_AMPLITUDE_RAD * math.sin(phase)
             )
-        if (
-            self._mode in (MOCK_POLICY_PROGRESS, MOCK_POLICY_NAN)
-            and self._sweep_index is not None
-        ):
-            # DEPART, then hold. Anchored on the first frame after reset, like
-            # the sine sweep and for the same reason: an offset added to the
-            # current observation every frame integrates into an unbounded ramp,
-            # because the arm follows every command.
-            if self._depart_anchor is None:
-                self._depart_anchor = values[self._sweep_index]
-            fraction = min(1.0, (self._step + 1) / _DEPART_TICKS)
-            values[self._sweep_index] = (
-                self._depart_anchor + _DEPART_RAD * fraction
-            )
-        if (
-            self._mode == MOCK_POLICY_NAN
-            and self._sweep_index is not None
-            and self._step >= _NAN_AFTER_TICKS
-        ):
-            # The fault, after the stage has started normally. ONE joint, because
-            # that is what a single bad normalizer statistic produces, and it is
-            # the hardest case for a gate that only looked at the first value.
-            values[self._sweep_index] = float("nan")
-        if self._progress_index is not None:
-            if self._mode in (MOCK_POLICY_PROGRESS, MOCK_POLICY_NAN):
-                # Tick-based, like the reset ramp: the loop's real rate is
-                # whatever the machine gives it, and a wall-clock ramp would
-                # make the test's timing depend on it.
-                ramp_ticks = max(1, round(_PROGRESS_RAMP_S * self._fps))
-                values[self._progress_index] = min(1.0, self._step / ramp_ticks)
-            elif self._mode == MOCK_POLICY_STUCK:
-                values[self._progress_index] = 0.0
         self._step += 1
         # [1, action_dim]: make_robot_action squeezes the batch dimension back
         # off and zips what is left against ds_features[ACTION]["names"].
@@ -307,14 +191,6 @@ def make_mock_bundle(
         mode=mode,
         fps=dataset_meta.fps,
     )
-    if mode in MOCK_POLICY_PROGRESS_MODES and PROGRESS_KEY not in action_names:
-        logger.warning(
-            f"Stage '{stage_id}' asks for mock policy '{mode}', but the dataset's "
-            f"action does not declare '{PROGRESS_KEY}' ({len(action_names)}-D). "
-            f"The mode degrades to '{MOCK_POLICY_HOLD}' and no progress signal is "
-            "produced -- set chain.model.has_progress: true so "
-            "record_adapter.build_dataset_features declares the 17th feature."
-        )
     logger.info(
         f"Stage '{stage_id}' uses mock policy '{mode}' "
         f"({len(state_names)}-dim state -> {len(action_names)}-dim action)"

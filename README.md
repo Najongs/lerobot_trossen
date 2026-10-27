@@ -294,6 +294,7 @@ uv run python -m stage_runner --config_path configs/chain_task45.yaml
 		- `measured_date`는 어긋나는 게 정상이라(별도 세션) 거부하지 않고 체인 시행과의 최대 간격을 일 단위로 보고하며, 14일을 넘기면 경고만 한다 — 검토 트리거지 유효기간이 아니다.
 		- ⚠️ **빈 칸은 「같은 조건」이 아니라 「모르는 조건」이라 열 이름을 대며 거부된다.** 열 세 개짜리 옛 파일도 빠진 열을 나열하며 거부되므로, 이미 손으로 만들어 둔 `standalone.csv`가 있으면 네 열을 채워 넣고 다시 돌린다.
 - **전체 인자는 이 README가 아니라 `configs/chain_task45.yaml` 주석이 정본** — 로봇 IP·카메라 시리얼·정책·타이머·회차별 저장 이름이 전부 거기 있고, 명령줄에 남는 것은 `--config_path` 하나뿐이다
+- 단계마다 팔을 학습 데이터의 대표 시작 자세로 옮긴 뒤 시작하려면(선택) → [packages/stage_runner/README.md](packages/stage_runner/README.md#단계-시작-자세-start_pose)
 
 ---
 
@@ -639,6 +640,14 @@ goal_time = max( min_time_to_move,  max_j( |delta_j| / (velocity_safety_factor *
 9.4248 rad/s, joints 0-2: 2*pi, gripper 0.25 m/s). `blocking=False` is unchanged, so the
 following loop iterations simply catch up. This supersedes `max_relative_target`, which caps
 the delta but guarantees nothing about velocity.
+
+Each follower also records the trajectory it last handed the driver: `last_command_sent_s`
+(`time.perf_counter()`) and `last_command_goal_time_s` (the paced `goal_time` above, or 2.0 s for
+the blocking staged moves). trossen_arm 1.9.0 builds a new trajectory from the *commanded*
+position, velocity and acceleration of the one still running, so a long move sent mid-way
+through a short one inherits its acceleration, amplified with the horizon squared. A caller that
+sends a long move straight after a frame - the stage runner's start pose move - waits until
+`sent + goal_time` has passed first (`packages/stage_runner/README.md`, `start_pose`).
 
 | Config field | Default | Effect |
 | ------------ | ------- | ------ |

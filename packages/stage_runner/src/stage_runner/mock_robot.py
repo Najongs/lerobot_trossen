@@ -14,6 +14,7 @@ code.
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,31 +35,53 @@ MOCK_ROBOT_TYPE: str = "stage_runner_mock_robot"
 # it, which is a different module's business.
 _JOINT_SEED_STEP_RAD: float = 0.1
 
-# The 14 names MobileAIRobot emits, in its order: each arm is 6 joints plus the
-# gripper carriage, prefixed by side (BiWidowXAIFollowerRobot.observation_features
-# builds `f"left_{key}"` / `f"right_{key}"` over
-# WidowXAIFollowerConfig.joint_names, whose last entry is "left_carriage_joint"
-# for BOTH arms -- hence "right_left_carriage_joint", which looks like a typo and
-# is not).
-#
-# The 12 the chain resets are the `_joint_` ones; the two carriages are the
-# grippers and are held, not interpolated.
-REALISTIC_JOINT_NAMES: tuple[str, ...] = (
-    "left_joint_0",
-    "left_joint_1",
-    "left_joint_2",
-    "left_joint_3",
-    "left_joint_4",
-    "left_joint_5",
-    "left_left_carriage_joint",
-    "right_joint_0",
-    "right_joint_1",
-    "right_joint_2",
-    "right_joint_3",
-    "right_joint_4",
-    "right_joint_5",
-    "right_left_carriage_joint",
+# `arm_layout` values. "flat" is the original mock (joint_0..joint_N-1, no arm
+# membership) and stays the default so every existing smoke config runs
+# byte-for-byte as before. "bimanual" reproduces the Mobile AI kit's names and
+# structure -- left_/right_ prefixes, a gripper joint last per arm, and
+# robot.arms.<side>.driver -- which is what reposition.arm_handles reads, so the
+# start pose path runs through the same code on the mock as on hardware.
+ARM_LAYOUT_FLAT: str = "flat"
+ARM_LAYOUT_BIMANUAL: str = "bimanual"
+
+# One WidowX AI arm's joint names, copied from WidowXAIFollowerConfig.joint_names
+# (config_widowxai_follower.py) rather than imported, so the mock keeps working
+# on an interpreter without the Trossen package.
+_WIDOWXAI_JOINT_NAMES: tuple[str, ...] = (
+    "joint_0",
+    "joint_1",
+    "joint_2",
+    "joint_3",
+    "joint_4",
+    "joint_5",
+    "left_carriage_joint",
 )
+_BIMANUAL_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("left_arm", "left_"),
+    ("right_arm", "right_"),
+)
+# PLACEHOLDERS, not measurements: the shape of TrossenArmDriver.get_joint_limits()
+# so the pacing arithmetic has something to divide by. The 3*pi on joints 3-5 is
+# the figure widowxai_follower.py's pacing comment quotes for joints 3 and 4;
+# the rest are round numbers. Nothing about the real arm's limits is asserted by
+# a test that uses these.
+_MOCK_VELOCITY_MAX: tuple[float, ...] = (
+    3.14159,
+    3.14159,
+    3.14159,
+    9.42478,
+    9.42478,
+    9.42478,
+    1.0,
+)
+_MOCK_POSITION_LIMIT_RAD: float = 6.28318
+# WidowXAIFollowerConfig.velocity_safety_factor's default.
+_MOCK_VELOCITY_SAFETY_FACTOR: float = 0.4
+# The goal_time the mock records for every send_action: WidowXAIFollower's
+# minimum window at its defaults, min_time_to_move_multiplier / loop_rate =
+# 3.0 / 30. The mock does not reproduce the follower's pacing stretch, so a
+# test that needs a longer previous trajectory sets the record itself.
+_MOCK_MIN_TIME_TO_MOVE_S: float = 3.0 / 30
 
 
 @RobotConfig.register_subclass(MOCK_ROBOT_TYPE)
@@ -67,26 +90,130 @@ class MockRobotConfig(RobotConfig):
     # 14 = the two 7-joint WidowXAI arms of the Mobile AI kit, so the smoke
     # path's state/action dimensions match the real asset without hardware.
     joint_count: int = 14
-    # Use the REAL Mobile AI joint names instead of joint_0..joint_N-1.
-    #
-    # The chain needs them. Its reset targets, its completion monitor and its
-    # stage_params.json are all keyed by NAME -- deliberately, because index
-    # assumptions are the documented data-layout hazard on this rig (16-D real
-    # recordings are [left7, right7, x.vel, theta.vel] while the MuJoCo teleop
-    # layout puts the base first, and mixing them matches the dimension and is
-    # quietly wrong). A flat joint_0..13 mock therefore cannot exercise any of
-    # it: every name lookup would miss.
-    #
-    # Off by default so the inherited version 1 smoke config keeps the names its
-    # frozen assertions were written against. Only honoured at joint_count 14,
-    # because the real arm pair IS 14 and there is no sensible 8-joint subset of
-    # a name list that means "left arm plus right arm".
-    realistic_joint_names: bool = False
     # Same meaning as MobileAIRobotConfig.include_base_in_state: dropping the
     # base from the observation shortens observation.state but NOT the action.
     # Reproduced here because that asymmetry is what preflight's separate state
     # and action dimension checks exist for.
     include_base_in_state: bool = True
+    # "flat" (default) or "bimanual" -- see ARM_LAYOUT_BIMANUAL. bimanual is
+    # always 2 x 7 joints, so joint_count must stay 14 with it.
+    arm_layout: str = ARM_LAYOUT_FLAT
+
+
+@dataclass(frozen=True)
+class _MockJointLimit:
+    """The three attributes reposition reads off a trossen_arm.JointLimit."""
+
+    velocity_max: float
+    position_min: float
+    position_max: float
+
+
+@dataclass
+class _MockArmConfig:
+    joint_names: list[str]
+    velocity_safety_factor: float = _MOCK_VELOCITY_SAFETY_FACTOR
+
+
+class MockArmDriver:
+    """The slice of TrossenArmDriver the start pose move uses, over the mock's joints.
+
+    Reads and writes the robot's own joint dict, so a pose set here is what the
+    next get_observation reports and what the next stage's policy starts from.
+    The move completes instantly -- no goal_time is slept, which is what keeps
+    the smoke run fast and also why nothing here is evidence about timing.
+
+    Every call is RECORDED, and the gripper methods exist only to be recorded:
+    the feature under test must never reach them, and a test can only assert
+    "the gripper got nothing" if a call to it would leave a trace.
+    """
+
+    def __init__(self, robot: "MockRobot", prefix: str) -> None:
+        self._robot = robot
+        self._prefix = prefix
+        self.arm_position_commands: list[dict[str, Any]] = []
+        self.gripper_commands: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        # Test hooks. raise_on_set: the exception set_arm_positions raises (the
+        # controller refusing a goal). stall_joint: an arm joint name that does
+        # not move, to model a joint blocked by contact.
+        self.raise_on_set: BaseException | None = None
+        self.stall_joint: str | None = None
+
+    @property
+    def _arm_names(self) -> list[str]:
+        return list(_WIDOWXAI_JOINT_NAMES[:-1])
+
+    def get_arm_positions(self) -> list[float]:
+        return [
+            self._robot._joint_positions[f"{self._prefix}{name}"]
+            for name in self._arm_names
+        ]
+
+    def get_all_positions(self) -> list[float]:
+        return [
+            self._robot._joint_positions[f"{self._prefix}{name}"]
+            for name in _WIDOWXAI_JOINT_NAMES
+        ]
+
+    def get_joint_limits(self) -> list[_MockJointLimit]:
+        return [
+            _MockJointLimit(
+                velocity_max=v_max,
+                position_min=-_MOCK_POSITION_LIMIT_RAD,
+                position_max=_MOCK_POSITION_LIMIT_RAD,
+            )
+            for v_max in _MOCK_VELOCITY_MAX
+        ]
+
+    def set_arm_positions(
+        self, goal_positions: list[float], goal_time: float = 2.0, blocking: bool = True
+    ) -> None:
+        self.arm_position_commands.append(
+            {
+                "goal_positions": [float(value) for value in goal_positions],
+                "goal_time": float(goal_time),
+                "blocking": bool(blocking),
+            }
+        )
+        if self.raise_on_set is not None:
+            raise self.raise_on_set
+        if len(goal_positions) != len(self._arm_names):
+            # The real driver's contract: "The size of the vectors should be
+            # equal to the number of arm joints."
+            raise ValueError(
+                f"set_arm_positions got {len(goal_positions)} values for "
+                f"{len(self._arm_names)} arm joints"
+            )
+        for name, value in zip(self._arm_names, goal_positions, strict=True):
+            if name == self.stall_joint:
+                continue
+            self._robot._joint_positions[f"{self._prefix}{name}"] = float(value)
+
+    def set_all_positions(self, *args: Any, **kwargs: Any) -> None:
+        self.gripper_commands.append(("set_all_positions", args, kwargs))
+
+    def set_gripper_position(self, *args: Any, **kwargs: Any) -> None:
+        self.gripper_commands.append(("set_gripper_position", args, kwargs))
+
+
+class _MockArm:
+    def __init__(self, robot: "MockRobot", prefix: str) -> None:
+        self.config = _MockArmConfig(joint_names=list(_WIDOWXAI_JOINT_NAMES))
+        self.driver = MockArmDriver(robot, prefix)
+        # WidowXAIFollower's last-command record (widowxai_follower.py
+        # __init__), which reposition waits on before a start pose move. None
+        # until the first send_action: the mock's connect() moves nothing, so
+        # unlike the real configure() it leaves no trajectory to wait for.
+        self.last_command_sent_s: float | None = None
+        self.last_command_goal_time_s: float | None = None
+
+
+class _MockArms:
+    """Stand-in for MobileAIRobot.arms (a BiWidowXAIFollowerRobot)."""
+
+    def __init__(self, robot: "MockRobot") -> None:
+        self.left_arm = _MockArm(robot, "left_")
+        self.right_arm = _MockArm(robot, "right_")
 
 
 class MockRobot(Robot):
@@ -116,26 +243,42 @@ class MockRobot(Robot):
         # what the transition actually sent rather than that it did not raise.
         self.sent_actions: list[dict[str, float]] = []
         self._connected = False
+        if config.arm_layout not in (ARM_LAYOUT_FLAT, ARM_LAYOUT_BIMANUAL):
+            raise ValueError(
+                f"unknown arm_layout {config.arm_layout!r}; expected "
+                f"{ARM_LAYOUT_FLAT!r} or {ARM_LAYOUT_BIMANUAL!r}"
+            )
+        if config.arm_layout == ARM_LAYOUT_BIMANUAL and config.joint_count != len(
+            _BIMANUAL_PREFIXES
+        ) * len(_WIDOWXAI_JOINT_NAMES):
+            raise ValueError(
+                f"arm_layout bimanual is 2 x {len(_WIDOWXAI_JOINT_NAMES)} joints; "
+                f"joint_count is {config.joint_count}"
+            )
         self._joint_positions: dict[str, float] = {
             name: (index + 1) * _JOINT_SEED_STEP_RAD
             for index, name in enumerate(self._joint_names)
         }
         self._base_velocity: dict[str, float] = {"x.vel": 0.0, "theta.vel": 0.0}
-        # The most recent instance, for an e2e test that drives cli.main and then
-        # wants `sent_actions` -- cli builds the robot itself, so the test has no
-        # other handle on it. Test-only; nothing in the package reads it.
-        MockRobot.last_instance = self
-
-    last_instance: "MockRobot | None" = None
+        # Only the bimanual layout has per-arm drivers. The flat mock has no
+        # .arms at all, which is also what makes preflight refuse a start pose on
+        # it -- the same refusal a robot without per-arm drivers gets.
+        if config.arm_layout == ARM_LAYOUT_BIMANUAL:
+            self.arms = _MockArms(self)
 
     @property
     def _joint_names(self) -> list[str]:
-        # Flat joint_0..joint_N-1 rather than the real left_/right_ prefixes:
-        # nothing in the version 1 runner parses arm membership, only the ".pos"
-        # suffix and the dimension count, and a flat list keeps joint_count
-        # honest.
-        if self.config.realistic_joint_names and self.config.joint_count == 14:
-            return list(REALISTIC_JOINT_NAMES)
+        # Flat joint_0..joint_N-1 by default rather than the real left_/right_
+        # prefixes: nothing in the runner's stage path parses arm membership,
+        # only the ".pos" suffix and the dimension count, and a flat list keeps
+        # joint_count honest. The start pose path DOES parse it, which is what
+        # the bimanual layout is for.
+        if self.config.arm_layout == ARM_LAYOUT_BIMANUAL:
+            return [
+                f"{prefix}{name}"
+                for _, prefix in _BIMANUAL_PREFIXES
+                for name in _WIDOWXAI_JOINT_NAMES
+            ]
         return [f"joint_{index}" for index in range(self.config.joint_count)]
 
     @property
@@ -199,7 +342,7 @@ class MockRobot(Robot):
         }
         missing = [name for name in self._joint_names if name not in goal_positions]
         if missing:
-            # WidowXAIFollower.send_action:272 evaluates
+            # WidowXAIFollower.send_action:316 evaluates
             # `goal_pos[joint_name] - present_pos[joint_name]` for EVERY name in
             # config.joint_names, so a base-only action such as
             # {"x.vel": 0.0, "theta.vel": 0.0} is a KeyError there rather than a
@@ -213,6 +356,12 @@ class MockRobot(Robot):
         # command held" means stopped. The base is the opposite -- the stored
         # velocity keeps being reported until the next command replaces it.
         self._joint_positions.update(goal_positions)
+        if self.config.arm_layout == ARM_LAYOUT_BIMANUAL:
+            # Left arm first, then right, each stamped after "its" call, as
+            # BiWidowXAIFollowerRobot.send_action and the follower do.
+            for arm in (self.arms.left_arm, self.arms.right_arm):
+                arm.last_command_sent_s = time.perf_counter()
+                arm.last_command_goal_time_s = _MOCK_MIN_TIME_TO_MOVE_S
         x_vel = float(action.get("x.vel", 0.0))
         theta_vel = float(action.get("theta.vel", 0.0))
         self._base_velocity = {"x.vel": x_vel, "theta.vel": theta_vel}

@@ -238,7 +238,7 @@ def test_smoke_chain_runs_without_hardware(tmp_path: Path) -> None:
     stop_action = transitions[0]["stop_action"]
     assert stop_action["x.vel"] == 0.0
     assert stop_action["theta.vel"] == 0.0
-    # Full width: a base-only dict raises KeyError at widowxai_follower.py:272,
+    # Full width: a base-only dict raises KeyError at widowxai_follower.py:314,
     # which iterates every configured joint name.
     assert set(stop_action) == set(robot.action_features), stop_action
     position_keys = sorted(key for key in stop_action if key.endswith(".pos"))
@@ -603,42 +603,6 @@ def test_an_executor_error_stops_the_base_and_closes_the_log(tmp_path: Path) -> 
     assert stage_ends[-1]["terminator"] == "error"
     assert result["events"][-1]["reason"] == "exception"
     assert result["events"][-1]["completed"] is False
-
-
-def test_a_signal_exit_is_filed_as_signal_not_error(tmp_path: Path) -> None:
-    """cli.SignalLatch raises SystemExit(128 + signum) on SIGTERM/SIGHUP. Until
-    10/07 that landed in the `error` bucket next to a policy that blew up, and the
-    robot PC's ④' run could only tell them apart by a log line. The stage_end,
-    the trial_end and the exit code must now say `signal` -- while the base stop
-    and the log close behave exactly as for an error."""
-    import signal as _signal
-
-    code = 128 + int(_signal.SIGHUP)
-
-    def hang_up(call_number: int, captured: dict[str, Any]) -> None:
-        if call_number == 2:
-            captured["robot"]._base_velocity = dict(DRIVING_BASE)
-            raise SystemExit(code)
-
-    result = _run_chain(tmp_path, before_stage=hang_up)
-
-    assert isinstance(result["raised"], SystemExit), result["raised"]
-    assert result["raised"].code == code
-    assert result["base_at_encoder_flush"] == STOPPED_BASE
-    _assert_log_is_closed(result)
-    stage_ends = [event for event in result["events"] if event["event"] == "stage_end"]
-    assert stage_ends[-1]["terminator"] == "signal"
-    assert stage_ends[-1]["reason"] == "SIGHUP"
-    assert result["events"][-1]["event"] == "trial_end"
-    assert result["events"][-1]["reason"] == "signal"
-    assert result["events"][-1]["completed"] is False
-    # An ordinary sys.exit is NOT a signal: it stays an error.
-    from stage_runner.results import signal_exit_name
-
-    assert signal_exit_name(SystemExit(1)) is None
-    assert signal_exit_name(SystemExit("boom")) is None
-    assert signal_exit_name(RuntimeError("x")) is None
-    assert signal_exit_name(SystemExit(128 + int(_signal.SIGTERM))) == "SIGTERM"
 
 
 def test_a_keyboard_interrupt_still_stops_the_base(tmp_path: Path) -> None:

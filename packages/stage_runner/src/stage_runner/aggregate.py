@@ -110,6 +110,22 @@ EVENT_STAGE_START: str = "stage_start"
 EVENT_STAGE_END: str = "stage_end"
 EVENT_TRANSITION: str = "transition"
 EVENT_TRIAL_END: str = "trial_end"
+# Additive (2026-10-19): written only for stages that have a start_pose, after
+# the previous boundary's transition and before the stage's own stage_start. Its
+# reposition_s is SUBTRACTED from the stage_end -> stage_start residual (see
+# build_trial), so a run with start poses reports the same seam numbers as one
+# without, and the arm move is reported on its own as stage_reposition_s.
+EVENT_STAGE_REPOSITION: str = "stage_reposition"
+# wall_clock_iso carries milliseconds and isoformat TRUNCATES to them
+# (events.wall_clock_iso, timespec="milliseconds"), so a window between two
+# stamps is exact only to within one step of this.
+WALL_CLOCK_RESOLUTION_S: float = 0.001
+# The only stage_reposition outcome after which the stage ran its policy; the
+# rest are counted by identity, like a non-primary stop_base.
+REPOSITION_REACHED: str = "reached"
+# Not a failure either: the operator had already pressed Esc / left arrow, so the
+# arms were deliberately left where they were and the trial aborted as usual.
+REPOSITION_SKIPPED: str = "skipped"
 
 # Aggregator-side trial reason, not part of results.TRIAL_REASON_*: the runner
 # can never write it. It means the log has no trial_end line at all -- the
@@ -169,30 +185,20 @@ STANDALONE_AGE_WARNING_DAYS: int = 14
 # this reader keeps reading logs written by writers it has never seen, and
 # importing that module would pull lerobot into a stdlib-only file.
 #
-# FOUR OUTCOMES, and the difference is what the report has to carry:
-#   primary  -- one get_observation + one send_action, plus a confirming
-#               base.set_cmd_vel(0, 0) that was accepted (or a robot with no base
-#               to confirm against). The only path whose stop_base_s is the cost
-#               of stopping the base
+# THREE OUTCOMES, NOT TWO, and the difference is what the report has to carry:
+#   primary  -- one get_observation + one send_action; the only path whose
+#               stop_base_s is the cost of stopping the base
 #   fallback -- the hold action failed (a dead camera is the likely cause) and
 #               base.set_cmd_vel(0, 0) zeroed the base directly. THE BASE IS
 #               STOPPED, but stop_base_s here is how long the failing call took
 #   failed   -- neither path went through; the base may still be driving
-#   primary+direct_failed -- the hold action was sent and the CONFIRMING direct
-#               base command was refused. The arms were held and nothing
-#               confirmed the base, so it counts with `failed`, not with
-#               `primary`. Writers before 2026-10-06 could not emit it: they
-#               filed the same situation as `primary`, because send_action does
-#               not raise on a failed base write (mobileai.py:547-558)
 STOP_PATH_PRIMARY: str = "primary"
 STOP_PATH_FALLBACK: str = "fallback"
 STOP_PATH_FAILED: str = "failed"
-STOP_PATH_PRIMARY_DIRECT_FAILED: str = "primary+direct_failed"
 STOP_BASE_REASON_BY_PATH: dict[str, str] = {
     STOP_PATH_PRIMARY: "stop_base",
     STOP_PATH_FALLBACK: "stop_base_fallback",
     STOP_PATH_FAILED: "stop_base_failed",
-    STOP_PATH_PRIMARY_DIRECT_FAILED: "stop_base_primary_direct_failed",
 }
 
 # How far the logged `hertz` may sit from frames/elapsed_s before build_trial
@@ -342,6 +348,13 @@ class TrialRecord:
     stage_runner_version: str | None = None
     lerobot_version: str | None = None
     config_version: int | None = None
+    # The arm moves to a stage's start_pose (stage_reposition events). Durations
+    # of the moves that REACHED the pose, and the stage ids of the ones that did
+    # not -- a stage that was then not run is also a not_run record in its
+    # StageRecord, but only this says why. Empty for any run without start poses,
+    # which is every run recorded before 2026-10-19.
+    reposition_durations_s: tuple[float, ...] = ()
+    reposition_failed_stage_ids: tuple[str, ...] = ()
 
 
 def _seconds_between(earlier_iso: str, later_iso: str) -> float:
@@ -514,14 +527,40 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
     # report a dead camera as the cost of crossing the seam. None also covers a
     # log written before the transition event existed: no first half, no total.
     pending_stop_base_s: float | None = None
+    # Seconds of start-pose arm motion logged since the last stage_end, i.e.
+    # inside the window the next residual is derived from. Subtracted from it.
+    pending_reposition_s = 0.0
+    reposition_durations: list[float] = []
+    reposition_failures: list[str] = []
     trial_end: dict[str, Any] | None = None
     for event in events:
         name = event.get("event")
         if name == EVENT_STAGE_START:
             if previous_stage_end_iso is not None:
-                gap_s = _seconds_between(
-                    previous_stage_end_iso, str(event["wall_clock_iso"])
+                # The arm move to this stage's start pose happened between the
+                # stage_end and this stage_start, so the raw wall-clock window
+                # contains it. Taken back out, so the residual keeps meaning
+                # "the emits and the bookkeeping between them" -- the meaning it
+                # had for every run before start poses existed -- instead of
+                # silently becoming several seconds larger on the runs that use
+                # them. The move is reported as its own sample below.
+                gap_s = (
+                    _seconds_between(
+                        previous_stage_end_iso, str(event["wall_clock_iso"])
+                    )
+                    - pending_reposition_s
                 )
+                if (
+                    pending_reposition_s > 0.0
+                    and -WALL_CLOCK_RESOLUTION_S <= gap_s < 0.0
+                ):
+                    # Not the clock: the window comes from two millisecond
+                    # stamps, the subtracted move from perf_counter, so with a
+                    # residual of a millisecond or two the difference can dip up
+                    # to one resolution step below zero. The true residual is
+                    # >= 0 (the move happens inside the window), and 0.0 is the
+                    # nearest value consistent with both measurements.
+                    gap_s = 0.0
                 if gap_s < 0.0:
                     # Wall clock, so a system clock step lands here rather than
                     # in a perf_counter. Kept, not dropped: a negative residual
@@ -540,6 +579,7 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
                     boundary_costs.append(pending_stop_base_s + gap_s)
             previous_stage_end_iso = None
             pending_stop_base_s = None
+            pending_reposition_s = 0.0
             if pending is not None:
                 # Two starts with no end between them: the first stage never
                 # finished. Dropping it is the same rule as the truncated tail.
@@ -624,6 +664,7 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
             # A new boundary opens here, so anything still held from the last one
             # (a transition whose stage_start never arrived) is stale.
             pending_stop_base_s = None
+            pending_reposition_s = 0.0
         elif name == EVENT_TRANSITION:
             # stop_base_s ONLY -- one get_observation plus one send_action, and
             # it has ALREADY HAPPENED by the time this event is written: the
@@ -666,6 +707,21 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
                 stop_base_fallbacks.append(boundary_stage_id)
             else:
                 stop_base_failures.append(boundary_stage_id)
+        elif name == EVENT_STAGE_REPOSITION:
+            # reposition_s is the measured wall time of the move (0.0 when it was
+            # skipped or refused). ALL of it is subtracted from the residual,
+            # whatever the outcome, because all of it was spent inside that
+            # window; only a REACHED move is a duration sample, for the same
+            # reason only a primary stop_base is one -- the others time a call
+            # that failed.
+            duration = event.get("reposition_s")
+            if isinstance(duration, (int, float)):
+                pending_reposition_s += float(duration)
+            outcome = event.get("outcome")
+            if outcome == REPOSITION_REACHED and isinstance(duration, (int, float)):
+                reposition_durations.append(float(duration))
+            elif outcome != REPOSITION_SKIPPED:
+                reposition_failures.append(str(event.get("stage_id")))
         elif name == EVENT_TRIAL_END:
             trial_end = event
     if pending is not None:
@@ -704,6 +760,8 @@ def build_trial(events: Sequence[dict[str, Any]]) -> TrialRecord:
         ),
         lerobot_version=(None if lerobot_version is None else str(lerobot_version)),
         config_version=(None if config_version is None else int(config_version)),
+        reposition_durations_s=tuple(reposition_durations),
+        reposition_failed_stage_ids=tuple(reposition_failures),
     )
 
 
@@ -1106,7 +1164,9 @@ def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
         "record_loop entry (policy.reset, first get_observation, first "
         "inference, first send_action) and part of one control period before the "
         "executor returned. NOT MEASURED in P1: closing that needs a timestamp "
-        "inside call_record_loop, which is P2 work"
+        "inside call_record_loop, which is P2 work. Also excludes a start_pose "
+        "arm move: it happens inside this window and its reposition_s is "
+        "subtracted, see stage_reposition_s"
     )
     # THE TOTAL, summed per boundary rather than as two means. The two halves
     # have different sample sizes by construction -- a boundary that leads
@@ -1131,6 +1191,23 @@ def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
     # residual sample is boundaries whose stop_base fell back or failed.
     boundary_cost["crossed_boundary_n"] = len(gaps)
     boundary_cost["unpaired_boundary_n"] = len(gaps) - len(boundary_costs)
+    reposition = _spread(
+        [duration for trial in trials for duration in trial.reposition_durations_s]
+    )
+    reposition["definition"] = (
+        "wall time of the start_pose arm move before a stage (stage_reposition."
+        "reposition_s), for moves that reached the pose, including the wait for "
+        "the previous arm trajectory to expire (expiry_wait_s). NOT part of "
+        "stage_end_to_stage_start_residual_s or boundary_cost_s: it is subtracted "
+        "out of the residual's window, so those two mean what they meant for "
+        "runs without start poses. Add it to boundary_cost_s for the full "
+        "stage-to-stage dead time of a posed boundary"
+    )
+    reposition_failed = [
+        {"run_id": trial.run_id, "stage_id": stage_id}
+        for trial in trials
+        for stage_id in trial.reposition_failed_stage_ids
+    ]
     return {
         "trial_count": len(trials),
         "completed_trial_count": sum(1 for trial in trials if trial.completed),
@@ -1168,6 +1245,13 @@ def timing_summary(trials: Sequence[TrialRecord]) -> dict[str, Any]:
         # logger.exception on a terminal that a batch script does not keep.
         "stop_base_failed_n": len(stop_base_failed),
         "stop_base_failed": stop_base_failed,
+        # Additive keys (2026-10-19); n=0 and [] for every run without start poses.
+        "stage_reposition_s": reposition,
+        # Start pose moves that did not reach the pose (or errored, or were
+        # refused because the base was not confirmed stopped). The stage after
+        # each was not run and the trial ended there.
+        "stage_reposition_failed_n": len(reposition_failed),
+        "stage_reposition_failed": reposition_failed,
     }
 
 
@@ -2022,6 +2106,27 @@ def format_report(summary: Mapping[str, Any]) -> str:
             f"boundaries: {failed} -- the base kept the last policy velocity "
             f"until robot.disconnect(), including through save_episode when the "
             f"failure was at the last stage"
+        )
+    # Printed only for runs that used start poses, so the report of a run
+    # without them is unchanged line for line. .get because a summary dict
+    # written before these keys existed may be fed back in.
+    reposition = timing.get("stage_reposition_s") or {"n": 0}
+    if reposition["n"]:
+        lines.append(
+            f"  - start pose arm move (NOT in the residual or the boundary cost "
+            f"above -- subtracted out): n={reposition['n']} "
+            f"mean={reposition['mean']:.3f}s "
+            f"({reposition['min']:.3f}..{reposition['max']:.3f})"
+        )
+    if timing.get("stage_reposition_failed_n"):
+        failed = ", ".join(
+            f"{item['run_id']}/{item['stage_id']}"
+            for item in timing["stage_reposition_failed"]
+        )
+        lines.append(
+            f"  - !! start pose 미도달 / NOT reached at "
+            f"{timing['stage_reposition_failed_n']} stage(s): {failed} -- the "
+            f"policy was not started there and the trial ended"
         )
     if not summary["labels_available"]:
         lines.append(

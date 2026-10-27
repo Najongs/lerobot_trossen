@@ -15,64 +15,29 @@ from datetime import datetime
 from pathlib import Path
 
 import draccus
+import draccus.cfgparsing
 
 from lerobot.robots.config import RobotConfig
-from lerobot.teleoperators.config import TeleoperatorConfig
-
-# results is stdlib-only, so the import direction stays config -> results and
-# never the reverse: aggregate.py imports results on a machine with no draccus
-# and no lerobot, which is the guarantee the package __init__'s laziness keeps.
-from stage_runner.results import (
-    TERMINATED_BY_COMPLETE,
-    TERMINATED_BY_MANUAL,
-    TERMINATED_BY_REACHED,
-)
 
 logger = logging.getLogger(__name__)
 
 # Bumped when a change to these dataclasses makes an older YAML mean something
 # different. preflight.check_config_version compares the file's `version:` key
-# against SUPPORTED_CONFIG_VERSIONS, so a run started from a stale YAML dies
-# before the robot moves.
+# against this, so a run started from a stale YAML dies before the robot moves.
 #
-# Version 2 adds the `chain:` block, which EXPANDS into `stages` instead of the
-# operator writing 22 of them by hand. Version 1 -- a hand-written stage list
-# with no chain block -- is still read, unchanged: the hardware-free smoke
-# config is a version 1 file and it is the regression test for everything the
-# chain did not touch.
-LATEST_CONFIG_VERSION: int = 2
-SUPPORTED_CONFIG_VERSIONS: tuple[int, ...] = (1, 2)
-CHAIN_CONFIG_VERSION: int = 2
+# NOT bumped for StageConfig.start_pose (2026-10-19), by this rule: the field is
+# optional and defaults to None, which is exactly the old behaviour, so every
+# version-1 YAML written before it still means the same thing. The other
+# direction needs no bump either -- an older stage_runner handed a YAML that HAS
+# start_pose dies in draccus on the unknown field at parse time, before preflight
+# and long before the robot moves, which is the failure a bump would have bought.
+LATEST_CONFIG_VERSION: int = 1
 
 TERMINATOR_TIMEOUT: str = "timeout"
 TERMINATOR_MANUAL: str = "manual"
-# A chain POLICY stage: ends when completion.CompletionMonitorStep fires, or on
-# the right arrow, or at p90 x timeout_factor. The TYPE is "completion"; the
-# OUTCOME is results.TERMINATED_BY_{COMPLETE,MANUAL,TIMEOUT}.
-TERMINATOR_COMPLETION: str = "completion"
-# A chain RESET stage: ends when the ramp arrives at the designated pose and
-# holds it for settle_s. Outcome `reached` or `not_reached`.
-TERMINATOR_REACHED: str = "reached"
-TERMINATOR_TYPES: tuple[str, ...] = (
-    TERMINATOR_TIMEOUT,
-    TERMINATOR_MANUAL,
-    TERMINATOR_COMPLETION,
-    TERMINATOR_REACHED,
-)
+TERMINATOR_TYPES: tuple[str, ...] = (TERMINATOR_TIMEOUT, TERMINATOR_MANUAL)
 
 EXECUTOR_LEROBOT_POLICY: str = "lerobot_policy"
-# The two chain executors. Separate from lerobot_policy because each does
-# something that one must NOT do: chain_policy arms and disarms the completion
-# monitor and re-points the one-hot, chain_reset enters record_loop with a
-# trajectory policy and no checkpoint at all.
-EXECUTOR_CHAIN_POLICY: str = "chain_policy"
-EXECUTOR_CHAIN_RESET: str = "chain_reset"
-
-# StageConfig.kind. A reset stage records frames into the same episode but is
-# not a measurement of the policy, and every consumer (the report, the base
-# integral, the success table) has to be able to drop it.
-STAGE_KIND_POLICY: str = "policy"
-STAGE_KIND_RESET: str = "reset"
 
 # draccus owns this flag; we only scan argv for it so the verbatim source copy
 # in snapshot_configs knows which file to copy (draccus does not expose it).
@@ -112,6 +77,59 @@ class TerminatorConfig:
 
 
 @dataclass
+class StartPoseSourceConfig:
+    """Where a start pose came from. Written by ``python -m stage_runner.start_pose``.
+
+    Carried into the stage_reposition event verbatim, because a pose is a
+    number with no meaning on its own: which dataset, which episode out of how
+    many, chosen how. Without it a pose pasted months ago cannot be checked
+    against the checkpoint now in ``policy_path``.
+    """
+
+    dataset_repo_id: str = ""
+    # The revision asked for (the training config's, else lerobot's CODEBASE_VERSION
+    # tag) and the commit it resolved to; null for a local --dataset-root.
+    dataset_revision: str | None = None
+    dataset_commit: str | None = None
+    # The checkpoint whose train_config.json named the dataset. preflight warns
+    # when it differs from the stage's policy_path (a swapped checkpoint may have
+    # been trained on other demonstrations).
+    policy_path: str = ""
+    episode_index: int | None = None
+    # Episodes whose first frame entered the pick (non-finite rows are dropped).
+    n_episodes: int | None = None
+    method: str = ""
+    # Standardised L2 distance of the chosen episode to the per-joint median.
+    distance: float | None = None
+
+
+@dataclass
+class StartPoseConfig:
+    """Arm joint targets to move to before a stage starts. ARM JOINTS ONLY.
+
+    Keys are the robot's ACTION feature names for the arm joints of both arms
+    (``left_joint_0.pos`` ... ``right_joint_5.pos``), never a gripper and never
+    the base -- preflight.check_stage_start_poses rejects either before connect().
+    The gripper is not commanded by the move: the boundary hold before it keeps
+    the previous stage's last gripper command, so a held object is not released
+    (unverified on hardware); the base is not moved (see reposition.py).
+    """
+
+    positions: dict[str, float] = field(default_factory=dict)
+    # Floor of the paced goal time. The actual goal time is stretched beyond it
+    # whenever a joint would otherwise exceed velocity_max x
+    # velocity_safety_factor -- the same pacing rule as WidowXAIFollower's
+    # send_action. 3.0 s rather than connect()'s fixed 2.0 s because the arm may
+    # be carrying an object.
+    min_goal_time_s: float = 3.0
+    # Max |measured - target| per arm joint, in rad, after the move. A larger
+    # error aborts the trial instead of starting the stage from a wrong pose.
+    # UNMEASURED default: no settled tracking error of this arm has been recorded.
+    position_tolerance_rad: float = 0.05
+    source: StartPoseSourceConfig = field(default_factory=StartPoseSourceConfig)
+
+
+@dataclass
 class StageConfig:
     # `id` is the join key to the hand-filled labels file and to every event
     # line, so it has to stay stable across trials even when `name` changes.
@@ -129,26 +147,11 @@ class StageConfig:
     # start running, this YAML is tied to experiment logs and a schema change
     # costs more than a code change.
     precondition: str | None = None
-
-    # ---- chain fields (version 2). Filled by expand_chain, not by hand. ----
-    # A hand-written version 1 stage list leaves every one of these at its
-    # default, which is exactly a single policy stage with no requirement -- so
-    # nothing about version 1 changes.
-    kind: str = STAGE_KIND_POLICY
-    # 1..11. The chain's stage number, which is NOT the index in `stages`: the
-    # expansion interleaves resets, so stage 11 sits at index 21.
-    stage_number: int | None = None
-    # 1-based one-hot index handed to TaskOneHotStep.set_stage before this
-    # stage's record_loop. None for a model with no one-hot, and for resets.
-    onehot_index: int | None = None
-    # The terminators this stage MAY end with. Anything else breaks the chain
-    # (runner.run_trial). Empty means "any", which is version 1's behaviour.
-    required_terminator: list[str] = field(default_factory=list)
-    # Reset stages only: the first reset of a chain has no preceding policy
-    # stage, so its anchor is wherever the operator left the arms. Counted
-    # separately in the report -- an 11-stage chain has 11 resets, of which 10
-    # are boundaries between two policy stages.
-    initial_reset: bool = False
+    # Optional. None (the default, and every YAML written before 2026-10-19) =
+    # the stage starts wherever the previous stage left the arms, exactly as
+    # before. Set = the arms are moved there first; generate the block with
+    # `python -m stage_runner.start_pose` rather than by hand.
+    start_pose: StartPoseConfig | None = None
 
 
 @dataclass
@@ -184,194 +187,6 @@ class OutputConfig:
 
 
 @dataclass
-class CompletionConfig:
-    """The YAML's ``chain.completion:`` block. Mirrors completion.CompletionSettings.
-
-    A second dataclass rather than reusing that one directly, because this is
-    the draccus-facing SCHEMA (it is dumped into config.resolved.yaml and parsed
-    out of the operator's file) while the other is what the monitor runs on.
-    ``to_settings()`` is the one conversion, so the two cannot drift silently.
-    """
-
-    p_done: float = 0.95
-    p_hold_s: float = 1.0
-    stall_s: float = 3.0
-    # TWO knobs, not one: `stall_track_rad` is how far the arm may lag the
-    # command it is being given (a steady-state following error under load is a
-    # stopped arm), `stall_arm_rad` is how far the MEASURED arm may travel
-    # across the window (it is not). See CompletionSettings.
-    stall_track_rad: float = 0.08
-    stall_arm_rad: float = 0.05
-    stall_base: float = 0.05
-    # The departure latch: completion is refused for the whole stage until the
-    # arm leaves `departure_arm_rad` of its designated start pose, or the
-    # commanded base integrates past one of the two base thresholds.
-    departure_arm_rad: float = 0.10
-    departure_base_rot_rad: float = 0.17
-    departure_base_fwd_m: float = 0.10
-    # The share of the demonstrations' median travel a stage must cover before
-    # it may complete: the commanded base on a `move` stage (10/07), the
-    # measured arm's path length on a `manip` one (10/08). Both were code-only
-    # defaults until 10/08; they are here now because they decide completions
-    # and an operator who has to loosen one in the field should not need a
-    # source edit. See completion.CompletionSettings for where the numbers
-    # come from.
-    move_base_fraction: float = 0.5
-    manip_arm_fraction: float = 0.4
-    # The gripper hold guard (10/12, robot PC 1011_2203): on these stages both
-    # grippers must read >= grip_hold_min over the whole stall window before the
-    # stage may complete. See completion.CompletionSettings for the measurement
-    # behind t02·t03·t04 and 0.004. `[]` turns the guard off.
-    grip_hold_stages: list[int] = field(default_factory=lambda: [2, 3, 4])
-    grip_hold_min: float = 0.004
-    # control_time_s = stage p90_s * this. Reaching it is a chain failure.
-    timeout_factor: float = 1.3
-    # The right arrow means "this stage is done, go on". ON for BOTH models by
-    # user decision (2026-10-06): the automatic signal may be late or absent --
-    # M1 does not stop at the end scene of t04 at all -- and seeing the whole
-    # 1->11 chain once is worth more than an unattended measurement that stops
-    # at stage 4. Automatic and manual completions are counted SEPARATELY
-    # (terminated_by "complete" vs "manual"), so the distinction survives into
-    # the report. ESC still aborts.
-    allow_manual_complete: bool = True
-
-    def to_settings(self):
-        # Imported here, not at module scope: completion imports lerobot's
-        # ProcessorStep (and so torch), and this module is imported by preflight
-        # and by the config parse that must run before anything heavy loads.
-        from stage_runner.completion import CompletionSettings
-
-        return CompletionSettings(
-            p_done=self.p_done,
-            p_hold_s=self.p_hold_s,
-            stall_s=self.stall_s,
-            stall_track_rad=self.stall_track_rad,
-            stall_arm_rad=self.stall_arm_rad,
-            stall_base=self.stall_base,
-            departure_arm_rad=self.departure_arm_rad,
-            departure_base_rot_rad=self.departure_base_rot_rad,
-            departure_base_fwd_m=self.departure_base_fwd_m,
-            move_base_fraction=self.move_base_fraction,
-            manip_arm_fraction=self.manip_arm_fraction,
-            grip_hold_stages=tuple(int(number) for number in self.grip_hold_stages),
-            grip_hold_min=self.grip_hold_min,
-        )
-
-
-@dataclass
-class ResetConfig:
-    """The YAML's ``chain.reset:`` block. Mirrors reset_policy.ResetSettings."""
-
-    t_min_s: float = 1.5
-    v_des_rad_s: float = 0.524
-    max_jump_rad: float = 1.5
-    # The INITIAL reset only (the one from wherever a human left the arms to
-    # `from_stage`'s pose). Tighter than the boundary limit on purpose: a
-    # boundary gap is a measured 0.25-1.28 rad, while the initial gap is
-    # whatever a person happened to leave, and a 1.5 rad sweep across the
-    # workspace from an unknown pose is the one ramp nothing has validated.
-    initial_max_jump_rad: float = 0.6
-    tol_rad: float = 0.05
-    settle_s: float = 1.0
-    ceiling_factor: float = 3.0
-    settle_check_tries: int = 3
-    settle_check_gap_s: float = 0.1
-    settle_check_tol_rad: float = 0.02
-    # Whether the chain starts with a reset to stage `from_stage`'s pose. On by
-    # default: P2 says the model does not start at all when the start
-    # observation is slightly off, and the whole point of the reset is to put
-    # the arms back inside the demonstration distribution.
-    initial: bool = True
-    # RESET-ONLY: drop every policy stage from the expansion and run the ramps
-    # back to back. This is bring-up step ② and ③ (empty-handed, then holding an
-    # object), and it is a MODE rather than an operator procedure on purpose.
-    #
-    # The procedure it replaces was "press ESC right after the reset reports
-    # reached", and that is not reset-only: by the time a human reacts, the
-    # policy has already sent several ticks at 21 Hz. On the first run of a new
-    # runner, with the arms possibly holding glassware, those ticks are the whole
-    # risk the step exists to retire.
-    #
-    # The ramps are the SAME ones the full chain runs -- same executor, same
-    # plan, same ids -- because nothing between them moves the arm: the reset to
-    # stage k+1 anchors exactly where the reset to stage k left it, which is the
-    # boundary gap this step measures.
-    only: bool = False
-
-    def to_settings(self):
-        from stage_runner.reset_policy import ResetSettings
-
-        return ResetSettings(
-            t_min_s=self.t_min_s,
-            v_des_rad_s=self.v_des_rad_s,
-            max_jump_rad=self.max_jump_rad,
-            initial_max_jump_rad=self.initial_max_jump_rad,
-            tol_rad=self.tol_rad,
-            settle_s=self.settle_s,
-            ceiling_factor=self.ceiling_factor,
-            settle_check_tries=self.settle_check_tries,
-            settle_check_gap_s=self.settle_check_gap_s,
-            settle_check_tol_rad=self.settle_check_tol_rad,
-        )
-
-    def worst_case_ceiling_s(self) -> float:
-        """The ceiling for the LARGEST ramp the settings allow.
-
-        ``plan_stage`` has to put a number on the stage_start event before the
-        arm has been read, and the real ceiling depends on the measured anchor.
-        This is the bound: a ramp at ``max_jump_rad``. The ACTUAL ceiling and
-        duration are in the stage_end event's ``reason_detail`` (``reset_T``).
-        """
-        duration = max(self.t_min_s, self.max_jump_rad / self.v_des_rad_s)
-        return (duration + self.settle_s) * self.ceiling_factor
-
-
-@dataclass
-class ChainModelConfig:
-    """Which checkpoint the whole chain runs, and how it is conditioned."""
-
-    # One path for all 11 stages. ONE checkpoint, loaded ONCE: the design is a
-    # single multi-stage ACT plus a stage one-hot, not eleven experts.
-    policy_path: str = ""
-    # K for the stage one-hot. 11 for M1/M2 and for the new `tph` models; null
-    # for a checkpoint with no one-hot (then the state is 14 or 16 wide and the
-    # stage is whatever the scene says it is).
-    onehot_k: int | None = None
-    # Applied to the checkpoint's own config after loading, the same way
-    # `lerobot-record --policy.n_action_steps=` does. 30 is the exec confirmed
-    # on 2026-10-02. null leaves the checkpoint's value.
-    n_action_steps: int | None = None
-    # REQUIRED for a real checkpoint, and required for a mock one too (there is
-    # no config.json to derive it from). The checkpoint's
-    # output_features.action.shape is still THE FACT -- 16 means no progress, 17
-    # means progress -- and preflight refuses a run where the key and the width
-    # disagree. What it no longer does is accept `null` and derive it quietly:
-    # this is the single value that decides whether the recording dataset
-    # declares a 17th action feature, and therefore at what width the normalizer
-    # loads, so a config that does not state it cannot be read later to find out
-    # which of the two models ran (2026-10-06).
-    #
-    # The default stays None so draccus can tell "absent" from "false"; absent is
-    # what preflight rejects.
-    has_progress: bool | None = None
-
-
-@dataclass
-class ChainConfig:
-    """``chain:`` -- present in a version 2 config, absent in a version 1 one."""
-
-    enabled: bool = False
-    # configs/chain/stage_params.json. Generated in the training repo; see
-    # configs/chain/README.md for the schema and the refusal list.
-    params_path: str = ""
-    from_stage: int = 1
-    to_stage: int = 11
-    model: ChainModelConfig = field(default_factory=ChainModelConfig)
-    completion: CompletionConfig = field(default_factory=CompletionConfig)
-    reset: ResetConfig = field(default_factory=ResetConfig)
-
-
-@dataclass
 class StageRunnerConfig:
     # RobotConfig is a draccus ChoiceRegistry (lerobot/robots/config.py:23), so
     # the nested `robot:` block is resolved by its `type:` key against the
@@ -381,27 +196,10 @@ class StageRunnerConfig:
     version: int = LATEST_CONFIG_VERSION
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
-    # Order IS execution order. In a version 2 chain config this is left EMPTY
-    # in the YAML and filled by expand_chain before preflight runs -- writing 22
-    # stages by hand is 22 chances to put the wrong one-hot on the wrong stage.
+    # Order IS execution order.
     stages: list[StageConfig] = field(default_factory=list)
     output: OutputConfig = field(default_factory=OutputConfig)
     display_data: bool = False
-    chain: ChainConfig = field(default_factory=ChainConfig)
-    # 리더암 텔레옵 구간 (10/07, 로봇 PC). 주면 trial 의 첫 단계(최초 리셋) 전에
-    # lerobot-record 의 「Reset the environment」 와 같은 텔레옵 루프를 돈다 -- 사람이
-    # 리더암으로 물체를 쥐게 하고 자세를 잡은 뒤 `→` 로 넘긴다. `←` 는 그 구간을
-    # 처음부터 다시(타이머 리셋), ESC 는 중단. 녹화되지 않는다(dataset=None).
-    # None 이면 구간이 없다 -- 옛 동작 그대로. CLI: --teleop.type=… --teleop.id=…
-    teleop: TeleoperatorConfig | None = None
-    # 텔레옵 구간 한 번의 상한(초). `→` 가 먼저 오면 거기서 끝난다. 상한을 넘기면 **중단**이다
-    # (사람 확인 없이 첫 리셋 램프가 시작되지 않게; 리뷰 10/07).
-    teleop_time_s: float = 300.0
-    # 텔레옵 구간에서 리더 action 의 x.vel/theta.vel 을 베이스에 그대로 보낼지. 기본 False =
-    # 0 으로 덮는다: 리더의 두 값은 「같은 틱에 잰 베이스 속도」(get_latest_base_velocity) 라
-    # 토크가 켜진 베이스에 되먹임되는 구조다(리뷰 10/07, basevel.csv 의 teleop 행 cmd==meas).
-    # True 는 lerobot-record 의 리셋 구간과 같은 동작(손으로 민 베이스를 따라감).
-    teleop_base_from_leader: bool = False
 
 
 def parse_config(argv: Sequence[str] | None = None) -> StageRunnerConfig:
@@ -422,115 +220,8 @@ def parse_config(argv: Sequence[str] | None = None) -> StageRunnerConfig:
     # this module needs it, and the smoke path must not depend on some other
     # module having been imported first.
     from stage_runner import mock_robot  # noqa: F401
-    from stage_runner import mock_teleop  # noqa: F401
 
     return draccus.parse(config_class=StageRunnerConfig, args=argv)
-
-
-def policy_stage_id(stage_number: int) -> str:
-    """``t04`` for stage 4. The join key to the hand-filled label sheet."""
-    return f"t{stage_number:02d}"
-
-
-def reset_stage_id(stage_number: int, *, initial: bool) -> str:
-    """``reset_pre_01`` for the initial reset, ``reset_to_05`` for a boundary one.
-
-    Named by the stage it resets TO, not by the boundary it sits in: the target
-    pose belongs to the NEXT stage, and a reader of the log asking "which pose
-    was it driving to" has the answer in the id.
-    """
-    return (
-        f"reset_pre_{stage_number:02d}"
-        if initial
-        else f"reset_to_{stage_number:02d}"
-    )
-
-
-def expand_chain(config: StageRunnerConfig, params) -> list[StageConfig]:
-    """Turn ``chain:`` into the stage list the runner walks. The ONE place that order lives.
-
-    With ``chain.reset.only`` it is the RAMPS ALONE -- 11 reset stages, no
-    policy stage at all. See :class:`ResetConfig`.
-
-    For ``from_stage=1, to_stage=11`` the result is 22 stages::
-
-        reset_pre_01, t01, reset_to_02, t02, ..., reset_to_11, t11
-
-    i.e. **11 policy stages and 11 resets**, of which 10 are boundaries between
-    two policy stages and one is the initial reset
-    (``StageConfig.initial_reset``). The design brief says "10 resets" and means
-    the ten boundaries; both numbers are reported, because an operator counting
-    ramps on the robot sees eleven.
-
-    ``params`` is a :class:`stage_runner.chain_params.ChainParams`. Taken as an
-    argument rather than loaded here so that the loader's refusals (and its
-    ``dataset.fps`` cross-check) happen in ``cli.main``'s preflight block, where
-    a bad file is one line and exit code 2 instead of a traceback.
-
-    Every field a chain stage needs is set HERE and nowhere else. The failure
-    this prevents is the one a hand-written 22-stage YAML makes: a one-hot index
-    that does not match the stage, which is silent -- the model runs, it just
-    runs the wrong stage's conditioning, and offline §89 already showed the
-    one-hot is weak enough that nothing would look obviously wrong.
-    """
-    chain = config.chain
-    model = chain.model
-    allowed_policy = [TERMINATED_BY_COMPLETE]
-    if chain.completion.allow_manual_complete:
-        allowed_policy.append(TERMINATED_BY_MANUAL)
-    reset_ceiling = chain.reset.worst_case_ceiling_s()
-
-    stages: list[StageConfig] = []
-    for number in range(chain.from_stage, chain.to_stage + 1):
-        initial = number == chain.from_stage
-        # reset.only forces the first ramp in: without it the range would start
-        # at the SECOND stage's pose with the arm wherever the operator left it,
-        # so the first measured gap would not be a stage boundary at all.
-        if not initial or chain.reset.initial or chain.reset.only:
-            stages.append(
-                StageConfig(
-                    id=reset_stage_id(number, initial=initial),
-                    name=f"reset to task{number:02d}",
-                    executor=EXECUTOR_CHAIN_RESET,
-                    # NO checkpoint. The ramp is arithmetic; there is nothing to
-                    # load, and preflight's "a known executor needs a
-                    # policy_path" rule is executor-aware for exactly this.
-                    policy_path="",
-                    # Recorded as frame["task"] for every reset frame, which is
-                    # how a boundary is found in the dataset afterwards.
-                    instruction=f"reset:{number:02d}",
-                    terminator=TerminatorConfig(
-                        type=TERMINATOR_REACHED, timeout_s=reset_ceiling
-                    ),
-                    kind=STAGE_KIND_RESET,
-                    stage_number=number,
-                    onehot_index=None,
-                    required_terminator=[TERMINATED_BY_REACHED],
-                    initial_reset=initial,
-                )
-            )
-        if chain.reset.only:
-            continue
-        stage_params = params.stage(number)
-        stages.append(
-            StageConfig(
-                id=policy_stage_id(number),
-                name=stage_params.name,
-                executor=EXECUTOR_CHAIN_POLICY,
-                policy_path=model.policy_path,
-                instruction=stage_params.instruction,
-                terminator=TerminatorConfig(
-                    type=TERMINATOR_COMPLETION,
-                    timeout_s=stage_params.timeout_s(chain.completion.timeout_factor),
-                ),
-                kind=STAGE_KIND_POLICY,
-                stage_number=number,
-                onehot_index=number if model.onehot_k else None,
-                required_terminator=list(allowed_policy),
-                initial_reset=False,
-            )
-        )
-    return stages
 
 
 def source_config_path(argv: Sequence[str] | None = None) -> Path | None:
@@ -617,5 +308,21 @@ def snapshot_configs(
         shutil.copyfile(source_path, run_directory / SOURCE_CONFIG_FILENAME)
 
     (run_directory / RESOLVED_CONFIG_FILENAME).write_text(
-        RESOLVED_CONFIG_HEADER + draccus.dump(config), encoding="utf-8"
+        RESOLVED_CONFIG_HEADER + resolved_config_text(config), encoding="utf-8"
     )
+
+
+def resolved_config_text(config: StageRunnerConfig) -> str:
+    """``draccus.dump(config)`` minus every ``start_pose: null``.
+
+    draccus.dump is ``save_config(encode(config))`` (draccus/cfgparsing.py), so
+    dropping the key from the encoded stage dicts before saving yields exactly
+    the dump a config without the field produced. A config with no start pose
+    therefore snapshots byte-for-byte as it did before StageConfig.start_pose
+    existed, and the absent key still reads as "no start pose" (its default).
+    """
+    encoded = draccus.encode(config)
+    for stage in encoded.get("stages") or []:
+        if isinstance(stage, dict) and stage.get("start_pose") is None:
+            stage.pop("start_pose", None)
+    return draccus.cfgparsing.save_config(encoded)
