@@ -98,6 +98,15 @@ logger = logging.getLogger(__name__)
 _ENV_VAR = "LEROBOT_INTERVENTION_REPO_ID"
 REPO_ID: str = os.environ.get(_ENV_VAR, "").strip()
 
+# TEMPORARY robot-PC patch (2026-10-25, user-approved): with
+# LEROBOT_INTERVENTION_SERIAL_ENCODING=1 a take's three videos are encoded one
+# after another in this process instead of in three forked workers
+# (save_episode(parallel_encoding=False)). Tests whether forking the large
+# recording process mid-run is what stalls a RealSense stream (r01/r02 10/25).
+SERIAL_ENCODING: bool = (
+    os.environ.get("LEROBOT_INTERVENTION_SERIAL_ENCODING", "") == "1"
+)
+
 # The intervention dataset's label and its loop's fps. See the module
 # docstring, "Loop rate".
 DATASET_FPS: int = 30
@@ -678,10 +687,13 @@ def _intervene(
         frames = int(_dataset.episode_buffer["size"])
         if frames:
             index = _dataset.num_episodes
-            _dataset.save_episode()
+            save_started = time.perf_counter()
+            _dataset.save_episode(parallel_encoding=not SERIAL_ENCODING)
             _saved_this_run += 1
             logger.warning(
-                f"intervention: saved episode {index} of {REPO_ID} ({frames} frames)"
+                f"intervention: saved episode {index} of {REPO_ID} ({frames} frames, "
+                f"{'serial' if SERIAL_ENCODING else 'parallel'} encoding "
+                f"{time.perf_counter() - save_started:.1f}s)"
             )
         else:
             _dataset.clear_episode_buffer()
@@ -750,6 +762,30 @@ def is_installed(function) -> bool:
     return False
 
 
+def _force_serial_encoding() -> None:
+    """TEMPORARY robot-PC patch (2026-10-25, user-approved): every save_episode in
+    this process -- the eval dataset's too, not only the intervention take's --
+    encodes without forking (parallel_encoding=False). The 09:55 stall came
+    16 s after an eval save that still forked, so the take-only switch left a
+    fork in every lerobot-record episode."""
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    original = LeRobotDataset.save_episode
+    if getattr(original, "_serial_encoding_wrapper", False):
+        return
+
+    @functools.wraps(original)
+    def save_episode(self, episode_data=None, parallel_encoding=True):
+        return original(self, episode_data, parallel_encoding=False)
+
+    save_episode._serial_encoding_wrapper = True
+    LeRobotDataset.save_episode = save_episode
+    logger.warning(
+        "LEROBOT_INTERVENTION_SERIAL_ENCODING=1: every dataset in this process "
+        "encodes its videos serially, without forked workers."
+    )
+
+
 def apply_intervention_patch() -> bool:
     """Install the wrapper if ``LEROBOT_INTERVENTION_REPO_ID`` is set; True if installed.
 
@@ -786,6 +822,8 @@ def apply_intervention_patch() -> bool:
             f"the leader arm and records into that dataset at {DATASET_FPS} fps, as "
             "acquisition does."
         )
+        if SERIAL_ENCODING:
+            _force_serial_encoding()
         return True
     except Exception:
         logger.exception(

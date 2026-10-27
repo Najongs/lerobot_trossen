@@ -389,6 +389,13 @@ class DatasetConfig:
     fps: int = 30
     root: str | None = None
     video: bool = True
+    # false: the chain's episode is never saved -- no video encode at the end of
+    # the trial, and the dataset stays at 0 episodes. Frames are still buffered
+    # during the run, because a base stage holds the grippers at the last
+    # RECORDED goal (_recorded_gripper_goals) and falls back to the measured
+    # width without one, which loosens a grip on a held beaker. For intervention
+    # runs, whose intervention dataset is saved per take regardless.
+    save: bool = True
     num_image_writer_processes: int = 0
     num_image_writer_threads_per_camera: int = 4
 

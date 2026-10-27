@@ -17,9 +17,11 @@ What is asserted, and why each matters on the robot:
 * the field's decision order: heading first, distance only once the heading
   is inside tolerance, divergence against the error before the last
   correction of the same kind (a drive does not reset the turn baseline);
-* the coarse heading fallback (A2): a coarse estimate always turns and is
-  measured again, never counts as aligned, counts toward max_moves, and more
-  than two coarse turns end the stage; off, an unusable fine estimate aborts;
+* the coarse heading fallback (A2): a coarse estimate turns and is measured
+  again, never counts as aligned, counts toward max_moves, and more than two
+  coarse turns end the stage; off, an unusable fine estimate aborts. A coarse
+  heading inside tolerance with a usable distance outside it drives instead
+  (robot PC 10/25, a far arrival that never got a fine heading);
 * heading_only continues the chain (A3); every other failure stops it before
   the next policy, each with the value that tripped it (A4);
 * the measurement runs in a worker thread WHILE the loop keeps recording hold
@@ -230,7 +232,7 @@ def _events(tmp_path: Path) -> list[dict[str, Any]]:
 
 
 def _align_event(tmp_path: Path) -> dict[str, Any]:
-    (event,) = [e for e in _events(tmp_path) if e["event"] == "stage_base_align"]
+    (event,) = (e for e in _events(tmp_path) if e["event"] == "stage_base_align")
     return event
 
 
@@ -473,6 +475,57 @@ def test_an_unusable_heading_ends_the_stage_without_moving(
             "aligned",
             ["turn", "aligned"],
             id="coarse-inside-tolerance-turns",
+        ),
+        pytest.param(
+            # ... unless the distance is usable and outside tolerance: then it
+            # drives first, and only the fine estimate after it aligns.
+            [_measurement(1.0, mode="coarse", move=0.094), _measurement(0.2)],
+            6,
+            "aligned",
+            ["drive", "aligned"],
+            id="coarse-inside-tolerance-far-drives",
+        ),
+        pytest.param(
+            # Without a usable distance a coarse heading inside tolerance turns.
+            [_measurement(1.0, mode="coarse", move=None), _measurement(0.2)],
+            6,
+            "aligned",
+            ["turn", "aligned"],
+            id="coarse-inside-tolerance-no-distance-turns",
+        ),
+        pytest.param(
+            # A coarse heading outside tolerance still turns first.
+            [_measurement(5.0, mode="coarse", move=0.094), _measurement(0.2)],
+            6,
+            "aligned",
+            ["turn", "aligned"],
+            id="coarse-outside-tolerance-far-turns",
+        ),
+        pytest.param(
+            # r09 on the robot PC (10/25): two coarse turns with the distance
+            # past the 10 cm cap, then coarse -0.95 deg / +9.4 cm. It ended
+            # estimate_unusable there; now it drives and measures again.
+            [
+                _measurement(-4.44, mode="coarse", move=None),
+                _measurement(-2.04, mode="coarse", move=None),
+                _measurement(-0.95, mode="coarse", move=0.094),
+                _measurement(-0.4),
+            ],
+            6,
+            "aligned",
+            ["turn", "turn", "drive", "aligned"],
+            id="r09-far-arrival-drives-after-coarse-turns",
+        ),
+        pytest.param(
+            # Coarse drives are judged like any drive: a growing distance diverges.
+            [
+                _measurement(1.0, mode="coarse", move=0.05),
+                _measurement(1.0, mode="coarse", move=0.06),
+            ],
+            6,
+            "diverging",
+            ["drive", "diverging"],
+            id="coarse-drive-diverges",
         ),
         pytest.param(
             [_measurement(10.0, mode="coarse")] * 3,
@@ -1155,7 +1208,7 @@ def test_a_failed_align_measurement_goes_on_to_the_policy(tmp_path: Path) -> Non
     assert event["outcome"] == "estimate_unusable", event["reason"]
     assert event["coarse_heading"] is False
     assert len(event["measurements"]) == 1
-    (align_end,) = [e for e in _of(result, "stage_end") if e["stage_id"] == "s1_align"]
+    (align_end,) = (e for e in _of(result, "stage_end") if e["stage_id"] == "s1_align")
     assert align_end["terminator"] == "converged"
     _assert_log_is_closed(result)
     assert isinstance(result["robot"].base, MockSlate)

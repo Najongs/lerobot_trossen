@@ -1342,11 +1342,20 @@ class _Align:
         """The field's decision order (stage1_align.py), with the coarse fallback.
 
         Heading first, distance only once the heading is inside tolerance
-        (landmark_align trap 3). A COARSE estimate always turns -- even when it
-        reads inside tolerance -- and is measured again: it folds any sideways
-        offset into the angle, so it can never be the evidence that the base is
+        (landmark_align trap 3). A COARSE estimate turns -- even when it reads
+        inside tolerance -- and is measured again: it folds any sideways offset
+        into the angle, so it can never be the evidence that the base is
         aligned. Each coarse turn counts toward max_moves, and more than
         MAX_COARSE_TURNS of them end the stage estimate_unusable.
+
+        One exception (robot PC 2026-10-25, r09): a coarse heading inside
+        tolerance with a usable distance outside dist_tol_cm DRIVES instead of
+        turning. Far from the arrival the view is smaller and the fine estimate
+        stays under MIN_INLIERS (13-14 against 36-70 in the runs that aligned),
+        so turning again only spent the coarse turns and the stage ended with
+        the base still ~10 cm away. Closer, the fine estimate comes back; the
+        drive is a correction like any other (divergence, max_moves), and only
+        a fine heading can still end the stage aligned.
         """
         align = self.align
         if not m.heading_usable:
@@ -1373,7 +1382,13 @@ class _Align:
             )
         yaw = float(m.heading_yaw_deg)
         coarse = m.heading_mode == self.landmark.HEADING_COARSE
-        if coarse or abs(yaw) > align.yaw_tol_deg:
+        coarse_far = (
+            coarse
+            and abs(yaw) <= align.yaw_tol_deg
+            and m.distance_valid
+            and abs(float(m.move_m)) * 100.0 > align.dist_tol_cm
+        )
+        if (coarse and not coarse_far) or abs(yaw) > align.yaw_tol_deg:
             if (
                 self.last_turn_yaw is not None
                 and abs(yaw) > abs(self.last_turn_yaw) + DIVERGE_YAW_DEG

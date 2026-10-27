@@ -131,6 +131,11 @@ LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run python -m 
 - 개입 녹화 상한·개입 리셋 상한 각 60초(`lerobot-record` 기본값) — 단계 타이머와 무관
 - `→`로 저장하면 체인이 다음 단계로 이어짐, `ESC`로 저장하면 시행 종료
 - 개입 데이터셋은 로컬에만 — 올릴 땐 `LeRobotDataset(<repo>).push_to_hub()`
+	- ⚠ 로컬에서 에피소드를 지운 뒤면 `push_to_hub()`만으로는 허브에 옛 파일이 남음 — 먼저 `HfApi().upload_folder(..., delete_patterns=["data/**", "meta/**", "videos/**"])`
+- 개입 데이터셋만 필요한 회차 = 체인 녹화 저장 끔 — 설정 `dataset:` 블록에 `save: false`
+	- 마지막 저장·인코딩 없이 마지막 단계 직후 종료(카메라 3대 순차 인코딩이면 약 4분 단축), 체인 데이터셋은 0 에피소드
+	- 프레임은 실행 중 계속 버퍼에 쌓임 — 베이스 단계가 그리퍼 목표를 녹화 버퍼의 마지막 명령에서 가져오기 때문. 끝에 카메라 PNG까지 삭제
+- 개입 저장을 fork 없이 순차 인코딩 — `LEROBOT_INTERVENTION_SERIAL_ENCODING=1`(카메라 끊김 진단용). 개입 하나 저장 약 6초 → 15~18초
 
 ## 정책 단계 동안 베이스 토크 끄기 (release_base_torque)
 

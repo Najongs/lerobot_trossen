@@ -7,6 +7,7 @@ else in the package imports ``lerobot.scripts.lerobot_record``.
 """
 
 import logging
+import shutil
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -179,6 +180,30 @@ def create_dataset(
             config.dataset.num_image_writer_threads_per_camera * camera_count
         ),
     )
+
+
+def discard_episode(dataset: LeRobotDataset) -> None:
+    """Drop the buffered episode and the PNG frames it wrote, without saving.
+
+    For ``dataset.save: false``. VideoEncodingManager removes an unsaved
+    episode's frames only when the trial RAISED, so a clean exit would leave
+    every camera frame on disk (5.7 GB for one 1-11 chain on 2026-10-27).
+    clear_episode_buffer alone is not enough either: it deletes the directories
+    of ``image_keys`` only, and with ``video: true`` the cameras are
+    ``video_keys`` -- written as PNG all the same until they are encoded.
+    """
+    if dataset.image_writer is not None:
+        dataset._wait_image_writer()
+    episode_index = dataset.episode_buffer["episode_index"]
+    if hasattr(episode_index, "size"):  # an ndarray, as clear_episode_buffer allows
+        episode_index = (
+            episode_index.item() if episode_index.size == 1 else episode_index[0]
+        )
+    for key in [*dataset.meta.video_keys, *dataset.meta.image_keys]:
+        image_dir = dataset._get_image_file_dir(episode_index, key)
+        if image_dir.is_dir():
+            shutil.rmtree(image_dir)
+    dataset.clear_episode_buffer(delete_images=False)
 
 
 def video_encoding_manager(dataset: LeRobotDataset) -> AbstractContextManager[None]:

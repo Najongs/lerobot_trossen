@@ -377,7 +377,13 @@ def run_trial(context: StageContext) -> TrialOutcome:
         )
 
         episode_saved = False
-        if frame_count > 0:
+        if frame_count > 0 and not config.dataset.save:
+            logger.info(
+                f"dataset.save is false: the chain's {frame_count} frames are not "
+                "saved or encoded"
+            )
+            record_adapter.discard_episode(context.dataset)
+        elif frame_count > 0:
             # ONCE, after the last stage -- never per stage. One episode is the
             # whole point: a per-stage save would cut the chain into separate
             # episodes and destroy the transition the trial exists to measure.
