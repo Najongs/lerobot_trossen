@@ -1,6 +1,6 @@
 # Trossen-LeRobot Stage Chaining Runner
 
-실행 명령·종료 코드·함정의 정본은 루트 README — [3-4. 단계 체이닝 실행](../../README.md#3-4-단계-체이닝-실행-stage_runner) · [단계 체이닝 실행](../../README.md#단계-체이닝-실행). 이 문서는 **단계별 팔 시작 자세(`start_pose`)** 와 **리더암 리셋 단계(`leader_reset`)** 만 다룬다.
+실행 명령·종료 코드·함정의 정본은 루트 README — [3-4. 단계 체이닝 실행](../../README.md#3-4-단계-체이닝-실행-stage_runner) · [단계 체이닝 실행](../../README.md#단계-체이닝-실행). 이 문서는 **단계별 팔 시작 자세(`start_pose`)**, **리더암 리셋 단계(`leader_reset`)**, **베이스 이동 단계(`base_replay`·`base_align`)** 만 다룬다.
 
 ## 단계 시작 자세 (start_pose)
 
@@ -108,6 +108,80 @@ uv run python -m stage_runner --config_path <설정 파일>
 
 - 통과 기준 = `events.jsonl`에서 리셋 단계의 `stage_start`·`stage_end` 사이에 `stage_reset` 한 줄, `base_torque`가 `released`(토크 켠 설정) 또는 `not_released`
 - 리셋 다음 `stage_reposition`의 `gripper_goal_source`가 `previous_command`이고 `gripper_goal`이 `stage_reset.gripper_goals`와 같음
+
+## 베이스 이동 단계 (base_replay · base_align)
+
+이동 단계를 정책 대신 두 단계 한 쌍으로 돈다 — **데모 경로 재생**(`base_replay`) → **도착 화면 정렬**(`base_align`, cam_high를 데모 도착 화면과 비교해 헤딩 먼저, 거리는 고정물 크기로). 체인 아무 자리에, 이동마다 한 쌍씩. 둘 다 기록한다(프레임의 task 문자열 = 단계 `name`).
+
+- 🛑 **베이스가 스스로 움직인다** — 첫 실행은 비상정지 옆에서. 이상 시 멈추는 문턱값은 실기에서 안 잰 추정값 → [실기에서 아직 안 잰 것 — 베이스 단계](#실기에서-아직-안-잰-것--베이스-단계)
+
+### 1. 로봇PC 로컬 데이터셋 확인
+
+```shell
+grep -o '"x.pos"\|"theta.pos"' ~/.cache/huggingface/lerobot/kiroaiseoul/test_replay_timing_1024_basepose/meta/info.json
+ls ~/.cache/huggingface/lerobot/kiroaiseoul/test_replay_timing_1024/videos
+```
+
+- 통과 기준 = 첫 줄 `"x.pos"`·`"theta.pos"` 두 줄, 둘째 줄 `observation.images.cam_high`가 찍힘
+- 첫 줄이 빈 출력·`No such file` → 위치 라벨 사본부터 → [위치 라벨 데이터셋](#위치-라벨-데이터셋)
+- 실행기는 데이터셋을 **내려받지 않는다** — 두 데이터셋 모두 이 경로(또는 YAML의 `root`)에 있어야 한다
+- 다른 이동 단계 → 그 단계 데모 데이터셋 이름으로
+
+### 2. 설정 파일에 넣기
+
+로봇 예 = [`configs/chain_stage12_align.yaml`](../../configs/chain_stage12_align.yaml)(단계 1 → 정렬 → pi0 단계 2). 이동 하나 = 아래 두 항목.
+
+```yaml
+stages:
+  - id: s1
+    name: move_to_tube_rack          # = task 문자열, 다른 단계와 겹치면 거부
+    executor: base_replay
+    terminator:
+      type: timeout
+      timeout_s: 30                  # 폭주 상한
+    replay:
+      dataset: kiroaiseoul/test_replay_timing_1024_basepose
+      episode: 0
+      from_row: 0
+      until_row: 297                 # 이 행까지(포함)
+  - id: s1_align
+    name: align_at_tube_rack
+    executor: base_align
+    terminator:
+      type: timeout
+      timeout_s: 60                  # max_moves 6이면 57 이상
+    align:
+      reference_dataset: kiroaiseoul/test_replay_timing_1024
+      episode: 0
+      frame: 302                     # 데모 도착 화면
+      landmark_roi: [285, 197, 93, 61]   # 기준 화면 속 고정물 상자 [x, y, w, h]
+      landmark_distance_m: 0.60      # 고정물까지 거리
+  - id: s2
+    # … 정책 단계(start_pose는 여기에)
+```
+
+- `timeout_s` 하한 — 재생 = `0.5 + (행 수 - 1) × row_period_s + 6`초, 정렬 = `max_moves` 6일 때 57초. 모자라면 connect 전에 종료 코드 `2`(필요한 초가 메시지에)
+- 재생 목표 속도 상한 — 행 간 최대 변화 ÷ `row_period_s`가 0.6 m/s 또는 0.7 rad/s를 넘으면 connect 전에 종료 코드 `2`(맞는 `row_period_s`가 메시지에). 10/24 실측 최대 = 0.49 m/s·0.57 rad/s
+- `start_pose`는 베이스 단계 **다음** 정책 단계에. 예외로 `base_replay`에는 둘 수 있다 — 다음 조작 단계의 시작 자세를 두면 이동 전에 팔을 옮기고 재생 내내 그 자세로 잡아 둔다. `base_align`에 두면 거부
+- 이동이 여럿 → 이동마다 한 쌍. 쌍마다 자기 `episode`·행 범위·기준 화면·`landmark_roi`·`landmark_distance_m`
+- 기준 화면을 데이터셋 프레임 대신 그 자리에서 찍은 사진으로 → `reference_image: <PNG 경로>`(`reference_dataset` 대신, 둘 중 하나만)
+- 나머지 필드·기본값 → [베이스 단계 설정 필드](#베이스-단계-설정-필드)
+
+### 3. 실행
+
+```shell
+env LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4 HF_HUB_OFFLINE=1 uv run python -m stage_runner --config_path configs/chain_stage12_align.yaml
+```
+
+- `env …` 스위치 셋 = 10/24 pi0 단계 2 eval 조건(정책 단계에만 걸린다) — ACT 체인이면 빼도 된다 → [Chunk Seam Smoothing](../../README.md#chunk-seam-smoothing)
+- 통과 기준 = `events.jsonl`에서
+	- 재생 단계 `stage_base_replay` 한 줄, `outcome: "settled"`
+	- 정렬 단계 `stage_base_align` 한 줄, `outcome: "aligned"`(또는 `"heading_only"` — 헤딩만 맞고 거리를 못 읽음, 체인은 계속)
+	- 그다음 정책 단계의 `stage_start`
+- 정렬 중 화면 = `outputs/stage_runner/<run_id>/base/<단계 id>/s<번호>_overlay.png` — 기준·현재 화면 겹침
+- `→` — 베이스를 그 자리로 인정하고 다음 단계로(`manual`). 재생 중이면 정렬이 베이스가 멈추길 기다렸다 잰다
+- `ESC`·`←` — 시행 중단(종료 코드 `1`)
+- 그 밖에 멈추면 종료 코드 `1`, 다음 정책은 안 돈다 — `stage_base_*` 줄의 `outcome`·`reason` → [베이스 단계 결과](#베이스-단계-결과)
 
 ---
 
@@ -223,7 +297,7 @@ connect 전, 체크포인트를 내려받기 전에 종료 코드 `2`로 막는 
 | `base_torque` | `released`(껐다 켬)·`not_released`(안 건드림)·`restore_failed`(복구 실패 — 시행 중단) |
 | `base_torque_error` | 복구 실패 사유, 정상이면 `null` |
 | `sent_actions` | 리셋 중 보낸 명령 수 |
-| `gripper_goals` | 마지막 그리퍼 명령 — 다음 시작 자세 이동 동안 유지되는 값 |
+| `gripper_goals` | 마지막 그리퍼 명령 — 다음 시작 자세 이동, 또는 바로 다음 베이스 단계 동안 유지되는 값 |
 | `loop_s` | 리더암 조종 시간 |
 
 ### 집계에서의 리셋 단계
@@ -250,3 +324,138 @@ mock 드라이버는 즉시·정확하게 도착하므로 아래는 첫 실기 �
 - 실제 이동 시간(`reposition_s`)
 - 직전 궤적 대기의 실제 길이(`expiry_wait_s`)와, 대기 뒤 이동 초반 휘두름이 사라졌는지 — 관절 궤적을 기록하는 로그는 아직 없다
 - 여유 0.05초(`TRAJECTORY_EXPIRY_MARGIN_S`)가 드라이버의 궤적 시작 지연을 덮는지
+
+### 위치 라벨 데이터셋
+
+`base_replay`가 따라가는 목표 = 데모 에피소드의 **베이스 위치 라벨**(`action`의 `x.pos` 누적 전진 거리 m · `theta.pos` 누적 헤딩 rad). 취득 데이터셋은 속도 라벨(`x.vel`·`theta.vel`)이라 그대로는 거부된다.
+
+- 만드는 법 = 10/24 현장 스크립트 `derive_pose.py` — 속도 라벨을 **취득 때 실측한 틱 간격**(취득의 `*_record.basevel.csv`)으로 적분해 `…_basepose` 사본을 로컬에 쓴다. 이 저장소엔 없다(로봇PC 작업지능 킷의 `_inbox/20261024-heading-align/`에서 편입된 사본, 경로 상수가 그 데이터셋 전용).
+- 데이터셋의 타임스탬프(`fps` 30)로 적분하면 안 된다 — 실제 취득 루프는 그보다 느려, 단계 1에서 85.8°가 59.5°로 나온다.
+- 재생 단계가 읽는 것 = `meta/info.json`·`data/**/*.parquet`(영상·통계 안 읽음). 지정 에피소드의 `frame_index`가 0부터 빠짐없이 이어져야 한다. 기준 화면 데이터셋은 `meta/`(`info.json`·`tasks.parquet`·`episodes/`)와 그 카메라 영상까지 — 하나라도 없으면 lerobot이 허브에서 받으려 하므로 실행기가 먼저 거부한다.
+- `from_row`가 0보다 크면 목표를 `from_row - 1`행 기준으로 다시 잰다 — 데모 중간부터 재생해도 「지금 자리에서 그만큼 더」가 된다.
+
+### 베이스 단계 설정 필드
+
+`replay:`
+
+| 필드 | 기본값 | 뜻 |
+|---|---|---|
+| `dataset` | (필수) | 위치 라벨 데이터셋 repo id |
+| `root` | `null` | 로컬 경로. `null` = `~/.cache/huggingface/lerobot/<dataset>` |
+| `episode` | `0` | 에피소드 번호 |
+| `from_row`·`until_row` | `0`·(필수) | 재생할 행 범위(양끝 포함) |
+| `row_period_s` | `1/21` | 목표 한 행의 벽시계 시간 — 10/24 재생 주기. 루프 주기와 무관(시간으로 보간). 줄이면 목표가 빨라져 속도 상한에 걸린다 |
+
+`align:`
+
+| 필드 | 기본값 | 뜻 |
+|---|---|---|
+| `reference_dataset`·`reference_root`·`episode`·`frame` | — | 기준 화면 = 그 데이터셋 에피소드의 프레임(`frame`은 필수) |
+| `reference_image` | `null` | 또는 기준 화면 사진 파일(PNG·JPG). 둘 중 하나만 |
+| `camera` | `cam_high` | 비교할 카메라 |
+| `landmark_roi` | (필수) | 기준 화면 속 고정물 상자 `[x, y, w, h]` — 거리 추정이 이 상자의 크기 변화로 잰다 |
+| `landmark_distance_m` | (필수) | 기준 화면에서 고정물까지 거리(m) |
+| `yaw_tol_deg`·`dist_tol_cm` | `2.0`·`1.0` | 정렬 판정 허용 오차 |
+| `max_moves` | `6` | 보정 이동 최대 횟수(측정은 최대 `max_moves + 1`번) |
+| `coarse_heading` | `true` | 정밀 추정이 안 될 때 고정물 덩어리 위치로 대략 돌린 뒤 다시 잼 → [정렬 단계가 하는 일](#정렬-단계가-하는-일) |
+| `camera_up` | 10/24 추정값 | 카메라 좌표의 로봇 세로축(제자리 회전으로 산출) |
+| `camera_matrix`·`dist_coeffs` | `null` | 렌즈값. `null` = RealSense 장치에서 읽음. RealSense가 아닌 카메라면 둘 다 필수 |
+| `turn_kp`·`min_turn_rate_rad_s` | `2.0`·`0.0` | 작은 회전이 덜 도는 것을 보완하는 손잡이 — 기본값이 10/24 동작 |
+| `distance_width_fallback` | `false` | SIFT 크기 일치점이 8개 미만일 때 현재 화면 상자 폭 ÷ ROI 폭으로 거리. `landmark_roi`가 기준 화면의 랙 상자(`dark_blob_box`)일 때만 — 다른 ROI와 함께 켜면 connect 전에 종료 코드 `2` |
+
+### 재생 단계가 하는 일
+
+구현 = `src/stage_runner/base_stages.py` `replay` · 추종기 `lerobot_robot_trossen/base_pose_control.py`(PR 69 추종기 사본).
+
+1. 목표·기준 화면은 **connect 전에** 전부 읽는다 — 단계 사이에 디스크를 읽지 않는다.
+2. 0.5초 정지 프레임(기록함) → 그 마지막 오도메트리가 이 단계의 원점 — 재생마다 그 자리에서 다시 잰다.
+3. 매 틱 = 관측 하나 · 명령 하나 · 프레임 하나. 팔·그리퍼는 잡아 둔다(그리퍼는 바로 앞이 리더암 리셋이면 그 리셋의 마지막 그리퍼 명령, 아니고 앞 단계 프레임이 있으면 마지막 기록 명령, 둘 다 없으면 측정 위치), 베이스는 추종기의 `x.vel`·`theta.vel`. 로봇은 속도 모드 그대로.
+4. 목표 = 경과 시간 ÷ `row_period_s` 행을 선형 보간 — 루프가 21 Hz보다 느려도 데모 속도 그대로.
+5. 마지막 행 뒤 정착 — 0.5초 정지면 `settled`, 4초 지나도 안 서면 `not_settled`(실패 아님, 정렬이 실제 자리를 잰다).
+6. 끝나면 베이스에 직접 0 명령 → `base/<단계 id>_replay.csv` → `stage_base_replay` 한 줄.
+
+### 정렬 단계가 하는 일
+
+구현 = `base_stages.py` `align` · 추정 `landmark_align.py`(10/24 `heading_align.py` 이식).
+
+1. 베이스가 0.3초 연속 정지하면 cam_high 프레임을 복사해 **작업 스레드**에서 잰다 — 그동안 본 루프는 베이스 0 명령으로 정지 프레임을 계속 기록. 3초 안에 안 서면 `not_still`.
+2. 헤딩 먼저 — `|헤딩| > yaw_tol_deg`면 `-헤딩`만큼 회전(0.6 rad/s 램프 + 1초 유지).
+3. 헤딩이 맞으면 거리 — 고정물 상자 크기 비율로 `|거리| > dist_tol_cm`면 직진(0.1 m/s 램프 + 1초 유지, 헤딩 유지).
+4. 둘 다 맞으면 `aligned`. 헤딩은 맞는데 거리를 못 읽으면 `heading_only`(10/24 `RESULT=HEADING_ONLY`와 같음, 체인 계속).
+5. **대략 헤딩**(`coarse_heading: true`) — 정밀 추정이 안 되고(맞는 점 15개 미만 또는 20° 초과) 고정물 덩어리가 보이면 그 위치로 대략 회전하고 다시 잰다. 대략 추정은 오차 안이어도 정렬로 끝내지 않는다. 대략 회전도 `max_moves`에 들어가고, 3번째 대략 회전이 필요하면 `estimate_unusable`. 랙 덩어리가 안 보이는 곳(비커 쪽·냉장고 앞·선반)에선 정밀 추정이 맞는 점 8개 이상·20° 이내면 그 값을 대략 헤딩으로 쓴다. 정밀·대략 둘 다 안 되면 그 자리에서 `estimate_unusable`. 측정마다 `heading_mode`(`fine`·`coarse`)가 기록된다.
+6. 같은 종류 보정의 오차가 직전보다 커지면(헤딩 +0.5°·거리 +5 mm 초과) `diverging`, `max_moves`를 다 쓰면 `not_converged`. 직진은 헤딩 기준을 초기화하지 않는다(10/24 규칙).
+7. 측정 실패 셋(`estimate_unusable`·`diverging`·`not_converged`)은 체인을 멈추지 않는다 — 그 자리에서 베이스를 세우고 다음 단계로 간다. 사유는 `stage_base_align`에 남는다(2026-10-25 실기 결정, 옆에서 보는 사람이 `ESC`로 끊을 수 있다). 안전 실패는 아래 표대로 시행 중단.
+8. 끝나면 베이스에 직접 0 명령, 작업 스레드는 기다리지 않고 종료 → `base/<단계 id>_align.csv` → `stage_base_align` 한 줄.
+
+### 베이스 단계 결과
+
+`terminated_by` = `converged`(다음 단계로) · `timeout`(다음 단계로) · `manual`(다음 단계로) · `base_failed`(**시행 중단**, 종료 코드 `1`) · `stop_recording`·`rerecord_requested`(키 중단).
+
+| `outcome` | 단계 | `terminated_by` | 뜻 |
+|---|---|---|---|
+| `settled` | 재생 | `converged` | 마지막 목표에서 정지 |
+| `not_settled` | 재생 | `timeout` | 4초 안에 정지 판정 못 함 — 정렬이 이어서 잰다 |
+| `aligned` | 정렬 | `converged` | 헤딩·거리 모두 허용 오차 안 |
+| `heading_only` | 정렬 | `converged` | 헤딩만 맞음, 거리 추정 불가 |
+| `manual` | 둘 다 | `manual` | `→` — 그 자리 인정 |
+| `missed_target` | 재생 | `base_failed` | 정지 뒤 목표와 3° 또는 5 cm 넘게 어긋남 |
+| `estimate_unusable` | 정렬 | `converged` | 헤딩을 못 읽음(위 5번) — 그 자리에서 다음 단계로 |
+| `diverging`·`not_converged` | 정렬 | `converged` | 위 6번 — 그 자리에서 다음 단계로 |
+| `move_failed` | 정렬 | `base_failed` | 보정 이동이 반대로 감, 또는 명령의 20% 미만만 움직임(비상정지·토크 꺼짐 의심) |
+| `not_still` | 정렬 | `base_failed` | 측정 전 3초 안에 정지 안 함 |
+| `intrinsics_unavailable` | 정렬 | `base_failed` | 렌즈값을 못 읽음·크기가 기준 화면과 다름(움직이기 전) |
+| `no_odometry` | 둘 다 | `base_failed` | 오도메트리 갱신 실패가 10틱 넘게 연속 |
+| `base_refused` | 둘 다 | `base_failed` | 베이스가 명령을 10번 넘게 연속 거부(10/24 현장 규칙) |
+| `base_estop` | 둘 다 | `base_failed` | 베이스 상태 `SYS_ESTOP`·`SYS_ERR*` |
+| `tracking_lost` | 둘 다 | `base_failed` | 목표와 10 cm 또는 각도 한계(재생 10°·정렬 이동 15°) 넘게 0.5초 이상 벌어짐(멈춘 베이스에 명령이 쌓였다 풀리며 튀는 것 방지). 10/24 실측 최대 = 재생 6.4°·정렬 회전 9.1° — 각도 한계를 이보다 좁히지 말 것 |
+| `stage_ceiling` | 둘 다 | `base_failed` | `timeout_s` 도달 |
+| `aborted` | 둘 다 | 키 | `ESC`·`←` |
+| `interrupted` | 둘 다 | `error` | 예외 — 베이스 직접 0 뒤 예외 그대로 전파 |
+
+- 문턱값은 `base_stages.py` 상수(YAML 아님) — 각 상수 옆 주석이 출처(현장값·추정)
+
+### 베이스 단계 이벤트
+
+단계마다 `stage_start`·`stage_end` 사이에 한 줄 — `stage_base_replay` 또는 `stage_base_align`. 정렬은 측정·이동마다 `stage_base_align_step`도.
+
+| 이벤트 | 주요 필드 |
+|---|---|
+| `stage_base_replay` | `outcome`·`reason` · 데이터셋·행 범위(`dataset`·`episode`·`from_row`·`until_row`·`rows`) · `anchor_odom` · `final_target_*`·`final_*`·`final_error_m`·`final_error_deg` · `max_tracking_error_m`·`_deg` · 오도메트리·명령 실패 수 · `tick_mean_s`·`tick_p95_s` · `gripper_hold_source`(`reset`·`recorded`·`measured`) · `csv` |
+| `stage_base_align` | `outcome`·`reason` · `reference`(출처·타임스탬프) · `intrinsics`(K·D·출처)·`field_intrinsics_delta`(10/24 상수와 차이) · `landmark_roi`·`auto_roi` · 허용 오차·`max_moves`·`coarse_heading` · `measurements`·`moves`·`move_count`·`coarse_turns` · `final_yaw_deg`·`final_move_cm` · `measure_s_total`·`tick_p95_s_while_measuring` · `gripper_hold_source`(`reset`·`recorded`·`measured`) · `csv` |
+| `stage_base_align_step` (`kind: measure`) | `step` · `capture_frame_idx` · `still_wait_s` · `yaw_deg`·`inliers`·`heading_mode`·`heading_yaw_deg`·`coarse_yaw_deg` · `scale`·`scale_inliers`·`scale_source`·`move_m`·`distance_valid` · `measure_s` · `live_png`·`overlay_png` · `decision` |
+| `stage_base_align_step` (`kind: move`) | `move`(`turn`·`drive`) · `commanded`·`achieved`·`ratio` · `ramp_s`·`hold_s`·`still_at_exit` · `max_tracking_error_*` · `frame_idx_start`·`frame_idx_end` |
+
+남는 파일 — `outputs/stage_runner/<run_id>/base/`:
+
+- `<단계 id>_replay.csv` · `<단계 id>_align.csv` — 기록 프레임마다 한 줄(목표·명령·측정 속도·오도메트리·갱신 성공 여부)
+- `<단계 id>/reference.png` · `s<번호>_live.png` · `s<번호>_overlay.png` — 기준 화면, 측정마다 현재 화면·겹침
+
+### 베이스 단계 preflight 거부
+
+connect 전 종료 코드 `2`.
+
+- 베이스 단계에 `policy_path`·`instruction`이 있음, `base_align`에 `start_pose`가 있음, `name`이 비었음, `terminator.type`이 `timeout`이 아님
+- `base_replay`에 `replay:`가 없거나 `align:`이 있음(정렬은 반대), 정책·리셋 단계에 `replay:`·`align:`이 있음
+- 베이스 단계 `name`이 다른 단계의 task 문자열과 같음
+- 행 범위·허용 오차·ROI·거리·`camera_up`·렌즈값 형식이 틀림, `timeout_s`가 하한 미만
+- 데이터셋이 로컬에 없음·속도 라벨임·에피소드·행·프레임이 없음, 기준 화면 크기가 카메라와 다름, ROI가 화면 밖
+- 로봇에 베이스 속도 키·`robot.base`(`get_pose`·`get_vel`·`update_state`·`set_cmd_vel`)가 없음, `enable_base_motor_torque: false`
+- 정렬 카메라가 로봇에 없음, RealSense가 아닌데 `camera_matrix`가 없음, 카메라 설정에 회전·RGB 아닌 색 모드
+
+### 집계에서의 베이스 단계
+
+- 성공률 축(`stage_ids`)·`per_stage`에서 **빠진다** — 리셋 단계와 같은 이유(라벨 대상이 아님, 체인 첫 단계가 재생이면 모든 시행이 채점에서 빠짐).
+- 따로 `timing.base_replay_s`·`timing.base_align_s` — 시간·프레임·`hertz` 분포, `terminators`, 그리고 단계 이벤트의 `outcomes`(`aligned`와 `heading_only`를 따로 센다).
+- `timing.base_stage_failed` — `base_failed`로 끝난 베이스 단계(시행 id·단계·`outcome`·`reason`). 그 시행은 중단이라 채점 대상에서 빠지고(`excluded_run_ids`) 여기가 이유를 남긴다.
+
+### 실기에서 아직 안 잰 것 — 베이스 단계
+
+mock 베이스는 명령을 정확히 따르고 mock 화면은 순수 회전이라 아래는 첫 실기 회차의 이벤트·CSV에서 읽는다.
+
+- 실제 루프 주기(`tick_mean_s`·`tick_p95_s`)와 측정 중 주기(`tick_p95_s_while_measuring`) — 측정은 순수 파이썬 RANSAC이라 본 루프와 GIL을 나눈다
+- 측정 시간(`measure_s`) — 사무실 약 0.5초, 로봇PC 미측정
+- 새 중단 조건(`no_odometry`·`tracking_lost`·`base_estop`·`not_still`·`move_failed`·`missed_target`)의 문턱값이 정상 회차를 끊지 않는지 — 끊으면 `reason`의 값으로 상수를 조정
+- 재생 중 비상정지 → `base_estop`, 해제 때 튀지 않는지
+- 장치 렌즈값과 10/24 상수의 차이(`field_intrinsics_delta`), `auto_roi`가 `[285, 197, 93, 61]`과 같은지
+- 3° 미만 작은 회전이 덜 도는 정도(10/24 50~70%) — 허용 오차 2°로 버티는지
+- 정렬 뒤 pi0 단계 2 성공률이 10/24(헤딩·거리 보정 뒤 4/4, 헤딩만 2/3)와 비슷한지

@@ -1008,6 +1008,43 @@ def test_every_stage_start_is_announced(tmp_path: Path) -> None:
         ]
 
 
+def test_the_writer_and_the_reader_share_one_executor_vocabulary() -> None:
+    """config/events write these strings; aggregate reads them. They must match.
+
+    Duplicated in aggregate for the stdlib-only reason above. The failure this
+    guards is silent and lands on the success metrics: an executor the reader
+    does not know reads as a policy stage, so a renamed base executor would put
+    every base_replay on the scored axis -- and the robot chain STARTS with one,
+    which leaves every trial unscored -- while a renamed base event would count
+    every align as "not_logged".
+    """
+    from stage_runner import executors as stage_executors
+
+    assert (config.EXECUTOR_LEROBOT_POLICY, config.EXECUTOR_LEADER_RESET) == (
+        aggregate.EXECUTOR_LEROBOT_POLICY,
+        aggregate.EXECUTOR_LEADER_RESET,
+    )
+    assert (config.EXECUTOR_BASE_REPLAY, config.EXECUTOR_BASE_ALIGN) == (
+        aggregate.EXECUTOR_BASE_REPLAY,
+        aggregate.EXECUTOR_BASE_ALIGN,
+    )
+    assert config.BASE_EXECUTORS == aggregate.BASE_EXECUTORS
+    # Every executor the runner can dispatch is either scored (a policy) or
+    # explicitly unscored -- none falls through to the policy default.
+    assert set(stage_executors.EXECUTORS) == (
+        set(config.POLICY_EXECUTORS) | aggregate.UNSCORED_EXECUTORS
+    )
+    assert not set(config.POLICY_EXECUTORS) & aggregate.UNSCORED_EXECUTORS
+    assert (
+        event_stream.EVENT_STAGE_BASE_REPLAY,
+        event_stream.EVENT_STAGE_BASE_ALIGN,
+    ) == (aggregate.EVENT_STAGE_BASE_REPLAY, aggregate.EVENT_STAGE_BASE_ALIGN)
+    assert aggregate.BASE_OUTCOME_EVENT_BY_EXECUTOR == {
+        config.EXECUTOR_BASE_REPLAY: event_stream.EVENT_STAGE_BASE_REPLAY,
+        config.EXECUTOR_BASE_ALIGN: event_stream.EVENT_STAGE_BASE_ALIGN,
+    }
+
+
 if __name__ == "__main__":
     # No pytest in this venv and it must not be mutated, so the file is its own
     # runner. Each case gets its own temporary root: they all write a dataset
@@ -1035,4 +1072,8 @@ if __name__ == "__main__":
     print(
         f"[ok] {test_the_writer_and_the_reader_share_one_stop_base_vocabulary.__name__}"
     )
-    print(f"[smoke] {len(TESTS) + 3} passed")
+    test_the_writer_and_the_reader_share_one_executor_vocabulary()
+    print(
+        f"[ok] {test_the_writer_and_the_reader_share_one_executor_vocabulary.__name__}"
+    )
+    print(f"[smoke] {len(TESTS) + 4} passed")

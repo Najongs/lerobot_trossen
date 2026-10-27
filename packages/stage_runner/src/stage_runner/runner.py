@@ -286,6 +286,15 @@ def run_trial(context: StageContext) -> TrialOutcome:
             )
             held_gripper: dict[str, float] | None = None
             gripper_goal_source = reposition.GRIPPER_GOAL_UNCHANGED
+            # For a base stage later in the chain, and for EVERY chain, not only
+            # one with a start pose: a base stage cannot have a start pose, so
+            # the tracking below never reaches it. A reset's goals stand until a
+            # stage records frames; from then on the buffer's last row is newer.
+            if result.gripper_goals is not None:
+                context.reset_gripper_goals.clear()
+                context.reset_gripper_goals.update(result.gripper_goals)
+            elif result.frames > 0:
+                context.reset_gripper_goals.clear()
             if uses_start_poses:
                 if result.gripper_goals is not None:
                     # A leader_reset stage: its commands never reached the

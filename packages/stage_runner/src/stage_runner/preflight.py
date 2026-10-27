@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import lerobot
+from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.robots import Robot
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STATE
@@ -27,6 +28,9 @@ from lerobot.utils.control_utils import is_headless, sanity_check_dataset_name
 # so it adds neither torch nor a cycle to the gate.
 from stage_runner import reposition, transitions
 from stage_runner.config import (
+    BASE_EXECUTORS,
+    EXECUTOR_BASE_ALIGN,
+    EXECUTOR_BASE_REPLAY,
     EXECUTOR_LEADER_RESET,
     LATEST_CONFIG_VERSION,
     POLICY_EXECUTORS,
@@ -201,6 +205,8 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                 f"{where} ({stage.id!r}): unknown `executor: {stage.executor}`. "
                 f"Known executors: {known}."
             )
+        elif stage.executor in BASE_EXECUTORS:
+            problems.extend(_base_stage_problems(where, stage))
         elif stage.executor == EXECUTOR_LEADER_RESET:
             # A reset runs no checkpoint and moves the arms by hand, so both of
             # these would be silently ignored -- refused instead, with the fix.
@@ -224,7 +230,9 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                     "values lerobot-record takes as --teleop.*)."
                 )
         elif not stage.policy_path:
-            # Without this the blank path reaches
+            # (A base stage never gets here: it has its own branch above, and
+            # this fall-through would refuse it for the policy_path it must not
+            # have.) Without this the blank path reaches
             # PreTrainedConfig.from_pretrained(""), which raises
             # `FileNotFoundError: [Errno 2] No such file or directory: ''` --
             # outside the PreflightError branch in cli.main, so the operator gets
@@ -234,6 +242,19 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                 f"`{stage.executor}` stage runs a checkpoint: give it a hub repo "
                 "id, a local directory, or `mock://hold` for a dry run."
             )
+
+        if stage.executor in EXECUTORS and stage.executor not in BASE_EXECUTORS:
+            # The blocks only the base executors read. Anywhere else they would
+            # be parsed and silently ignored -- most likely a base stage whose
+            # `executor:` line was forgotten, which would then run as a policy.
+            for block in ("replay", "align"):
+                if getattr(stage, block) is not None:
+                    problems.append(
+                        f"{where} ({stage.id!r}): a `{stage.executor}` stage ignores "
+                        f"`{block}:`, which only a `{EXECUTOR_BASE_REPLAY}` / "
+                        f"`{EXECUTOR_BASE_ALIGN}` stage reads. Set the stage's "
+                        f"`executor:`, or delete the `{block}:` block."
+                    )
 
         terminator = stage.terminator
         if terminator.type not in TERMINATOR_TYPES:
@@ -293,21 +314,274 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                     "would abort at this stage."
                 )
 
+    problems.extend(_task_string_collisions(config.stages))
+
     if config.stages and not any(
         stage.executor in POLICY_EXECUTORS for stage in config.stages
     ):
-        # A chain of resets only would record an empty episode and trip the
-        # dataset-name rule the wrong way round (check_dataset_name's no-policy
-        # branch); it is not an eval at all.
+        # A chain of resets and base stages only would record no policy output
+        # and trip the dataset-name rule the wrong way round (check_dataset_name's
+        # no-policy branch); it is not an eval at all.
+        executors_here = ", ".join(
+            sorted({f"`{stage.executor}`" for stage in config.stages})
+        )
         problems.append(
-            "every stage is a `leader_reset` stage: add at least one "
-            "`lerobot_policy` stage -- a reset alone records nothing."
+            f"no stage runs a policy (executors here: {executors_here}): add at "
+            "least one `lerobot_policy` stage -- reset and base stages alone are "
+            "not an eval."
         )
 
     if problems:
         raise PreflightError(
             "invalid stage definitions:\n  - " + "\n  - ".join(problems)
         )
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_positive(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def _base_stage_problems(where: str, stage: StageConfig) -> list[str]:
+    """The robot-independent checks of one base_replay / base_align stage.
+
+    Each refusal names the key to change. The ceiling floors come from
+    base_stages, the module whose loops they bound, so the gate and the stage
+    cannot disagree about how long a stage may need.
+    """
+    # Lazy for the same reason as the executors import in check_stage_definitions.
+    from stage_runner import base_stages
+
+    here = f"{where} ({stage.id!r})"
+    executor = stage.executor
+    problems: list[str] = []
+    if stage.policy_path:
+        problems.append(
+            f"{here}: a `{executor}` stage drives the base and runs no policy, but "
+            f"`policy_path: {stage.policy_path}` is set. Delete it."
+        )
+    # A base_replay stage may carry the NEXT policy stage's start_pose, so the
+    # arms are posed before the base moves (user request 2026-10-25). runner._reposition_before_stage runs for any stage
+    # with a start_pose, and the base loop then holds the arms where they are.
+    if stage.start_pose is not None and executor != "base_replay":
+        problems.append(
+            f"{here}: a `{executor}` stage holds the arms where they are, so "
+            "`start_pose` would not be applied. Put it on the policy stage that "
+            "follows."
+        )
+    if stage.instruction:
+        problems.append(
+            f"{here}: a `{executor}` stage records its frames under its `name`; "
+            "`instruction` would be ignored. Delete it and set `name`."
+        )
+    if not stage.name:
+        problems.append(
+            f"{here}: `name` is empty. A `{executor}` stage records every frame "
+            "with its name as the task string, which is how the episode is split "
+            "into stages afterwards."
+        )
+    timeout_s = stage.terminator.timeout_s
+    if stage.terminator.type != TERMINATOR_TIMEOUT:
+        problems.append(
+            f"{here}: a `{executor}` stage needs `terminator.type: timeout` -- the "
+            "timeout is the stage's runaway ceiling; it ends on its own (or on the "
+            "right arrow) well before it."
+        )
+
+    if executor == EXECUTOR_BASE_REPLAY:
+        replay = stage.replay
+        if replay is None:
+            problems.append(
+                f"{here}: a `{executor}` stage needs a `replay:` block (dataset, "
+                "episode, until_row)."
+            )
+        else:
+            if not replay.dataset:
+                problems.append(
+                    f"{here}: `replay.dataset` is empty: give the repo id of the "
+                    "pose-labelled dataset (derive_pose.py's copy)."
+                )
+            if not (_is_int(replay.episode) and replay.episode >= 0):
+                problems.append(
+                    f"{here}: `replay.episode: {replay.episode}` must be >= 0."
+                )
+            if not (
+                _is_int(replay.from_row)
+                and _is_int(replay.until_row)
+                and 0 <= replay.from_row < replay.until_row
+            ):
+                problems.append(
+                    f"{here}: `replay.from_row: {replay.from_row}` / `until_row: "
+                    f"{replay.until_row}` must satisfy 0 <= from_row < until_row; "
+                    "until_row is the last row to replay (where the demo's base "
+                    "stopped), and has no default."
+                )
+            if not _is_positive(replay.row_period_s):
+                problems.append(
+                    f"{here}: `replay.row_period_s: {replay.row_period_s}` must be a "
+                    "positive number of seconds (1/21 is the field's rate)."
+                )
+        if stage.align is not None:
+            problems.append(
+                f"{here}: a `{executor}` stage ignores `align:`; put it on a "
+                f"`{EXECUTOR_BASE_ALIGN}` stage after this one."
+            )
+        return problems
+
+    align = stage.align
+    if stage.replay is not None:
+        problems.append(
+            f"{here}: a `{executor}` stage ignores `replay:`; put it on a "
+            f"`{EXECUTOR_BASE_REPLAY}` stage before this one."
+        )
+    if align is None:
+        problems.append(
+            f"{here}: a `{executor}` stage needs an `align:` block (reference, "
+            "landmark_roi, landmark_distance_m)."
+        )
+        return problems
+    if bool(align.reference_dataset) == bool(align.reference_image):
+        problems.append(
+            f"{here}: give exactly one of `align.reference_dataset` (with episode "
+            "and frame) and `align.reference_image`."
+        )
+    if align.reference_dataset and not (
+        _is_int(align.episode)
+        and _is_int(align.frame)
+        and align.episode >= 0
+        and align.frame >= 0
+    ):
+        problems.append(
+            f"{here}: `align.episode: {align.episode}` / `align.frame: "
+            f"{align.frame}` must both be >= 0; frame is the demo's arrival frame "
+            "and has no default."
+        )
+    roi = align.landmark_roi
+    if not (
+        len(roi) == 4
+        and all(_is_int(value) for value in roi)
+        and roi[0] >= 0
+        and roi[1] >= 0
+        and roi[2] > 0
+        and roi[3] > 0
+    ):
+        problems.append(
+            f"{here}: `align.landmark_roi: {list(roi)}` must be [x, y, w, h] "
+            "integers with x, y >= 0 and w, h > 0 -- the landmark's box in the "
+            "reference (dark_blob_box(reference) is what the field used)."
+        )
+    if not _is_positive(align.landmark_distance_m):
+        problems.append(
+            f"{here}: `align.landmark_distance_m: {align.landmark_distance_m}` must "
+            "be the positive camera-to-landmark distance at the demo arrival, in m "
+            "(0.60 for the 10/24 rack)."
+        )
+    for name in ("yaw_tol_deg", "dist_tol_cm"):
+        value = getattr(align, name)
+        if not _is_positive(value):
+            problems.append(f"{here}: `align.{name}: {value}` must be positive.")
+    if not (_is_int(align.max_moves) and align.max_moves >= 1):
+        problems.append(f"{here}: `align.max_moves: {align.max_moves}` must be >= 1.")
+    up = align.camera_up
+    if not (len(up) == 3 and all(math.isfinite(value) for value in up)) or not (
+        0.9 <= math.hypot(*up) <= 1.1
+    ):
+        problems.append(
+            f"{here}: `align.camera_up: {list(up)}` must be a 3-vector of norm "
+            "about 1 (the robot's vertical axis in camera coordinates)."
+        )
+    matrix, dist = align.camera_matrix, align.dist_coeffs
+    if (matrix is None) != (dist is None):
+        problems.append(
+            f"{here}: give both `align.camera_matrix` and `align.dist_coeffs`, or "
+            "neither (then both are read from the RealSense)."
+        )
+    elif matrix is not None and dist is not None:
+        if not (
+            len(matrix) == 3
+            and all(len(row) == 3 for row in matrix)
+            and all(math.isfinite(value) for row in matrix for value in row)
+        ):
+            problems.append(
+                f"{here}: `align.camera_matrix` must be a finite 3x3 matrix."
+            )
+        if len(dist) not in (4, 5, 8, 12, 14) or not all(
+            math.isfinite(value) for value in dist
+        ):
+            problems.append(
+                f"{here}: `align.dist_coeffs` must be 4, 5, 8, 12 or 14 finite "
+                f"values (OpenCV's distortion models), got {len(dist)}."
+            )
+    if not _is_positive(align.turn_kp):
+        problems.append(f"{here}: `align.turn_kp: {align.turn_kp}` must be positive.")
+    if not (
+        isinstance(align.min_turn_rate_rad_s, (int, float))
+        and math.isfinite(align.min_turn_rate_rad_s)
+        and align.min_turn_rate_rad_s >= 0
+    ):
+        problems.append(
+            f"{here}: `align.min_turn_rate_rad_s: {align.min_turn_rate_rad_s}` must "
+            "be >= 0 (0 = off, the 10/24 behaviour)."
+        )
+    if (
+        stage.terminator.type == TERMINATOR_TIMEOUT
+        and timeout_s is not None
+        and _is_int(align.max_moves)
+        and align.max_moves >= 1
+    ):
+        needed = base_stages.align_ceiling_floor_s(align.max_moves)
+        if timeout_s < needed:
+            problems.append(
+                f"{here}: `terminator.timeout_s: {timeout_s}` is shorter than an "
+                f"align of up to {align.max_moves} moves may need: each of the "
+                f"{align.max_moves + 1} measurements may wait "
+                f"{base_stages.CAPTURE_STILL_MAX_S:g} s for a still base and take "
+                f"{base_stages.MEASURE_BUDGET_S:g} s. Raise it to at least "
+                f"{math.ceil(needed)} s, or lower `align.max_moves`."
+            )
+    return problems
+
+
+def _task_string(stage: StageConfig) -> str:
+    """The string a stage's frames are recorded under (frame["task"])."""
+    if stage.executor in POLICY_EXECUTORS:
+        return stage.instruction or stage.name
+    return stage.name
+
+
+def _task_string_collisions(stages: Sequence[StageConfig]) -> list[str]:
+    """A base stage whose name is another stage's task string.
+
+    A base stage's frames carry its name as the task string, and that string is
+    how one episode is split back into stages (tasks.parquet). Sharing it with
+    another stage merges the two in every per-stage reading of the dataset.
+    Scoped to base stages on purpose: two policy stages that share an
+    instruction were legal before base stages existed and stay legal -- a VLA
+    chain may well run the same instruction twice.
+    """
+    problems: list[str] = []
+    for index, stage in enumerate(stages):
+        if stage.executor not in BASE_EXECUTORS or not stage.name:
+            continue
+        for other_index, other in enumerate(stages):
+            if other_index == index or _task_string(other) != stage.name:
+                continue
+            problems.append(
+                f"stages[{index}] ({stage.id!r}): `name: {stage.name}` is also the "
+                f"task string of stages[{other_index}] ({other.id!r}), so their "
+                "frames could not be told apart in the dataset. Give the base "
+                "stage a name of its own."
+            )
+            break
+    return problems
 
 
 def check_leader_reset_stages(
@@ -353,6 +627,101 @@ def check_leader_reset_stages(
         raise PreflightError(
             f"the `teleop:` leader arm ({type(teleop).__name__}) cannot drive this "
             "robot in a leader_reset stage:\n  - " + "\n  - ".join(problems)
+        )
+
+
+# Methods the base stages call on robot.base. On MobileAIRobot it is the
+# TrossenSlate built in __init__ (mobileai.py), so it exists before connect.
+_BASE_METHODS: tuple[str, ...] = ("get_pose", "get_vel", "update_state", "set_cmd_vel")
+
+
+def check_base_stages(config: StageRunnerConfig, robot: Robot) -> None:
+    """The robot-dependent half of the base stage gate, before anything connects.
+
+    The base must take velocity commands and report odometry, and must be
+    powered; an align stage's camera must exist, must have an intrinsics source,
+    and must stream the unrotated RGB image the estimator assumes. The reference
+    image against the camera's size is base_assets' check, which has the image.
+    """
+    staged = [stage for stage in config.stages if stage.executor in BASE_EXECUTORS]
+    if not staged:
+        return
+    problems: list[str] = []
+    missing_keys = sorted(
+        set(transitions.BASE_VELOCITY_KEYS) - set(robot.action_features)
+    )
+    if missing_keys:
+        problems.append(
+            f"robot {robot.name!r} takes no base velocity command {missing_keys}"
+        )
+    base = getattr(robot, "base", None)
+    missing_methods = [
+        name for name in _BASE_METHODS if not callable(getattr(base, name, None))
+    ]
+    if missing_methods:
+        problems.append(
+            f"robot {robot.name!r} has no base with {missing_methods} (robot.base is "
+            f"{type(base).__name__}), so the stage can neither drive the base nor "
+            "read its odometry"
+        )
+    if getattr(robot.config, "enable_base_motor_torque", True) is False:
+        problems.append(
+            "`robot.enable_base_motor_torque` is false: the base would ignore every "
+            "command silently; set robot.enable_base_motor_torque: true."
+        )
+    # Both executors drive the base with PR 69's pose tracker, which lives in
+    # lerobot_robot_trossen -- a package stage_runner does not declare. Found
+    # missing here rather than at the first base stage, mid-chain.
+    from stage_runner import base_stages
+
+    try:
+        base_stages.import_tracker()
+    except ImportError as error:
+        problems.append(str(error))
+
+    cameras = getattr(robot, "cameras", None) or {}
+    camera_configs = getattr(robot.config, "cameras", None) or {}
+    for stage in staged:
+        align = stage.align
+        if stage.executor != EXECUTOR_BASE_ALIGN or align is None:
+            continue
+        here = f"stage {stage.id!r}"
+        if align.camera not in cameras:
+            problems.append(
+                f"{here}: `align.camera: {align.camera}` is not a camera of robot "
+                f"{robot.name!r} (cameras: {sorted(cameras)})"
+            )
+        entry = camera_configs.get(align.camera)
+        if (
+            align.camera_matrix is None
+            and getattr(entry, "type", None) != "intelrealsense"
+        ):
+            problems.append(
+                f"{here}: no intrinsics source for `{align.camera}` (it is not a "
+                "RealSense): give align.camera_matrix and dist_coeffs."
+            )
+        if entry is None:
+            continue
+        # Device intrinsics hold for the unrotated stream only
+        # (camera_realsense.py), and the estimator's gray thresholds are tuned
+        # on RGB; either setting would skew every estimate without an error.
+        rotation = getattr(entry, "rotation", Cv2Rotation.NO_ROTATION)
+        if rotation != Cv2Rotation.NO_ROTATION:
+            problems.append(
+                f"{here}: camera `{align.camera}` is configured with rotation "
+                f"{rotation!r}; the intrinsics and the reference are for the "
+                "unrotated stream. Set its rotation to 0."
+            )
+        color_mode = getattr(entry, "color_mode", ColorMode.RGB)
+        if color_mode != ColorMode.RGB:
+            problems.append(
+                f"{here}: camera `{align.camera}` streams {color_mode!r}; the "
+                "estimator's thresholds are tuned on RGB. Set its color_mode to rgb."
+            )
+    if problems:
+        raise PreflightError(
+            f"robot {robot.name!r} cannot run the base stages:\n  - "
+            + "\n  - ".join(problems)
         )
 
 
@@ -647,8 +1016,8 @@ def check_dataset_name(
     # Currently unreachable, and kept: check_stage_definitions rejects an empty
     # `policy_path` for every policy executor and a chain with no policy stage at
     # all, so "no stage declares a policy_path" cannot get this far -- the
-    # leader_reset executor, which runs without a checkpoint, only ever sits
-    # beside a policy stage. It stays as the explicit no-policy branch for an
+    # leader_reset and base executors, which run without a checkpoint, only ever
+    # sit beside a policy stage. It stays as the explicit no-policy branch for an
     # executor that may one day legitimately make up a whole run (a start-state
     # randomizer), which would otherwise re-invert this rule by accident.
     try:
@@ -719,6 +1088,7 @@ def run_preflight(
     check_stage_dimensions(robot, config.stages, policy_configs)
     check_stage_start_poses(config, robot)
     check_leader_reset_stages(config, robot, teleop)
+    check_base_stages(config, robot)
     check_manual_terminator_is_reachable(config)
     check_dataset_name(config, policy_configs)
     check_dataset_root_is_free(config)

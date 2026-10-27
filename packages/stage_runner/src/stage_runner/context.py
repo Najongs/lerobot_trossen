@@ -5,9 +5,10 @@ Its own module so executors, runner and cli can all import it without a cycle.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     # Annotation-only. Nothing here is constructed or isinstance-checked at
@@ -51,6 +52,25 @@ class StageContext:
     # provides for. None unless a stage uses the leader_reset executor: cli.main
     # constructs and connects it only then.
     teleop: Teleoperator | None = None
+    # Replay targets and align references, keyed by stage.id, loaded from local
+    # files before connect by base_assets.load_base_assets -- so a base stage
+    # anywhere in the chain, and any number of them, opens no dataset and reads
+    # no file between stages. Empty unless a stage uses a base executor. Typed
+    # Any so this module does not import numpy for the values
+    # (base_assets.ReplayTargets / base_assets.AlignReference).
+    base_assets: Mapping[str, Any] = field(default_factory=dict)
+    # The gripper goals a leader_reset stage handed over on
+    # StageResult.gripper_goals, kept here ONLY while they are newer than the
+    # episode buffer's last action row; empty otherwise. A reset records no
+    # frames, so after one the buffer's last row is the previous POLICY
+    # stage's command, not the grip the operator just set with the leader arm.
+    # A base stage reads this before the buffer (base_loop._hold_from) so a
+    # base_replay or base_align right after a reset keeps that grip instead of
+    # re-opening the grippers to an older command. run_trial writes it at every
+    # boundary: set after a reset, cleared after any stage that recorded frames
+    # (the buffer is the newer source again). Mutable on purpose, like
+    # `events`: the dict is fixed, its contents follow the chain.
+    reset_gripper_goals: dict[str, float] = field(default_factory=dict)
 
     def buffered_frame_count(self) -> int:
         """Frames written into the current episode buffer so far.

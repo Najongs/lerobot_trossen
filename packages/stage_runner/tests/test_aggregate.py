@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 TESTS_DIRECTORY = Path(__file__).resolve().parent
 # Running this file directly (no pytest, no installed package) puts only the
@@ -1492,6 +1493,204 @@ def test_unknown_outcome_is_rejected_not_counted_as_a_failure() -> None:
         assert load_labels(path) == {("t01", "s4"): OUTCOME_SUCCESS}
 
 
+def _base_chain_events(
+    run_id: str, align_outcome: str, align_terminator: str
+) -> list[dict[str, Any]]:
+    """s1 base_replay -> s1_align base_align -> s2 policy, as the runner writes.
+
+    The base events sit INSIDE their stage, between its stage_start and its
+    stage_end, which is where base_stages emits them. When the align fails the
+    trial ends there (base_failed is aborting) and s2 never starts.
+
+        s1        base_replay  converged   elapsed 5.0 s  frames 100   0 -> 100
+        s1_align  base_align   <given>     elapsed 8.0 s  frames 160 100 -> 260
+        s2        policy       timeout     elapsed 3.0 s  frames  90 260 -> 350
+    """
+    base = {"schema_version": 1, "run_id": run_id, "reason": ""}
+    clock = "2026-10-24T15:00:{:06.3f}+09:00".format
+    events: list[dict[str, Any]] = [
+        {
+            **base,
+            "event": "trial_start",
+            "wall_clock_iso": clock(0.0),
+            "stage_id": None,
+            "frame_idx": 0,
+            "terminator": None,
+        },
+    ]
+
+    def stage(
+        index: int,
+        stage_id: str,
+        executor: str,
+        start: float,
+        elapsed: float,
+        first: int,
+        frames: int,
+        terminator: str,
+        base_event: tuple[str, str] | None = None,
+    ) -> None:
+        events.append(
+            {
+                **base,
+                "event": "stage_start",
+                "wall_clock_iso": clock(start),
+                "stage_id": stage_id,
+                "stage_index": index,
+                "frame_idx": first,
+                "terminator": TERMINATED_BY_TIMEOUT,
+                "executor": executor,
+            }
+        )
+        if base_event is not None:
+            name, outcome = base_event
+            events.append(
+                {
+                    **base,
+                    "event": name,
+                    "wall_clock_iso": clock(start + elapsed),
+                    "stage_id": stage_id,
+                    "frame_idx": first + frames,
+                    "terminator": terminator,
+                    "outcome": outcome,
+                    "reason": f"{outcome}: scripted",
+                }
+            )
+        events.append(
+            {
+                **base,
+                "event": "stage_end",
+                "wall_clock_iso": clock(start + elapsed),
+                "stage_id": stage_id,
+                "stage_index": index,
+                "frame_idx": first + frames,
+                "terminator": terminator,
+                "reason": f"{terminator}: scripted",
+                "elapsed_s": elapsed,
+                "frames": frames,
+            }
+        )
+
+    stage(
+        0,
+        "s1",
+        "base_replay",
+        1.0,
+        5.0,
+        0,
+        100,
+        "converged",
+        ("stage_base_replay", "settled"),
+    )
+    stage(
+        1,
+        "s1_align",
+        "base_align",
+        6.1,
+        8.0,
+        100,
+        160,
+        align_terminator,
+        ("stage_base_align", align_outcome),
+    )
+    completed = align_terminator == "converged"
+    if completed:
+        stage(2, "s2", "lerobot_policy", 14.2, 3.0, 260, 90, TERMINATED_BY_TIMEOUT)
+    events.append(
+        {
+            **base,
+            "event": "trial_end",
+            "wall_clock_iso": clock(18.0),
+            "stage_id": None,
+            "frame_idx": 350 if completed else 260,
+            "terminator": None,
+            "completed": completed,
+            "reason": "completed" if completed else "aborted",
+        }
+    )
+    return events
+
+
+def test_base_stages_are_off_the_score_axis_and_reported_apart() -> None:
+    """base_replay / base_align stages: timed and counted, never scored.
+
+    The robot chain STARTS with a base_replay, and scored_trials keys off the
+    axis' first stage, so a base stage on the axis would leave every trial
+    unscored. Their outcomes are counted from their own events because the
+    terminator folds heading_only into converged with aligned.
+    """
+    passed = build_trial(_base_chain_events("t20", "heading_only", "converged"))
+    failed = build_trial(_base_chain_events("t21", "estimate_unusable", "base_failed"))
+    assert [stage.base_outcome for stage in passed.stages] == [
+        "settled",
+        "heading_only",
+        None,
+    ]
+    assert stage_order([passed, failed]) == ["s2"]
+
+    timing = timing_summary([passed, failed])
+    assert set(timing["per_stage"]) == {"s2"}
+    replay = timing["base_replay_s"]
+    # Two replays of 5.0 s and 100 frames each: 20 Hz.
+    assert replay["n"] == 2 and close(replay["mean"], 5.0), replay
+    assert close(replay["frames"]["mean"], 100.0), replay
+    assert close(replay["hertz"]["mean"], 20.0), replay
+    assert replay["terminators"] == {"converged": 2}, replay
+    assert replay["outcomes"] == {"settled": 2}, replay
+    align = timing["base_align_s"]
+    # 160 frames over 8.0 s: 20 Hz, both trials.
+    assert align["n"] == 2 and close(align["hertz"]["mean"], 20.0), align
+    assert align["terminators"] == {"converged": 1, "base_failed": 1}, align
+    # heading_only is NOT folded into a converged count.
+    assert align["outcomes"] == {"heading_only": 1, "estimate_unusable": 1}, align
+    assert timing["base_stage_failed_n"] == 1
+    assert timing["base_stage_failed"] == [
+        {
+            "run_id": "t21",
+            "stage_id": "s1_align",
+            "executor": "base_align",
+            "terminated_by": "base_failed",
+            "outcome": "estimate_unusable",
+            "reason": "base_failed: scripted",
+        }
+    ], timing["base_stage_failed"]
+
+    # The failed trial aborted before s2, so it drops out of the scored set like
+    # any abort; the passed one is scored on s2 alone.
+    labels = {("t20", "s2"): OUTCOME_SUCCESS}
+    summary = summarize([passed, failed], labels)
+    assert summary["scored_trial_count"] == 1, summary["scored_trial_count"]
+    assert summary["excluded_run_ids"] == ["t21"], summary["excluded_run_ids"]
+    assert summary["per_stage_success_rate"] == {"s2": 1.0}
+    report = format_report(summary)
+    assert "base replay" in report and "base align" in report, report
+    assert "'heading_only': 1" in report, report
+    assert "t21/s1_align (estimate_unusable)" in report, report
+
+    # A run without base stages prints none of these lines.
+    plain = format_report(summarize(load_fixture()[0], {}))
+    assert "base replay" not in plain and "base stage" not in plain, plain
+
+
+def test_a_base_event_outside_its_stage_labels_nothing() -> None:
+    """A base event that is not inside a stage of its executor is ignored.
+
+    It would otherwise label the wrong stage -- an align outcome read onto the
+    policy stage that follows it, say. The stage records themselves are still
+    read from their stage_start / stage_end pairs.
+    """
+    events = _base_chain_events("t22", "aligned", "converged")
+    # Swap the two base events' names: each now sits inside the wrong executor.
+    for event in events:
+        if event["event"] == "stage_base_replay":
+            event["event"] = "stage_base_align"
+        elif event["event"] == "stage_base_align":
+            event["event"] = "stage_base_replay"
+    trial = build_trial(events)
+    assert [stage.base_outcome for stage in trial.stages] == [None, None, None]
+    assert timing_summary([trial])["base_align_s"]["outcomes"] == {"not_logged": 1}
+
+
 def test_aggregate_imports_without_the_robot_stack() -> None:
     """The stdlib-only claim in aggregate.py's docstring, actually checked.
 
@@ -1648,6 +1847,8 @@ if __name__ == "__main__":
         test_a_non_primary_stop_base_has_no_boundary_total,
         test_stop_action_null_is_not_evidence_of_a_failed_base_stop,
         test_unknown_outcome_is_rejected_not_counted_as_a_failure,
+        test_base_stages_are_off_the_score_axis_and_reported_apart,
+        test_a_base_event_outside_its_stage_labels_nothing,
         test_aggregate_imports_without_the_robot_stack,
     ]
     for test in tests:
