@@ -1,19 +1,26 @@
 """Function-dispatch table for the ``executor:`` field, and the executors it names."""
 
+import dataclasses
 import logging
 import time
 from collections.abc import Callable
 
-from stage_runner import base_stages, leader_reset, record_adapter
+from stage_runner import base_stages, completion, leader_reset, record_adapter
 from stage_runner.config import (
     EXECUTOR_BASE_ALIGN,
     EXECUTOR_BASE_REPLAY,
     EXECUTOR_LEADER_RESET,
     EXECUTOR_LEROBOT_POLICY,
+    TERMINATOR_GRASP,
+    WATCHED_TERMINATORS,
     StageConfig,
 )
 from stage_runner.context import StageContext
-from stage_runner.events import EVENT_STAGE_RESET
+from stage_runner.events import (
+    EVENT_STAGE_BASE_TORQUE,
+    EVENT_STAGE_COMPLETION,
+    EVENT_STAGE_RESET,
+)
 from stage_runner.results import (
     TERMINATED_BY_ERROR,
     TERMINATED_BY_RERECORD_REQUESTED,
@@ -63,32 +70,148 @@ def run_lerobot_policy_stage(context: StageContext, stage: StageConfig) -> Stage
 
     _discard_stray_right_arrow(context, stage)
 
+    # A classifier or grasp stage runs the same record_loop with the bundle's
+    # preprocessor tapped: the watcher sees each observation the policy sees and
+    # may set exit_early before the timer runs out (completion.py). A copy of
+    # the bundle, because pi0 stages sharing one checkpoint share one bundle.
+    watcher = None
+    if stage.terminator.type in WATCHED_TERMINATORS:
+        model = context.completion_models.get(stage.id)
+        grip = None
+        if stage.terminator.grip is not None:
+            # preflight checked the names against the robot; the dataset's
+            # observation.state is built from the same features, in its order.
+            grip = completion.GripTracker.for_stage(
+                stage.terminator.grip,
+                list(context.dataset.features[completion.OBS_STATE_KEY]["names"]),
+            )
+        watcher = completion.CompletionWatcher(
+            model,
+            completion.resolve_settings(
+                stage.terminator, None if model is None else model.meta
+            ),
+            context.events,
+            grip=grip,
+        )
+        bundle = dataclasses.replace(
+            bundle,
+            preprocessor=completion.TappedPreprocessor(bundle.preprocessor, watcher),
+        )
+
     frames_before = context.buffered_frame_count()
     started = time.perf_counter()
+    released = False
+    if stage.release_base_torque:
+        refused = _release_policy_base_torque(context, stage, started)
+        if refused is not None:
+            return refused
+        released = leader_reset.base_torque_switchable(context.robot)
     # record_loop's entry does policy.reset() + preprocessor.reset() +
     # postprocessor.reset() (lerobot_record.py:331-335), so re-entering it per
     # stage flushes the previous stage's stale ACT chunk queue for free. That is
     # the transition semantics we want, not an accident of the loop.
-    record_adapter.call_record_loop(
-        robot=context.robot,
-        events=context.events,
-        fps=context.config.dataset.fps,
-        processors=context.processors,
-        dataset=context.dataset,
-        bundle=bundle,
-        control_time_s=plan.control_time_s,
-        single_task=stage.instruction or stage.name,
-        display_data=context.config.display_data,
-    )
+    try:
+        # Inside the try: a watcher that fails to start must not leave the base
+        # with its torque off.
+        if watcher is not None:
+            watcher.start()
+        try:
+            record_adapter.call_record_loop(
+                robot=context.robot,
+                events=context.events,
+                fps=context.config.dataset.fps,
+                processors=context.processors,
+                dataset=context.dataset,
+                bundle=bundle,
+                control_time_s=plan.control_time_s,
+                single_task=stage.instruction or stage.name,
+                display_data=context.config.display_data,
+                teleop=context.teleop,
+            )
+        finally:
+            if watcher is not None:
+                watcher.stop()
+    except BaseException as error:
+        # Restore before anything else, then let run_trial's handler stop the
+        # base and close the log. The line is best-effort.
+        if released:
+            problem = leader_reset.restore_base_torque(context.robot)
+            try:
+                _emit_base_torque(
+                    context,
+                    stage,
+                    leader_reset.BASE_TORQUE_RESTORE_FAILED
+                    if problem
+                    else leader_reset.BASE_TORQUE_RELEASED,
+                    f"the policy loop raised {error!r}",
+                    problem,
+                )
+            except Exception:
+                logger.exception("could not record the base torque restore")
+        raise
     elapsed_s = time.perf_counter() - started
     frames = context.buffered_frame_count() - frames_before
+    restore_problem = (
+        leader_reset.restore_base_torque(context.robot) if released else ""
+    )
+
+    fired = None
+    if watcher is not None:
+        summary = watcher.summary()
+        context.log.emit(
+            EVENT_STAGE_COMPLETION,
+            stage_id=stage.id,
+            frame_idx=context.buffered_frame_count(),
+            reason=watcher.error,
+            **summary,
+        )
+        if watcher.fired:
+            fired = (stage.terminator.type, watcher.describe_fire())
+        if stage.terminator.type == TERMINATOR_GRASP:
+            grasp = summary["grasp_at_s"]
+            told = (
+                f"grasp at {grasp:.2f}s"
+                if grasp is not None
+                else f"no grasp ({len(summary['grip_events'])} grip events)"
+            )
+        else:
+            told = (
+                f"decided at {watcher.decided_at_s:.2f}s"
+                if watcher.decided_at_s is not None
+                else f"not decided, max score {summary['max_score']}"
+            )
+            if watcher.gate_blocked_at_s is not None:
+                told += f", grippers not holding at {watcher.gate_blocked_at_s:.2f}s"
+        logger.info(
+            f"stage {stage.id!r} {stage.terminator.type} ({watcher.settings.mode}): "
+            f"{told}, {summary['frames_scored']} frames scored"
+        )
 
     terminated_by, reason = record_adapter.classify_termination(
         events=context.events,
         plan=plan,
         elapsed_s=elapsed_s,
         fps=context.config.dataset.fps,
+        completion=fired,
     )
+    if stage.release_base_torque:
+        if restore_problem:
+            # As after a leader reset: the next stage would command a base that
+            # does not respond, which is not a measurement.
+            terminated_by = TERMINATED_BY_ERROR
+            reason = f"base torque was not restored after the stage: {restore_problem}"
+            logger.error(f"stage {stage.id!r}: {reason}")
+        _emit_base_torque(
+            context,
+            stage,
+            leader_reset.BASE_TORQUE_RESTORE_FAILED
+            if restore_problem
+            else leader_reset.BASE_TORQUE_RELEASED
+            if released
+            else leader_reset.BASE_TORQUE_NOT_RELEASED,
+            "" if released else "the robot was connected without base torque",
+            restore_problem,
+        )
     logger.info(
         f"stage {stage.id!r} ended: {terminated_by} "
         f"({frames} frames in {elapsed_s:.2f}s)"
@@ -97,6 +220,58 @@ def run_lerobot_policy_stage(context: StageContext, stage: StageConfig) -> Stage
         terminated_by=terminated_by,
         elapsed_s=elapsed_s,
         frames=frames,
+        reason=reason,
+    )
+
+
+def _emit_base_torque(
+    context: StageContext, stage: StageConfig, outcome: str, reason: str, error: str
+) -> None:
+    context.log.emit(
+        EVENT_STAGE_BASE_TORQUE,
+        stage_id=stage.id,
+        frame_idx=context.buffered_frame_count(),
+        reason=reason or None,
+        base_torque=outcome,
+        base_torque_error=error or None,
+    )
+
+
+def _release_policy_base_torque(
+    context: StageContext, stage: StageConfig, started: float
+) -> StageResult | None:
+    """Switch base torque off for a `release_base_torque` stage; None = go on.
+
+    A robot connected without base torque has nothing to switch: its base
+    already ignores every command, which is what the stage asked for. A switch
+    that refuses is the opposite of a leader reset's: there a powered base only
+    means the operator cannot push it, here it means the policy would drive it,
+    so the stage ends without running the policy.
+    """
+    if not leader_reset.base_torque_switchable(context.robot):
+        logger.info(
+            f"stage {stage.id!r}: release_base_torque -- the robot was connected "
+            "without base torque, nothing to switch"
+        )
+        return None
+    if leader_reset.release_base_torque(context.robot):
+        logger.info(
+            f"stage {stage.id!r}: base torque off for this stage, the policy's base "
+            "command moves nothing"
+        )
+        return None
+    reason = (
+        "release_base_torque: the base torque could not be switched off, so the "
+        "policy would drive the base; the policy did not run"
+    )
+    logger.error(f"stage {stage.id!r}: {reason}")
+    _emit_base_torque(
+        context, stage, leader_reset.BASE_TORQUE_RELEASE_FAILED, reason, ""
+    )
+    return StageResult(
+        terminated_by=TERMINATED_BY_ERROR,
+        elapsed_s=time.perf_counter() - started,
+        frames=0,
         reason=reason,
     )
 

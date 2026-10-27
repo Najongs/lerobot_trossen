@@ -57,6 +57,19 @@ EVENT_STAGE_RESET: str = "stage_reset"
 EVENT_STAGE_BASE_REPLAY: str = "stage_base_replay"
 EVENT_STAGE_BASE_ALIGN: str = "stage_base_align"
 EVENT_STAGE_BASE_ALIGN_STEP: str = "stage_base_align_step"
+# What a classifier- or grasp-terminated policy stage's completion watcher saw:
+# its settings, whether and when it decided, every (t, score) it computed and,
+# with a `grip` block, the gripper widths and grasp events it read. One
+# line per stage, written INSIDE the stage before its stage_end, so it changes
+# no residual; additive within schema_version 1 like the ones above. The scores
+# are raw samples, not a metric -- the comparison against what the operator saw
+# on video is aggregation, done elsewhere.
+EVENT_STAGE_COMPLETION: str = "stage_completion"
+# What a policy stage with `release_base_torque: true` did to the base torque
+# around its loop: released / not_released (robot connected without it) /
+# release_failed / restore_failed, and why. One line per such stage, written
+# INSIDE the stage before its stage_end; additive like the ones above.
+EVENT_STAGE_BASE_TORQUE: str = "stage_base_torque"
 EVENT_NAMES: tuple[str, ...] = (
     EVENT_TRIAL_START,
     EVENT_STAGE_START,
@@ -68,6 +81,8 @@ EVENT_NAMES: tuple[str, ...] = (
     EVENT_STAGE_BASE_REPLAY,
     EVENT_STAGE_BASE_ALIGN,
     EVENT_STAGE_BASE_ALIGN_STEP,
+    EVENT_STAGE_COMPLETION,
+    EVENT_STAGE_BASE_TORQUE,
 )
 
 # Present on every line whatever the event is. Per-event fields are additive on
@@ -190,8 +205,8 @@ class EventLog:
             raise ValueError(
                 f"unknown event {event!r}; expected one of {list(EVENT_NAMES)}"
             )
-        # TERMINATOR_TYPES ("timeout", "manual") is a subset of
-        # TERMINATED_BY_VALUES, so this one check covers the planned terminator
+        # TERMINATOR_TYPES ("timeout", "manual", "classifier", "grasp") is a
+        # subset of TERMINATED_BY_VALUES, so this one check covers the planned terminator
         # on stage_start as well -- and it keeps config.py, which imports
         # draccus and lerobot's RobotConfig, out of this stdlib-only module.
         if terminator is not None and terminator not in TERMINATED_BY_VALUES:

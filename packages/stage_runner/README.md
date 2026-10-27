@@ -109,6 +109,52 @@ uv run python -m stage_runner --config_path <설정 파일>
 - 통과 기준 = `events.jsonl`에서 리셋 단계의 `stage_start`·`stage_end` 사이에 `stage_reset` 한 줄, `base_torque`가 `released`(토크 켠 설정) 또는 `not_released`
 - 리셋 다음 `stage_reposition`의 `gripper_goal_source`가 `previous_command`이고 `gripper_goal`이 `stage_reset.gripper_goals`와 같음
 
+## 정책 단계 개입 취득 (선택)
+
+정책 단계에서 **스페이스바** → 리더암이 넘겨받아 개입 데이터셋에 녹화. 키·동작은 `lerobot-record`와 같다 → [루트 README 3-5](../../README.md#3-5-실패-지점에서-넘겨받아-녹화-개입-취득)
+
+```yaml
+teleop:
+  type: mobileai_leader_teleop
+  left_arm_ip_address: 192.168.1.3
+  right_arm_ip_address: 192.168.1.2
+  id: leader
+```
+
+```shell
+LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run python -m stage_runner --config_path <설정 파일>
+```
+
+- 켜고 끄기 = 변수 한 줄. 없으면 리더암을 연결하지 않음 — `teleop:` 블록이 있어도 시연은 그대로
+- 변수가 있는데 `teleop:` 블록이 없으면 연결 전에 종료 코드 `2`
+- 스페이스바는 정책 단계에서만 — 베이스 이동·정렬 단계에선 아무 일 없음
+- 개입 녹화 상한·개입 리셋 상한 각 60초(`lerobot-record` 기본값) — 단계 타이머와 무관
+- `→`로 저장하면 체인이 다음 단계로 이어짐, `ESC`로 저장하면 시행 종료
+- 개입 데이터셋은 로컬에만 — 올릴 땐 `LeRobotDataset(<repo>).push_to_hub()`
+	- ⚠ 로컬에서 에피소드를 지운 뒤면 `push_to_hub()`만으로는 허브에 옛 파일이 남음 — 먼저 `HfApi().upload_folder(..., delete_patterns=["data/**", "meta/**", "videos/**"])`
+- 개입 데이터셋만 필요한 회차 = 체인 녹화 저장 끔 — 설정 `dataset:` 블록에 `save: false`
+	- 마지막 저장·인코딩 없이 마지막 단계 직후 종료(카메라 3대 순차 인코딩이면 약 4분 단축), 체인 데이터셋은 0 에피소드
+	- 프레임은 실행 중 계속 버퍼에 쌓임 — 베이스 단계가 그리퍼 목표를 녹화 버퍼의 마지막 명령에서 가져오기 때문. 끝에 카메라 PNG까지 삭제
+- 개입 저장을 fork 없이 순차 인코딩 — `LEROBOT_INTERVENTION_SERIAL_ENCODING=1`(카메라 끊김 진단용). 개입 하나 저장 약 6초 → 15~18초
+
+## 정책 단계 동안 베이스 토크 끄기 (release_base_torque)
+
+정책이 내는 베이스 명령을 그 단계 동안만 무시하게 함 — 단계 6처럼 pi0가 단계가 끝나기 전에 베이스를 몰기 시작하는 단계용
+
+```yaml
+  - id: s6
+    executor: lerobot_policy
+    release_base_torque: true
+```
+
+- 단계 시작 전 속도 0 → 토크 끔, 끝나면(타이머·판별기·키·예외 모두) 속도 0 → 토크 켬
+- 이동 단계가 든 1~11 전체 체인용. 이동 단계가 없는 체인은 `robot.enable_base_motor_torque: false` 한 줄로 실행 전체가 같아짐
+- 토크가 안 꺼지면 그 단계는 정책을 돌리지 않고 시행 종료, 다시 안 켜지면 다음 단계를 돌리지 않고 시행 종료
+- 토크를 끈 채 연결한 로봇(`enable_base_motor_torque: false`)이면 아무것도 안 바꿈
+- 단계 안 기록 = `events.jsonl`의 `stage_base_torque` 한 줄, `base_torque` 값은 `released`·`not_released`·`release_failed`·`restore_failed`
+- preflight 거부 — 정책 단계가 아닌 단계에 붙음, 토크를 켜고 연결했는데 `robot.base.enable_motor_torque`가 없음
+- ⚠ 토크가 꺼진 동안 베이스 바퀴가 풀려 손으로 밀림 — 그 단계 동안 로봇을 밀지 말 것
+
 ## 베이스 이동 단계 (base_replay · base_align)
 
 이동 단계를 정책 대신 두 단계 한 쌍으로 돈다 — **데모 경로 재생**(`base_replay`) → **도착 화면 정렬**(`base_align`, cam_high를 데모 도착 화면과 비교해 헤딩 먼저, 거리는 고정물 크기로). 체인 아무 자리에, 이동마다 한 쌍씩. 둘 다 기록한다(프레임의 task 문자열 = 단계 `name`).

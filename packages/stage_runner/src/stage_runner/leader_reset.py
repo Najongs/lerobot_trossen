@@ -66,9 +66,12 @@ LEADER_ALIGN_MIN_GOAL_TIME_S: float = 2.0
 #   not_released -- the robot was connected without base torque (or has no base
 #                   that can switch it); nothing was switched
 #   restore_failed -- switching it back on FAILED: the next stage does not run
+#   release_failed -- a policy stage's `release_base_torque` could not switch it
+#                     off: the policy does not run (stage_base_torque only)
 BASE_TORQUE_RELEASED: str = "released"
 BASE_TORQUE_NOT_RELEASED: str = "not_released"
 BASE_TORQUE_RESTORE_FAILED: str = "restore_failed"
+BASE_TORQUE_RELEASE_FAILED: str = "release_failed"
 
 
 class LeaderResetError(RuntimeError):
@@ -190,6 +193,11 @@ def _base_switch(robot: Any) -> Any | None:
         return None
     switch = getattr(getattr(robot, "base", None), "enable_motor_torque", None)
     return switch if callable(switch) else None
+
+
+def base_torque_switchable(robot: Any) -> bool:
+    """True when release/restore_base_torque would act, False when they no-op."""
+    return _base_switch(robot) is not None
 
 
 def _switch_succeeded(returned: Any) -> tuple[bool, str]:

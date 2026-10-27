@@ -411,6 +411,7 @@ def _run_chain(
     after_stage: Any = None,
     preset_events: dict[str, bool] | None = None,
     emit_patch: Any = None,
+    extra_argv: list[str] | None = None,
 ) -> dict[str, Any]:
     """Drive cli.main once with a fault injected and collect what it left behind.
 
@@ -425,6 +426,7 @@ def _run_chain(
         f"--dataset.repo_id={REPO_ID}",
         f"--dataset.root={tmp_path / 'dataset'}",
         f"--output.root={tmp_path / 'outputs'}",
+        *(extra_argv or []),
     ]
     captured: dict[str, Any] = {"robot": None, "base_at_encoder_flush": None}
 
@@ -580,6 +582,26 @@ def test_a_dead_camera_falls_back_to_the_direct_base_command(tmp_path: Path) -> 
     assert "RealSense" in fallback["stop_base_error"]
     assert result["events"][-1]["reason"] == "exception"
     assert result["events"][-1]["episode_saved"] is False
+
+
+def test_dataset_save_false_runs_the_chain_without_saving_it(tmp_path: Path) -> None:
+    """`dataset.save: false` skips only the end-of-trial save, not the recording.
+
+    Frames still reach the buffer (a base stage reads its gripper goals from
+    there), the trial still completes, and the dataset is left at 0 episodes.
+    """
+    result = _run_chain(tmp_path, extra_argv=["--dataset.save=false"])
+
+    assert result["raised"] is None, result["raised"]
+    assert result["exit_code"] == 0, result["exit_code"]
+    _assert_log_is_closed(result)
+    trial_end = result["events"][-1]
+    assert trial_end["reason"] == "completed"
+    assert trial_end["buffered_frames"] > 0, trial_end
+    assert trial_end["episode_saved"] is False
+    info = json.loads((tmp_path / "dataset" / "meta" / "info.json").read_text())
+    assert info["total_episodes"] == 0, info
+    assert not list((tmp_path / "dataset").glob("data/**/*.parquet"))
 
 
 def test_an_executor_error_stops_the_base_and_closes_the_log(tmp_path: Path) -> None:

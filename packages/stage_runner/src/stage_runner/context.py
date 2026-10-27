@@ -71,6 +71,9 @@ class StageContext:
     # (the buffer is the newer source again). Mutable on purpose, like
     # `events`: the dict is fixed, its contents follow the chain.
     reset_gripper_goals: dict[str, float] = field(default_factory=dict)
+    # stage id -> completion.CompletionModel, for each `terminator.type:
+    # classifier` stage; {} for a chain without one.
+    completion_models: Mapping[str, Any] = field(default_factory=dict)
 
     def buffered_frame_count(self) -> int:
         """Frames written into the current episode buffer so far.

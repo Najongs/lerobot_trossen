@@ -42,6 +42,7 @@ from .fast_obs_patch import apply_fast_observation_patch
 from .loop_rate_log import apply_loop_rate_logging_patch
 from .chunk_execution_patch import apply_chunk_execution_patch
 from .task_onehot_patch import apply_task_onehot_patch
+from .intervention_patch import apply_intervention_patch
 
 # On by default; set LEROBOT_FAST_OBS=0 to opt out. lerobot imports this package
 # on startup (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is
@@ -63,3 +64,7 @@ apply_chunk_execution_patch()
 # Widens the policy state to [arms, 0, 0, one_hot] for multi-stage ACT
 # checkpoints trained with a stage one-hot (trossen-ai-simulation train_multi.py).
 apply_task_onehot_patch()
+
+# Off by default; installed only when LEROBOT_INTERVENTION_REPO_ID is set. Must
+# run last: the intervention loop it starts goes through the wrappers above.
+apply_intervention_patch()

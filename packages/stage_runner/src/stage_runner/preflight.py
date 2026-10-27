@@ -15,6 +15,7 @@ import math
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import lerobot
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
@@ -29,14 +30,19 @@ from lerobot.utils.control_utils import is_headless, sanity_check_dataset_name
 from stage_runner import reposition, transitions
 from stage_runner.config import (
     BASE_EXECUTORS,
+    COMPLETION_MODES,
     EXECUTOR_BASE_ALIGN,
     EXECUTOR_BASE_REPLAY,
     EXECUTOR_LEADER_RESET,
+    EXECUTOR_LEROBOT_POLICY,
     LATEST_CONFIG_VERSION,
     POLICY_EXECUTORS,
+    TERMINATOR_CLASSIFIER,
+    TERMINATOR_GRASP,
     TERMINATOR_MANUAL,
     TERMINATOR_TIMEOUT,
     TERMINATOR_TYPES,
+    WATCHED_TERMINATORS,
     StageConfig,
     StageRunnerConfig,
 )
@@ -44,6 +50,8 @@ from stage_runner.config import (
 logger = logging.getLogger(__name__)
 
 EVAL_DATASET_PREFIX: str = "eval_"
+# What a camera named `cam_high` on the robot is called in a policy observation.
+OBS_IMAGES_PREFIX: str = "observation.images."
 
 
 class PreflightError(RuntimeError):
@@ -256,6 +264,14 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                         f"`executor:`, or delete the `{block}:` block."
                     )
 
+        if stage.release_base_torque and stage.executor != EXECUTOR_LEROBOT_POLICY:
+            # A leader_reset releases the torque on its own; a base stage needs it.
+            problems.append(
+                f"{where} ({stage.id!r}): `release_base_torque` is for a "
+                f"`{EXECUTOR_LEROBOT_POLICY}` stage; a `{stage.executor}` stage "
+                "would ignore it. Delete it, or move it to the policy stage."
+            )
+
         terminator = stage.terminator
         if terminator.type not in TERMINATOR_TYPES:
             known = ", ".join(TERMINATOR_TYPES)
@@ -269,6 +285,8 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
                 "`timeout_s`. record_loop compares `timestamp < control_time_s`, "
                 "and None raises TypeError on the first iteration."
             )
+
+        problems.extend(_classifier_terminator_problems(where, stage))
 
         if terminator.timeout_s is not None and terminator.timeout_s <= 0:
             # Not a crash: record_loop's `while timestamp < control_time_s` is
@@ -335,6 +353,130 @@ def check_stage_definitions(config: StageRunnerConfig) -> None:
         raise PreflightError(
             "invalid stage definitions:\n  - " + "\n  - ".join(problems)
         )
+
+
+def _classifier_terminator_problems(where: str, stage: StageConfig) -> list[str]:
+    """A classifier or grasp terminator's own fields, and those fields on any other type.
+
+    The model itself is not loaded here -- that is completion.load_completion_models,
+    after the policies' configs, still before the robot is energised.
+    """
+    here = f"{where} ({stage.id!r})"
+    terminator = stage.terminator
+    kind = terminator.type
+    classifier_fields = ("threshold", "hold_s", "min_s")
+    if kind not in WATCHED_TERMINATORS:
+        stray = [
+            name
+            for name in ("model_path", *classifier_fields, "grip", "wait_s")
+            if getattr(terminator, name) is not None
+        ]
+        if stray:
+            return [
+                (
+                    f"{here}: `terminator.{stray[0]}` is read only by "
+                    f"`terminator.type: {TERMINATOR_CLASSIFIER}` or "
+                    f"`{TERMINATOR_GRASP}`, and this stage is `{kind}` -- set the "
+                    f"type, or delete the field(s) {', '.join(stray)}."
+                )
+            ]
+        return []
+    problems: list[str] = []
+    if stage.executor != EXECUTOR_LEROBOT_POLICY:
+        problems.append(
+            f"{here}: `terminator.type: {kind}` watches what a policy sees, so it "
+            f"needs `executor: {EXECUTOR_LEROBOT_POLICY}`, not `{stage.executor}`."
+        )
+    if terminator.timeout_s is None:
+        problems.append(
+            f"{here}: `terminator.type: {kind}` needs `timeout_s` -- it can only "
+            "end the stage earlier, the timer stays the ceiling."
+        )
+    if kind == TERMINATOR_CLASSIFIER and not terminator.model_path:
+        problems.append(
+            f"{here}: `terminator.type: {TERMINATOR_CLASSIFIER}` needs `model_path` "
+            "(a local checkpoint directory or a Hub repo id)."
+        )
+    if terminator.mode not in COMPLETION_MODES:
+        problems.append(
+            f"{here}: `terminator.mode: {terminator.mode}` -- expected one of "
+            f"{', '.join(COMPLETION_MODES)}."
+        )
+    if terminator.threshold is not None and not 0.0 < terminator.threshold < 1.0:
+        problems.append(
+            f"{here}: `terminator.threshold: {terminator.threshold}` must be "
+            "between 0 and 1 (it is compared with a sigmoid score)."
+        )
+    for name in ("hold_s", "min_s"):
+        value = getattr(terminator, name)
+        if value is not None and value < 0:
+            problems.append(
+                f"{here}: `terminator.{name}: {value}` must not be negative."
+            )
+    if (
+        terminator.timeout_s is not None
+        and terminator.min_s is not None
+        and terminator.min_s >= terminator.timeout_s
+    ):
+        problems.append(
+            f"{here}: `terminator.min_s: {terminator.min_s}` is not below "
+            f"`timeout_s: {terminator.timeout_s}`, so the classifier could never "
+            "end the stage."
+        )
+    problems.extend(_grip_problems(here, terminator))
+    return problems
+
+
+def _grip_problems(here: str, terminator: Any) -> list[str]:
+    """The `grip` block and `wait_s` of a classifier or grasp terminator."""
+    grip = terminator.grip
+    kind = terminator.type
+    problems: list[str] = []
+    if kind == TERMINATOR_GRASP:
+        if grip is None:
+            problems.append(
+                f"{here}: `terminator.type: {TERMINATOR_GRASP}` needs a `grip` block "
+                "(state_names of the gripper(s) whose closing starts the wait)."
+            )
+        if terminator.wait_s is None or terminator.wait_s <= 0:
+            problems.append(
+                f"{here}: `terminator.type: {TERMINATOR_GRASP}` needs `wait_s` > 0 "
+                "(seconds after the grasp at which the stage ends)."
+            )
+        elif (
+            terminator.timeout_s is not None
+            and terminator.wait_s >= terminator.timeout_s
+        ):
+            problems.append(
+                f"{here}: `terminator.wait_s: {terminator.wait_s}` is not below "
+                f"`timeout_s: {terminator.timeout_s}`, so the grasp could never end "
+                "the stage."
+            )
+    elif terminator.wait_s is not None:
+        problems.append(
+            f"{here}: `terminator.wait_s` is read only by `terminator.type: "
+            f"{TERMINATOR_GRASP}`."
+        )
+    if grip is None:
+        return problems
+    if not grip.state_names:
+        problems.append(f"{here}: `terminator.grip.state_names` is empty.")
+    if grip.settle_s < 0:
+        problems.append(f"{here}: `terminator.grip.settle_s` must not be negative.")
+    if kind == TERMINATOR_CLASSIFIER:
+        low, high = grip.hold_min_m, grip.hold_max_m
+        if low is None or high is None or not low < high:
+            problems.append(
+                f"{here}: a classifier's `grip` gate needs `hold_min_m` < "
+                f"`hold_max_m` (got {low}, {high}) -- the width band of a held "
+                "object, in metres."
+            )
+    elif not grip.close_below_m < grip.open_above_m:
+        problems.append(
+            f"{here}: `terminator.grip.close_below_m: {grip.close_below_m}` must be "
+            f"below `open_above_m: {grip.open_above_m}`."
+        )
+    return problems
 
 
 def _is_int(value: object) -> bool:
@@ -584,6 +726,17 @@ def _task_string_collisions(stages: Sequence[StageConfig]) -> list[str]:
     return problems
 
 
+# lerobot_robot_trossen's intervention patch is switched on by this variable, the
+# same one lerobot-record runs take. Read here by name only, so the gate does not
+# import that package.
+INTERVENTION_ENV_VAR = "LEROBOT_INTERVENTION_REPO_ID"
+
+
+def intervention_requested() -> bool:
+    """True when this run hands policy stages to the leader arm on the space bar."""
+    return bool(os.environ.get(INTERVENTION_ENV_VAR, "").strip())
+
+
 def check_leader_reset_stages(
     config: StageRunnerConfig, robot: Robot, teleop: object | None
 ) -> None:
@@ -595,12 +748,21 @@ def check_leader_reset_stages(
     hold that joint at a stale goal for the whole reset, an extra one raises
     inside send_action with the arms energised. And the leader must be able to
     align itself to the follower first (leader_reset.align_leader_to_follower).
+
+    An intervention (``LEROBOT_INTERVENTION_REPO_ID``) drives the follower from
+    the leader the same way after aligning it, so it needs the same leader. Without
+    one the patch would find out only at the space bar, and stop the run there.
     """
-    if not any(stage.executor == EXECUTOR_LEADER_RESET for stage in config.stages):
+    users: list[str] = []
+    if any(stage.executor == EXECUTOR_LEADER_RESET for stage in config.stages):
+        users.append("a `leader_reset` stage")
+    if intervention_requested():
+        users.append(f"{INTERVENTION_ENV_VAR} (intervention on the space bar)")
+    if not users:
         return
     if teleop is None:
         raise PreflightError(
-            "a `leader_reset` stage needs the leader arm, and none was constructed "
+            f"{' and '.join(users)} needs the leader arm, and none was constructed "
             "-- add a top-level `teleop:` block."
         )
     problems: list[str] = []
@@ -626,7 +788,29 @@ def check_leader_reset_stages(
     if problems:
         raise PreflightError(
             f"the `teleop:` leader arm ({type(teleop).__name__}) cannot drive this "
-            "robot in a leader_reset stage:\n  - " + "\n  - ".join(problems)
+            f"robot for {' and '.join(users)}:\n  - " + "\n  - ".join(problems)
+        )
+
+
+def check_released_base_torque(config: StageRunnerConfig, robot: Robot) -> None:
+    """A `release_base_torque` stage needs a base whose torque it can switch.
+
+    Connected with base torque on but without ``base.enable_motor_torque``, the
+    stage would find nothing to switch and run the policy against a powered
+    base -- the very thing it was set to prevent. Connected without base torque,
+    the base already ignores every command: nothing to check.
+    """
+    stages = [stage.id for stage in config.stages if stage.release_base_torque]
+    if not stages:
+        return
+    if not getattr(getattr(robot, "config", None), "enable_base_motor_torque", False):
+        return
+    switch = getattr(getattr(robot, "base", None), "enable_motor_torque", None)
+    if not callable(switch):
+        raise PreflightError(
+            f"stage(s) {stages} set `release_base_torque`, but robot {robot.name!r} "
+            "has no base.enable_motor_torque to switch the base torque off; the "
+            "policy would drive a powered base."
         )
 
 
@@ -957,6 +1141,56 @@ def check_manual_terminator_is_reachable(config: StageRunnerConfig) -> None:
         )
 
 
+def load_completion_models(config: StageRunnerConfig, robot: Robot) -> dict[str, Any]:
+    """Load every watched stage's checkpoint; check its cameras and grippers exist.
+
+    Any failure is a PreflightError: the model is a stage's terminator, and a
+    run whose terminator cannot be built is a configuration error, not something
+    to discover at that stage with the robot moving. Imported lazily -- torch and
+    the classifier's backbone code are needed only by a chain that uses one.
+    """
+    watched = [s for s in config.stages if s.terminator.type in WATCHED_TERMINATORS]
+    if not watched:
+        return {}
+    from stage_runner import completion
+
+    try:
+        models = completion.load_completion_models(config.stages)
+    except Exception as error:
+        raise PreflightError(
+            f"could not load a completion classifier: {error!r}. With "
+            "HF_HUB_OFFLINE=1 both the checkpoint and its backbone "
+            "(helper2424/resnet10) must already be in the HF cache."
+        ) from error
+    features = set(robot.observation_features or {})
+    problems = []
+    for stage_id, model in models.items():
+        missing = [
+            key
+            for key in model.meta.camera_keys
+            if key.removeprefix(OBS_IMAGES_PREFIX) not in features
+        ]
+        if missing:
+            problems.append(
+                f"stage {stage_id!r}: the completion classifier {model.path} reads "
+                f"{missing}, which this robot does not produce (it has "
+                f"{sorted(features)})."
+            )
+    for stage in watched:
+        grip = stage.terminator.grip
+        if grip is None:
+            continue
+        missing = [name for name in grip.state_names if name not in features]
+        if missing:
+            problems.append(
+                f"stage {stage.id!r}: `terminator.grip.state_names` {missing} are not "
+                f"observation features of this robot (it has {sorted(features)})."
+            )
+    if problems:
+        raise PreflightError(" ".join(problems))
+    return models
+
+
 def check_dataset_name(
     config: StageRunnerConfig, policy_configs: Mapping[str, PreTrainedConfig]
 ) -> None:
@@ -1089,6 +1323,7 @@ def run_preflight(
     check_stage_start_poses(config, robot)
     check_leader_reset_stages(config, robot, teleop)
     check_base_stages(config, robot)
+    check_released_base_torque(config, robot)
     check_manual_terminator_is_reachable(config)
     check_dataset_name(config, policy_configs)
     check_dataset_root_is_free(config)
