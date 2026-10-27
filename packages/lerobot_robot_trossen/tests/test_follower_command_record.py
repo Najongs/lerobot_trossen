@@ -57,12 +57,22 @@ class _Clock:
 
 
 @pytest.fixture
-def follower(monkeypatch: pytest.MonkeyPatch) -> tuple[WidowXAIFollower, _Clock]:
+def follower(monkeypatch: pytest.MonkeyPatch):
     clock = _Clock()
     monkeypatch.setattr(widowxai_follower.time, "perf_counter", clock)
+    # wait_for_arrival sleeps on the same fake clock.
+    monkeypatch.setattr(
+        widowxai_follower.time, "sleep", lambda s: setattr(clock, "now", clock.now + s)
+    )
     arm = WidowXAIFollower(WidowXAIFollowerConfig(ip_address="192.0.2.1"))
     arm.driver = _FakeDriver(clock, len(arm.config.joint_names))
-    return arm, clock
+    arm.driver.cleanup = lambda: None
+    yield arm, clock
+    # Park it while the fake clock still runs; left to __del__ it would wait out
+    # its moves in real seconds.
+    if arm.is_connected:
+        arm.disconnect()
+    arm.wait_for_disconnect(timeout=5.0)
 
 
 def test_nothing_is_recorded_before_the_first_command(follower) -> None:
@@ -71,14 +81,31 @@ def test_nothing_is_recorded_before_the_first_command(follower) -> None:
     assert arm.last_command_goal_time_s is None
 
 
-def test_a_blocking_move_is_recorded_from_before_the_call(follower) -> None:
-    """Its return time would add a second goal_time; the start is the call."""
+def test_the_connect_move_is_recorded_after_the_call(follower) -> None:
+    """configure() no longer waits: the staged move is stamped as it returns."""
     arm, clock = follower
     arm.configure()
     (call,) = arm.driver.calls
-    assert arm.last_command_sent_s == call["at"]
+    assert call["blocking"] is False
+    assert arm.last_command_sent_s == clock.now
+    assert arm.last_command_sent_s > call["at"]
     assert arm.last_command_goal_time_s == 2.0
-    # ...so it reads as expired the moment the blocking call has returned.
+    # ...so the move reads as still running when configure() returns.
+    assert arm.last_command_sent_s + arm.last_command_goal_time_s > clock.now
+
+
+def test_the_park_moves_are_recorded_after_the_call(follower) -> None:
+    """disconnect() sends both park moves non-blocking and waits them out."""
+    arm, clock = follower
+    arm.configure()
+    arm.driver.cleanup = lambda: None
+    arm.disconnect()
+    assert arm.wait_for_disconnect(timeout=5.0) is None
+    staged, sleep = arm.driver.calls[1:]
+    assert staged["blocking"] is False and sleep["blocking"] is False
+    assert arm.last_command_sent_s > sleep["at"]
+    assert arm.last_command_goal_time_s == 2.0
+    # ...and the park waited it out before returning.
     assert arm.last_command_sent_s + arm.last_command_goal_time_s <= clock.now
 
 
@@ -108,5 +135,6 @@ def test_disconnect_records_its_last_blocking_move(follower) -> None:
     arm.configure()
     arm.driver.cleanup = lambda: None
     arm.disconnect()
-    assert arm.last_command_sent_s == arm.driver.calls[-1]["at"]
+    assert arm.wait_for_disconnect(timeout=5.0) is None
+    assert arm.last_command_sent_s > arm.driver.calls[-1]["at"]
     assert arm.last_command_goal_time_s == 2.0

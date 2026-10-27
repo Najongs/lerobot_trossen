@@ -581,6 +581,7 @@ uv run accelerate launch \
 | **Base command guard** | Non-finite base velocity *commands* are zeroed and clamped to +/-1.0 (m/s linear, rad/s angular) before they reach the base. Without it a NaN from the policy arrives as full-speed reverse. Always on. | [below](#base-command-guard) - [#20](https://github.com/kiro-ai-division/lerobot_trossen/pull/20) |
 | **Base emergency stop detection** | `connect()` refuses to start while the base is in emergency stop, and `get_observation()` logs one red warning each time the base enters or leaves an abnormal state (emergency stop, controller fault, charging). The mid-run check rides the chassis block `update_state()` already fetches, so it costs no extra serial transaction. On by default; `--robot.estop_check=false` disables the connect-time error only. | [below](#base-emergency-stop-detection) - [#38](https://github.com/kiro-ai-division/lerobot_trossen/pull/38) |
 | **Joint velocity pacing** | Stretches `goal_time` so no joint is commanded past its hard velocity limit, which is what used to kill the process at the policy/teleop handoff. `velocity_safety_factor` defaults to `0.4`; `LEROBOT_PACING_LOG` logs the decision per frame. | [below](#joint-velocity-pacing) - [#16](https://github.com/kiro-ai-division/lerobot_trossen/pull/16) |
+| **Parallel connect and disconnect** | Arms no longer wait for their 2 s staged and sleep pose moves one after another: connect 8 s → ~2 s, disconnect 16 s → ~4 s with a leader attached. Each arm waits on first use; disconnect parks on background threads. | [below](#parallel-connect-and-disconnect) · [#79](https://github.com/kiro-ai-division/lerobot_trossen/issues/79) |
 | **`include_base_in_state` flag** | Gates whether the base velocity lands in `observation.state`. Defaults to `false` (14-dim) since 2026-09-16; pass `true` for datasets and checkpoints from before that. | [below](#base-velocity-in-the-observation-state) · [#4](https://github.com/kiro-ai-division/lerobot_trossen/pull/4), [#44](https://github.com/kiro-ai-division/lerobot_trossen/issues/44) |
 | **`LEROBOT_FAST_OBS`** | Moves eval-time image preprocessing to the GPU. On by default; roughly doubles the control-loop rate on the Mobile AI 3-camera setup. | [below](#environment-variables) · [#8](https://github.com/kiro-ai-division/lerobot_trossen/pull/8), [#14](https://github.com/kiro-ai-division/lerobot_trossen/pull/14) |
 | **`LEROBOT_LOOP_HZ_LOG`** | Control-loop rate and per-section timing meter, one summary line per 30 frames. On by default; setting `0` turns it off and restores upstream's per-frame fps warning, which this replaces. | [below](#environment-variables) · [#6](https://github.com/kiro-ai-division/lerobot_trossen/pull/6), [#46](https://github.com/kiro-ai-division/lerobot_trossen/pull/46) |
@@ -646,7 +647,7 @@ the delta but guarantees nothing about velocity.
 
 Each follower also records the trajectory it last handed the driver: `last_command_sent_s`
 (`time.perf_counter()`) and `last_command_goal_time_s` (the paced `goal_time` above, or 2.0 s for
-the blocking staged moves). trossen_arm 1.9.0 builds a new trajectory from the *commanded*
+the staged and sleep pose moves). trossen_arm 1.9.0 builds a new trajectory from the *commanded*
 position, velocity and acceleration of the one still running, so a long move sent mid-way
 through a short one inherits its acceleration, amplified with the horizon squared. A caller that
 sends a long move straight after a frame - the stage runner's start pose move - waits until
@@ -675,6 +676,41 @@ and blurs the whole trajectory, whereas pacing is a selective brake that only fi
 With this in place a leader arm can stay connected during eval, which is what makes staged
 evaluation possible - the operator sets the next episode's start pose and grasp by hand during
 the reset window, and the policy drives the episode itself.
+
+## Parallel Connect and Disconnect
+
+`connect()` and `disconnect()` on the follower and leader arms no longer wait for their 2 s
+moves, so every arm in the process moves at once: with a leader attached, connecting drops from
+8 s to about 2 s and disconnecting from 16 s to about 4 s. It applies to every entry point -
+`lerobot-record`, `lerobot-teleoperate`, eval, replay and the stage runner - with no new flag.
+
+- **Connect** sends the move to the staged pose and returns. Each arm waits for the rest of that
+  move on first use - `get_observation`, `send_action`, `get_action` - because a command sent
+  mid-move is seeded from it (see the trajectory record above) and a reading taken mid-move is not
+  the pose the arm will hold. The leader enters gravity compensation only then.
+- **Code that drives an arm's `.driver` directly** calls `wait_for_arrival()` first (on the arm,
+  the bimanual robot or `MobileAIRobot`). The stage runner's start pose move needs no call: its
+  trajectory expiry wait already covers the connect move.
+- **Disconnect** stops the base synchronously as before, then parks each arm (staged, then sleep
+  pose, then driver cleanup) on a non-daemon background thread and returns. The process does not
+  exit until every arm has parked. `wait_for_disconnect(timeout)` joins and returns what a park
+  raised; the stage runner calls it and logs a failure as `did not park`.
+- **Whatever is still connected at exit** (a start that failed part way, a script that never
+  disconnects) is parked by an `atexit` sweep, every arm at once - follower and leader alike.
+  `atexit` runs after the park threads are joined and before modules are torn down; lerobot's
+  `__del__`, which used to be the only safety net, can run after `trossen_arm` is gone and then
+  parked nothing, without a word. `__del__` still parks in place, never on a thread, since a
+  thread started from a finalizer can deadlock in `Thread.start()` (`parking.py`).
+- **A start refused for the base e-stop leaves the arms connected** instead of parking them on
+  the spot. `lerobot-teleoperate` never disconnects its leader in that case, so parking the
+  followers right away put the leader 4 s behind them; now the exit sweep parks all four together
+  (10 s -> about 6 s), and a caller that disconnects - the stage runner - parks them as usual.
+- **Ctrl+C while the arms park is ignored** with a warning, for up to about 9 s per park: a second
+  Ctrl+C used to cut the park short and leave every arm standing in the staged pose, and Ctrl+C
+  cannot stop a move the controller is already running anyway - use the e-stop. Outside a park
+  Ctrl+C behaves as before.
+- Not yet measured on hardware: whether the two followers can touch while they leave a pose with
+  both hands close together. Run the first disconnect after such a pose next to the e-stop.
 
 ## Base Command Guard
 

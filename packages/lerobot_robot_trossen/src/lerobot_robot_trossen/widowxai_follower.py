@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 from typing import Any
 
@@ -10,6 +11,16 @@ from lerobot.robots.robot import Robot
 from lerobot.robots.utils import ensure_safe_goal_position
 
 from lerobot_robot_trossen.config_widowxai_follower import WidowXAIFollowerConfig
+from lerobot_robot_trossen.parking import (
+    ARRIVAL_MARGIN_S,
+    STAGED_MOVE_S,
+    guard_sigint,
+    park_at_exit,
+    park_in_place,
+    park_together,
+    parking_in_place,
+    queue_for_parking,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +78,24 @@ class WidowXAIFollower(Robot):
         # and a settle check, so it has expired before anything else is sent.
         self.last_command_sent_s: float | None = None
         self.last_command_goal_time_s: float | None = None
+        # connect() and disconnect() do not wait for their moves, so the four
+        # arms of a leader + follower setup move together instead of one after
+        # another (8 s -> 2 s at connect, 16 s -> 4 s at disconnect).
+        #
+        # _arrival_s: when the connect move to the staged pose ends, on the
+        # perf_counter clock; None once waited for. Every method that reads or
+        # commands the arm waits for it first (wait_for_arrival), because a
+        # command sent mid-move is seeded from that move's commanded state (see
+        # last_command_sent_s above) and a reading taken mid-move is not the pose
+        # the arm will hold.
+        self._arrival_s: float | None = None
+        # Set by disconnect(). The background thread that then parks the arm
+        # (staged, then sleep pose, then driver cleanup) -- None when it parked
+        # in place (parking.py) -- and what the park raised, if anything. Not a
+        # daemon: the process waits for the arm to park.
+        self._disconnecting = False
+        self._park_thread: threading.Thread | None = None
+        self._park_error: BaseException | None = None
 
     @property
     def _joint_ft(self) -> dict[str, type]:
@@ -110,8 +139,12 @@ class WidowXAIFollower(Robot):
 
     @property
     def is_connected(self) -> bool:
-        return self.driver.get_is_configured() and all(
-            cam.is_connected for cam in self.cameras.values()
+        # False from the moment disconnect() is called: the park thread owns the
+        # arm, and Robot.__del__ must not park it twice.
+        return (
+            not self._disconnecting
+            and self.driver.get_is_configured()
+            and all(cam.is_connected for cam in self.cameras.values())
         )
 
     def connect(self, calibrate: bool = True) -> None:
@@ -131,7 +164,11 @@ class WidowXAIFollower(Robot):
             cam.connect()
 
         self.configure()
-        logger.info(f"{self} connected.")
+        park_at_exit(self, rank=2)
+        logger.info(
+            f"{self} connected; moving to the staged pose over {STAGED_MOVE_S:.2f}s "
+            "without waiting"
+        )
 
     @property
     def is_calibrated(self) -> bool:
@@ -145,13 +182,14 @@ class WidowXAIFollower(Robot):
     def configure(self) -> None:
         # Set the arm to position control mode
         self.driver.set_all_modes(trossen_arm.Mode.position)
-        sent_s = time.perf_counter()
         self.driver.set_all_positions(
             self.config.staged_positions,
-            goal_time=2.0,
-            blocking=True,
+            goal_time=STAGED_MOVE_S,
+            blocking=False,
         )
-        self._record_command(sent_s, 2.0)
+        sent_s = time.perf_counter()
+        self._record_command(sent_s, STAGED_MOVE_S)
+        self._arrival_s = sent_s + STAGED_MOVE_S + ARRIVAL_MARGIN_S
         # Cache the per-joint hard velocity limits (rad/s for the arm joints,
         # m/s for the gripper carriage) so send_action can pace large position
         # jumps below the controller's limit.
@@ -191,9 +229,25 @@ class WidowXAIFollower(Robot):
         self.last_command_sent_s = sent_s
         self.last_command_goal_time_s = float(goal_time)
 
+    def wait_for_arrival(self) -> float:
+        """Block until the connect move to the staged pose has ended.
+
+        Returns the seconds waited: 0.0 once the arm is there, so calling it on
+        every frame costs a clock read. Public so that code driving
+        ``self.driver`` directly can wait first, as the methods here do.
+        """
+        if self._arrival_s is None:
+            return 0.0
+        wait_s = max(0.0, self._arrival_s - time.perf_counter())
+        if wait_s > 0.0:
+            time.sleep(wait_s)
+        self._arrival_s = None
+        return wait_s
+
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        self.wait_for_arrival()
 
         # Create observation dictionary with joint positions, plus velocities and efforts when
         # enabled via include_velocity / include_effort / include_external_effort.
@@ -272,6 +326,7 @@ class WidowXAIFollower(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        self.wait_for_arrival()
 
         goal_pos = {
             key.removesuffix(".pos"): val
@@ -348,28 +403,54 @@ class WidowXAIFollower(Robot):
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
 
     def disconnect(self):
+        """Start parking the arm in the background and return.
+
+        The staged and sleep pose moves run on a non-daemon thread, so the other
+        arms' disconnect() calls start theirs right away and the process does not
+        exit before every arm has parked. wait_for_disconnect() joins it. Inside
+        a finalizer it parks in place instead (parking.py).
+        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        self._disconnecting = True
 
-        # Move the arm to the staged positions before disconnecting
-        sent_s = time.perf_counter()
-        self.driver.set_all_positions(
-            self.config.staged_positions,
-            goal_time=2.0,
-            blocking=True,
-        )
-        self._record_command(sent_s, 2.0)
-        # Move the arm to the sleep position (all positions to 0.0)
-        sent_s = time.perf_counter()
-        self.driver.set_all_positions(
-            [0.0] * len(self.config.joint_names),
-            goal_time=2.0,
-            blocking=True,
-        )
-        self._record_command(sent_s, 2.0)
-
-        self.driver.cleanup()
         for cam in self.cameras.values():
             cam.disconnect()
 
-        logger.info(f"{self} disconnected.")
+        if parking_in_place():
+            queue_for_parking(self)
+            return
+        # Before the thread starts: Ctrl+C can only be guarded from this thread.
+        guard_sigint()
+        self._park_thread = threading.Thread(
+            target=self._park, name=f"park {self.config.ip_address}", daemon=False
+        )
+        self._park_thread.start()
+        logger.info(f"{self} parking: staged then sleep pose, in the background")
+
+    def _park(self) -> None:
+        park_together([self])
+
+    def _begin_park(self) -> None:
+        # A move commanded before the connect move ends would be seeded from it;
+        # see wait_for_arrival.
+        self.wait_for_arrival()
+
+    def wait_for_disconnect(self, timeout: float | None = None) -> BaseException | None:
+        """Join the park thread; return what the park raised, or None.
+
+        A park still running after ``timeout`` returns a TimeoutError. Returns
+        None at once if disconnect() was never called.
+        """
+        thread = self._park_thread
+        if thread is not None:
+            thread.join(timeout)
+            if thread.is_alive():
+                return TimeoutError(f"{self} still parking after {timeout}s")
+        return self._park_error
+
+    def __del__(self) -> None:
+        # Robot.__del__ disconnects a follower dropped while connected; no thread
+        # may start from a finalizer (parking.py).
+        with park_in_place():
+            super().__del__()

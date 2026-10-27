@@ -42,7 +42,6 @@ from .fast_obs_patch import apply_fast_observation_patch
 from .loop_rate_log import apply_loop_rate_logging_patch
 from .chunk_execution_patch import apply_chunk_execution_patch
 from .task_onehot_patch import apply_task_onehot_patch
-from .parallel_arms import apply_record_pairing_patch
 
 # On by default; set LEROBOT_FAST_OBS=0 to opt out. lerobot imports this package
 # on startup (lerobot.utils.import_utils discovers "lerobot_robot_*"), which is
@@ -64,7 +63,3 @@ apply_chunk_execution_patch()
 # Widens the policy state to [arms, 0, 0, one_hot] for multi-stage ACT
 # checkpoints trained with a stage one-hot (trossen-ai-simulation train_multi.py).
 apply_task_onehot_patch()
-
-# On by default (LEROBOT_PARALLEL_ARMS=0 turns it off): the leader arms connect and go to
-# sleep at the same time as the follower arms in lerobot-record (parallel_arms.py).
-apply_record_pairing_patch()

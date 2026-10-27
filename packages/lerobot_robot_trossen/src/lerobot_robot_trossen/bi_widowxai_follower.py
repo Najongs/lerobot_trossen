@@ -9,8 +9,8 @@ from lerobot_robot_trossen.config_bi_widowxai_follower import (
     BiWidowXAIFollowerRobotConfig,
 )
 from lerobot_robot_trossen.config_widowxai_follower import WidowXAIFollowerConfig
+from lerobot_robot_trossen.parking import park_at_exit, park_in_place
 from lerobot_robot_trossen.widowxai_follower import WidowXAIFollower
-from lerobot_robot_trossen.parallel_arms import run_both
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +93,9 @@ class BiWidowXAIFollowerRobot(Robot):
         )
 
     def connect(self, calibrate: bool = True) -> None:
-        run_both(
-            "follower connect",
-            lambda: self.left_arm.connect(calibrate),
-            lambda: self.right_arm.connect(calibrate),
-        )
+        self.left_arm.connect(calibrate)
+        self.right_arm.connect(calibrate)
+        park_at_exit(self, rank=1)
 
         for cam in self.cameras.values():
             cam.connect()
@@ -115,7 +113,8 @@ class BiWidowXAIFollowerRobot(Robot):
 
     def configure(self) -> None:
         # Set the arm to position control mode
-        run_both("follower configure", self.left_arm.configure, self.right_arm.configure)
+        self.left_arm.configure()
+        self.right_arm.configure()
 
     def get_observation(self) -> dict[str, Any]:
         obs_dict = {}
@@ -165,7 +164,28 @@ class BiWidowXAIFollowerRobot(Robot):
         return {**prefixed_send_action_left, **prefixed_send_action_right}
 
     def disconnect(self):
-        run_both("follower disconnect", self.left_arm.disconnect, self.right_arm.disconnect)
+        # Each call returns once its arm's park thread has started, so the two
+        # arms park together.
+        self.left_arm.disconnect()
+        self.right_arm.disconnect()
 
         for cam in self.cameras.values():
             cam.disconnect()
+
+    def wait_for_arrival(self) -> float:
+        """Block until both arms' connect moves have ended; the seconds waited."""
+        return self.left_arm.wait_for_arrival() + self.right_arm.wait_for_arrival()
+
+    def wait_for_disconnect(self, timeout: float | None = None) -> list[BaseException]:
+        """Join both arms' park threads; what they raised, empty if both parked."""
+        errors = (
+            self.left_arm.wait_for_disconnect(timeout),
+            self.right_arm.wait_for_disconnect(timeout),
+        )
+        return [error for error in errors if error is not None]
+
+    def __del__(self) -> None:
+        # Robot.__del__ disconnects an object dropped while connected; the arms must
+        # park in place there, not on threads (parking.py).
+        with park_in_place():
+            super().__del__()
