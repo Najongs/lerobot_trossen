@@ -109,6 +109,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         # action_features are config-derived and readable already, which is what
         # lets the dimension check run before anything is powered.
         robot = record_adapter.make_robot(cfg.robot)
+        # The leader arm, constructed only when a stage drives the robot with it
+        # -- a YAML without a leader_reset stage never touches 192.168.1.2/.3,
+        # even if it carries a `teleop:` block. Constructed, not connected, for
+        # the same reason as the robot: preflight reads its action_features.
+        teleop = (
+            record_adapter.make_teleop(cfg.teleop)
+            if cfg.teleop is not None
+            and any(
+                stage.executor == config.EXECUTOR_LEADER_RESET for stage in cfg.stages
+            )
+            else None
+        )
 
         # Step 7. Fetches config.json only. It has to happen before
         # make_policy, which overwrites output_features from ds_meta and
@@ -116,7 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         policy_configs = policies.load_policy_configs(cfg.stages)
 
         # Step 8. Dimensions, manual-terminator reachability, dataset name.
-        preflight.run_preflight(cfg, robot, policy_configs)
+        preflight.run_preflight(cfg, robot, policy_configs, teleop)
     except PreflightError as error:
         logger.error(f"preflight failed: {error}")
         return EXIT_PREFLIGHT
@@ -191,6 +203,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             # (mobileai.py:347-362), while is_connected requires every camera
             # (:341-345). A RealSense that fails to enumerate therefore leaves a
             # robot that is energised and NOT is_connected.
+            #
+            # The leader arm FIRST: a leader that is off or unplugged then fails
+            # before the follower is energised. Its connect() moves the leader to
+            # its staged pose (2 s) and leaves it in gravity compensation, as
+            # lerobot-record's does.
+            if teleop is not None:
+                teleop.connect()
             robot.connect()
 
             # Step 13.
@@ -203,6 +222,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 bundles=bundles,
                 log=log,
                 run_directory=run_directory,
+                teleop=teleop,
             )
 
             # Steps 14-18. VideoEncodingManager.__exit__ flushes the encoders,
@@ -252,6 +272,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "robot.disconnect() failed -- CHECK THE BASE IS STOPPED "
                     "before leaving the robot"
                 )
+            # After the robot: the base stop comes first. Guarded on is_connected
+            # because the leader's disconnect() raises on an arm it never
+            # configured (widowxai_leader.py), and a leader that failed to come
+            # up is exactly the case that reaches this line.
+            if teleop is not None:
+                try:
+                    if teleop.is_connected:
+                        teleop.disconnect()
+                except Exception:
+                    logger.exception("leader arm disconnect() failed")
             if listener is not None and not is_headless():
                 try:
                     listener.stop()

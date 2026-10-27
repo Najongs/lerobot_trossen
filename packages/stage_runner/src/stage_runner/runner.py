@@ -121,10 +121,12 @@ def run_trial(context: StageContext) -> TrialOutcome:
     its exception back.
 
     Deliberately absent, all of which upstream ``record()`` has: the trial-repeat
-    loop, the inter-trial teleop reset section (stage 4 must START holding the
-    tube, so the grasp pose is built by hand with the leader arm between runs),
-    the re-record branch, ``dataset.finalize()`` in a finally of our own
+    loop, the re-record branch, ``dataset.finalize()`` in a finally of our own
     (VideoEncodingManager.__exit__ already does it), and ``push_to_hub``.
+    Upstream's teleop reset section is not absent but MOVED: it is a stage of its
+    own (executor ``leader_reset``) that a YAML places where it is needed --
+    before stage 4, which must START holding the tube -- rather than a fixed
+    section between episodes.
     """
     config = context.config
     log = context.log
@@ -282,7 +284,12 @@ def run_trial(context: StageContext) -> TrialOutcome:
             held_gripper: dict[str, float] | None = None
             gripper_goal_source = reposition.GRIPPER_GOAL_UNCHANGED
             if uses_start_poses:
-                if result.frames > 0:
+                if result.gripper_goals is not None:
+                    # A leader_reset stage: its commands never reached the
+                    # episode buffer, so it hands its last gripper goal over
+                    # directly -- the grip the operator just set.
+                    last_gripper_goals = dict(result.gripper_goals)
+                elif result.frames > 0:
                     # This stage's policy sent the latest gripper goal; a stage
                     # that recorded nothing sent none, so the previous one stands.
                     last_gripper_goals = _recorded_gripper_goals(context)

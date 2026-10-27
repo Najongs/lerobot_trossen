@@ -95,6 +95,29 @@ class WidowXAILeaderTeleop(Teleoperator):
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action_dict
 
+    def align_to(
+        self, positions: dict[str, float], goal_time: float, blocking: bool = True
+    ) -> None:
+        """Move to ``positions`` (keyed ``<joint>.pos``) under position control.
+
+        Leaves the arm in position mode; :meth:`release` hands it back to gravity
+        compensation. stage_runner's leader_reset stage uses the pair to bring the
+        leader to the follower's pose before the follower starts copying it -- the
+        same mode sequence configure() runs to reach the staged pose.
+        """
+        goal = [float(positions[f"{name}.pos"]) for name in self.config.joint_names]
+        self.driver.set_all_modes(trossen_arm.Mode.position)
+        self.driver.set_all_positions(goal, goal_time=goal_time, blocking=blocking)
+
+    def release(self) -> None:
+        """Gravity compensation, the state configure() leaves the arm in."""
+        self.driver.set_all_modes(trossen_arm.Mode.external_effort)
+        self.driver.set_all_external_efforts(
+            [0.0] * len(self.config.joint_names),
+            goal_time=0.0,
+            blocking=True,
+        )
+
     def send_feedback(self, feedback: dict[str, float]) -> None:
         # TODO(lukeschmitt-tr): Implement force feedback
         # Note that feedback is currently not implemented upstream huggingface/lerobot.

@@ -72,6 +72,13 @@ class StageResult:
     elapsed_s: float
     frames: int
     reason: str = ""
+    # The gripper goals this stage last SENT, for a stage whose commands never
+    # reach the episode buffer -- a leader_reset stage records nothing, so
+    # runner._recorded_gripper_goals has no row to read them back from. None for
+    # a policy stage, whose goals the runner reads from the buffer as before.
+    # The runner holds them through a following start pose move, so an object
+    # the operator handed the robot stays held.
+    gripper_goals: dict[str, float] | None = None
 
     @property
     def hertz(self) -> float:

@@ -51,6 +51,9 @@ _LAZY_ATTRIBUTES: dict[str, str] = {
     "EXECUTORS": "executors",
     "MockRobot": "mock_robot",
     "MockRobotConfig": "mock_robot",
+    # Same resolution path as MockRobot, for `teleop: type: stage_runner_mock_teleop`.
+    "MockTeleop": "mock_teleop",
+    "MockTeleopConfig": "mock_teleop",
     "PolicyBundle": "policies",
     "StageResult": "results",
     "TrialOutcome": "results",

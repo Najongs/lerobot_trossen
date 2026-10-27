@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     # module that executors, runner and cli all import.
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.robots import Robot
+    from lerobot.teleoperators import Teleoperator
 
     from stage_runner.config import StageRunnerConfig
     from stage_runner.events import EventLog
@@ -46,6 +47,10 @@ class StageContext:
     bundles: dict[str, PolicyBundle]
     log: EventLog
     run_directory: Path
+    # The connected leader arm, the first appended field the docstring above
+    # provides for. None unless a stage uses the leader_reset executor: cli.main
+    # constructs and connects it only then.
+    teleop: Teleoperator | None = None
 
     def buffered_frame_count(self) -> int:
         """Frames written into the current episode buffer so far.
