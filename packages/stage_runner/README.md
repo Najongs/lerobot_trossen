@@ -132,6 +132,24 @@ LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run python -m 
 - `→`로 저장하면 체인이 다음 단계로 이어짐, `ESC`로 저장하면 시행 종료
 - 개입 데이터셋은 로컬에만 — 올릴 땐 `LeRobotDataset(<repo>).push_to_hub()`
 
+## 정책 단계 동안 베이스 토크 끄기 (release_base_torque)
+
+정책이 내는 베이스 명령을 그 단계 동안만 무시하게 함 — 단계 6처럼 pi0가 단계가 끝나기 전에 베이스를 몰기 시작하는 단계용
+
+```yaml
+  - id: s6
+    executor: lerobot_policy
+    release_base_torque: true
+```
+
+- 단계 시작 전 속도 0 → 토크 끔, 끝나면(타이머·판별기·키·예외 모두) 속도 0 → 토크 켬
+- 이동 단계가 든 1~11 전체 체인용. 이동 단계가 없는 체인은 `robot.enable_base_motor_torque: false` 한 줄로 실행 전체가 같아짐
+- 토크가 안 꺼지면 그 단계는 정책을 돌리지 않고 시행 종료, 다시 안 켜지면 다음 단계를 돌리지 않고 시행 종료
+- 토크를 끈 채 연결한 로봇(`enable_base_motor_torque: false`)이면 아무것도 안 바꿈
+- 단계 안 기록 = `events.jsonl`의 `stage_base_torque` 한 줄, `base_torque` 값은 `released`·`not_released`·`release_failed`·`restore_failed`
+- preflight 거부 — 정책 단계가 아닌 단계에 붙음, 토크를 켜고 연결했는데 `robot.base.enable_motor_torque`가 없음
+- ⚠ 토크가 꺼진 동안 베이스 바퀴가 풀려 손으로 밀림 — 그 단계 동안 로봇을 밀지 말 것
+
 ## 베이스 이동 단계 (base_replay · base_align)
 
 이동 단계를 정책 대신 두 단계 한 쌍으로 돈다 — **데모 경로 재생**(`base_replay`) → **도착 화면 정렬**(`base_align`, cam_high를 데모 도착 화면과 비교해 헤딩 먼저, 거리는 고정물 크기로). 체인 아무 자리에, 이동마다 한 쌍씩. 둘 다 기록한다(프레임의 task 문자열 = 단계 `name`).

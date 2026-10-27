@@ -47,7 +47,25 @@ LATEST_CONFIG_VERSION: int = 1
 
 TERMINATOR_TIMEOUT: str = "timeout"
 TERMINATOR_MANUAL: str = "manual"
-TERMINATOR_TYPES: tuple[str, ...] = (TERMINATOR_TIMEOUT, TERMINATOR_MANUAL)
+# A policy stage that a camera classifier may end before its timer -- see
+# completion.py. timeout_s stays required: it is the ceiling.
+TERMINATOR_CLASSIFIER: str = "classifier"
+# A policy stage that ends a fixed time after a gripper closes on something --
+# see completion.GripTracker. For a stage whose length the grasp sets (stage 6:
+# shake for a while once the beaker is held) while the cameras cannot tell its
+# end. timeout_s stays required: it is the ceiling.
+TERMINATOR_GRASP: str = "grasp"
+TERMINATOR_TYPES: tuple[str, ...] = (
+    TERMINATOR_TIMEOUT,
+    TERMINATOR_MANUAL,
+    TERMINATOR_CLASSIFIER,
+    TERMINATOR_GRASP,
+)
+# Terminators run by a completion.CompletionWatcher.
+WATCHED_TERMINATORS: tuple[str, ...] = (TERMINATOR_CLASSIFIER, TERMINATOR_GRASP)
+COMPLETION_MODE_FIRE: str = "fire"
+COMPLETION_MODE_SHADOW: str = "shadow"
+COMPLETION_MODES: tuple[str, ...] = (COMPLETION_MODE_FIRE, COMPLETION_MODE_SHADOW)
 
 EXECUTOR_LEROBOT_POLICY: str = "lerobot_policy"
 # A stage that runs NO policy: the operator drives the arms with the leader arm
@@ -100,6 +118,32 @@ RESOLVED_CONFIG_HEADER: str = (
 
 
 @dataclass
+class GripConfig:
+    """What a classifier or grasp terminator reads from the grippers.
+
+    Widths are observation.state values in metres. On the 10/25 demos
+    (all11_merged, stages 2 and 6) a gripper reads about 0 closed on nothing,
+    0.013-0.019 open and 0.0054-0.0082 around a tube; around the beaker it
+    closes to about 0 as well, so in stage 6 only the closing can be seen.
+    """
+
+    # observation.state names of the gripper joints to read, e.g.
+    # left_left_carriage_joint.pos. preflight checks the robot has them.
+    state_names: list[str] = field(default_factory=list)
+    # classifier: the classifier may end the stage only while EVERY named
+    # gripper has stayed inside [hold_min_m, hold_max_m] for settle_s -- both
+    # tubes held. Both required when a classifier terminator has `grip`.
+    hold_min_m: float | None = None
+    hold_max_m: float | None = None
+    # grasp: a gripper that opened past open_above_m and then stayed below
+    # close_below_m for settle_s has grasped, at the start of that stay.
+    # Opening past open_above_m again cancels it, so a re-grasp restarts the wait.
+    open_above_m: float = 0.010
+    close_below_m: float = 0.002
+    settle_s: float = 0.5
+
+
+@dataclass
 class TerminatorConfig:
     """How a stage ends. A MAPPING, never a scalar.
 
@@ -112,8 +156,26 @@ class TerminatorConfig:
     # timeout: the required cutoff. manual: an optional ceiling; when it is None
     # plan_stage substitutes defaults.manual_ceiling_s, because record_loop's
     # `while timestamp < control_time_s` raises TypeError against None on the
-    # first iteration.
+    # first iteration. classifier, grasp: the required ceiling, as for timeout.
     timeout_s: float | None = None
+    # classifier: a local checkpoint directory or a Hub repo id holding the
+    # classifier and its completion.json. grasp: optional -- the classifier is
+    # then scored for the record only and never ends the stage.
+    model_path: str | None = None
+    # classifier only. None -> the value in the checkpoint's completion.json,
+    # which the offline evaluation chose. Score at or above `threshold` for
+    # `hold_s` seconds, not before `min_s` into the stage, ends the stage.
+    threshold: float | None = None
+    hold_s: float | None = None
+    min_s: float | None = None
+    # classifier, grasp. "fire" ends the stage; "shadow" only logs when it
+    # would have, and the timer ends the stage.
+    mode: str = COMPLETION_MODE_FIRE
+    # classifier: an optional gripper gate (hold_min_m / hold_max_m). grasp:
+    # required (open_above_m / close_below_m).
+    grip: GripConfig | None = None
+    # grasp only. Seconds after the latest grasp at which the stage ends.
+    wait_s: float | None = None
 
 
 @dataclass
@@ -305,6 +367,13 @@ class StageConfig:
     # preflight refuses either block on an executor that would ignore it.
     replay: BaseReplayConfig | None = None
     align: BaseAlignConfig | None = None
+    # A `lerobot_policy` stage only. True = base torque is switched off for the
+    # stage's loop and back on after it, however it ended, so the policy's base
+    # command moves nothing (stage 6: pi0 trained on "shake, then drive to the
+    # fridge" starts driving before the stage ends). The run-wide
+    # `robot.enable_base_motor_torque: false` does the same for a chain with no
+    # base stage; this is for a chain whose base stages need the torque.
+    release_base_torque: bool = False
 
 
 @dataclass

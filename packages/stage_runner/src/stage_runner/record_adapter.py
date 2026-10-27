@@ -225,12 +225,11 @@ def plan_stage(stage: StageConfig, defaults: DefaultsConfig) -> StagePlan:
     TypeError. ``defaults.manual_ceiling_s`` doubles as the runaway guard for a
     missed keypress.
 
-    PLUG POINT: this is the single named place a P2 ``keyframe`` or P3
-    ``classifier`` terminator attaches -- one added branch here, no signature
-    change anywhere. Firing one live needs no core patch either: a watcher
-    thread can read ``dataset.episode_buffer["observation.state"]`` (add_frame
-    appends it every frame) and set ``events["exit_early"]``, which record_loop
-    already breaks on.
+    A ``classifier`` or ``grasp`` stage needs no branch here: its timeout_s is
+    the ceiling, exactly as for ``timeout``. The rule itself fires live from a watcher
+    thread that sets ``events["exit_early"]``, which record_loop already breaks
+    on (completion.py, wired in executors.run_lerobot_policy_stage) -- no core
+    patch. A P2 ``keyframe`` terminator would attach the same way.
     """
     terminator = stage.terminator
     if terminator.type == TERMINATOR_MANUAL and terminator.timeout_s is None:
@@ -355,7 +354,12 @@ def call_reset_loop(
 
 
 def classify_termination(
-    *, events: Mapping[str, bool], plan: StagePlan, elapsed_s: float, fps: int
+    *,
+    events: Mapping[str, bool],
+    plan: StagePlan,
+    elapsed_s: float,
+    fps: int,
+    completion: tuple[str, str] | None = None,
 ) -> tuple[str, str]:
     """Why the stage ended, plus the comparison that decided it.
 
@@ -373,6 +377,11 @@ def classify_termination(
     means (see runner.run_trial); a reader who believed the old sentence writes
     that loop without clearing, and trial 2 is then aborted before its first
     stage by a key pressed during trial 1.
+
+    ``completion`` is the completion watcher's (terminated_by, account) when
+    IT set exit_early (completion.py); it outranks the elapsed-time heuristic, which
+    would otherwise read the early stop as a right arrow, and is outranked by
+    the two flags, which mean the operator asked for more than a stage end.
     """
     margin_s = manual_detection_margin_s(fps)
     threshold_s = plan.control_time_s - margin_s
@@ -390,6 +399,9 @@ def classify_termination(
             TERMINATED_BY_RERECORD_REQUESTED,
             f"events['rerecord_episode'] was set; {measured}",
         )
+    if completion is not None:
+        terminated_by, account = completion
+        return terminated_by, f"{account}; {measured}"
     if elapsed_s < threshold_s:
         return TERMINATED_BY_MANUAL, f"elapsed_s < threshold_s; {measured}"
     return TERMINATED_BY_TIMEOUT, f"elapsed_s >= threshold_s; {measured}"

@@ -147,6 +147,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # mid-chain, and no stage reads a dataset between two others. {} for a
         # chain without base stages, which reads nothing.
         loaded_base_assets = base_assets.load_base_assets(cfg, robot)
+
+        # Every classifier (and grasp) stage's checkpoint, loaded here for the same reason:
+        # a missing model, an unreadable completion.json or a camera the robot
+        # does not have is an exit 2 with the arms unpowered. {} for a chain
+        # without classifier stages, which imports nothing extra.
+        completion_models = preflight.load_completion_models(cfg, robot)
     except PreflightError as error:
         logger.error(f"preflight failed: {error}")
         return EXIT_PREFLIGHT
@@ -243,6 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_directory=run_directory,
                 teleop=teleop,
                 base_assets=loaded_base_assets,
+                completion_models=completion_models,
             )
 
             # Steps 14-18. VideoEncodingManager.__exit__ flushes the encoders,

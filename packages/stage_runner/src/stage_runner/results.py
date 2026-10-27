@@ -26,6 +26,14 @@ TERMINATED_BY_ERROR: str = "error"
 # says which. Separate from "error" because nothing raised -- the stage decided.
 TERMINATED_BY_CONVERGED: str = "converged"
 TERMINATED_BY_BASE_FAILED: str = "base_failed"
+# A policy stage the completion classifier ended before its timer
+# (completion.py). Not aborting: the chain goes on to the next stage, as after
+# a timeout. The same string as config.TERMINATOR_CLASSIFIER, which keeps the
+# planned terminator on stage_start inside this vocabulary.
+TERMINATED_BY_CLASSIFIER: str = "classifier"
+# A policy stage a grasp terminator ended: wait_s after a gripper closed on
+# something (completion.GripTracker). Same string as config.TERMINATOR_GRASP.
+TERMINATED_BY_GRASP: str = "grasp"
 TERMINATED_BY_VALUES: tuple[str, ...] = (
     TERMINATED_BY_TIMEOUT,
     TERMINATED_BY_MANUAL,
@@ -34,6 +42,8 @@ TERMINATED_BY_VALUES: tuple[str, ...] = (
     TERMINATED_BY_ERROR,
     TERMINATED_BY_CONVERGED,
     TERMINATED_BY_BASE_FAILED,
+    TERMINATED_BY_CLASSIFIER,
+    TERMINATED_BY_GRASP,
 )
 
 # Terminators that end the whole trial rather than just the stage: the operator
