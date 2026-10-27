@@ -221,6 +221,9 @@ class StageRunnerConfig:
     stages: list[StageConfig] = field(default_factory=list)
     output: OutputConfig = field(default_factory=OutputConfig)
     display_data: bool = False
+    # Same name and default as lerobot-record's --play_sounds: each stage start
+    # is spoken ("Stage s4, pour liquid ...") through spd-say on Linux.
+    play_sounds: bool = True
 
 
 def parse_config(argv: Sequence[str] | None = None) -> StageRunnerConfig:

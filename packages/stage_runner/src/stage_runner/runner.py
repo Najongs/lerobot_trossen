@@ -205,6 +205,9 @@ def run_trial(context: StageContext) -> TrialOutcome:
         last_gripper_goals: dict[str, float] | None = None
         gripper_goal_source = reposition.GRIPPER_GOAL_UNCHANGED
         for stage_index, stage in enumerate(stages):
+            # Before the start-pose move, so the operator hears which stage is
+            # next before the arms start moving.
+            record_adapter.announce_stage(stage, config.play_sounds)
             # BEFORE `stage_id = stage.id`, on purpose: until this stage's
             # stage_start is written, the stage that owns the open boundary is
             # still the previous one, and _record_failed_trial keys any boundary

@@ -10,6 +10,8 @@
 # would otherwise die on the first one's leftovers.
 
 version: 1
+# Silent: the suite runs headless and on machines without spd-say.
+play_sounds: false
 
 robot:
   type: stage_runner_mock_robot
