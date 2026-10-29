@@ -163,6 +163,8 @@ def patch_env(tmp_path, monkeypatch):
     monkeypatch.setattr(intervention_patch, "_saved_this_run", 0)
     monkeypatch.setattr(intervention_patch, "_finalized", False)
     monkeypatch.setattr(intervention_patch, "_last_gripper_goals", None)
+    # Never speak out loud from a test run on the robot PC.
+    monkeypatch.setattr(intervention_patch, "PLAY_SOUNDS", False)
     # No real align delay in tests.
     monkeypatch.setattr(intervention_patch, "LEADER_ALIGN_MIN_GOAL_TIME_S", 0.0)
     # A short reset that ends by itself unless a test presses a key in it.
@@ -592,3 +594,70 @@ def test_align_goal_time_ignores_grippers_and_has_a_floor(monkeypatch):
         intervention_patch.align_goal_time(start, {"left_left_carriage_joint.pos": 9.0})
         == 2.0
     )
+
+
+@pytest.fixture
+def spoken(monkeypatch):
+    """The cues _say was asked to speak, in order."""
+    said: list[str] = []
+    monkeypatch.setattr(intervention_patch, "_say", said.append)
+    return said
+
+
+RESET_CUE = "Reset. Take the leader arm"
+
+
+def test_each_boundary_of_a_take_is_spoken(patch_env, spoken):
+    robot, leader, events = TorqueRobot(), FakeLeader(), new_events()
+    run_policy_episode(robot, leader, SpacePolicy(press_at=5), events)
+
+    assert spoken == ["Intervention", RESET_CUE, "Recording", "Saving"]
+
+
+def test_a_discarded_take_is_spoken_before_its_reset(patch_env, spoken):
+    robot, events = TorqueRobot(), new_events()
+    leader = FakeLeader(keys={("record", 1, 2): "left"})
+    run_policy_episode(robot, leader, SpacePolicy(press_at=3), events)
+
+    assert spoken == [
+        "Intervention",
+        RESET_CUE,
+        "Recording",
+        "Discarded",
+        RESET_CUE,
+        "Recording",
+        "Saving",
+    ]
+
+
+def test_esc_in_the_first_reset_says_nothing_was_saved(patch_env, spoken):
+    robot, events = TorqueRobot(), new_events()
+    leader = FakeLeader(keys={("reset", 1, 1): "esc"})
+    run_policy_episode(robot, leader, SpacePolicy(press_at=3), events)
+
+    assert spoken == ["Intervention", RESET_CUE, "Nothing saved"]
+
+
+def test_a_second_space_bar_is_not_spoken_again(patch_env, spoken, monkeypatch):
+    monkeypatch.setattr(intervention_patch, "_policy_events", new_events())
+    monkeypatch.setattr(intervention_patch, "_requested", False)
+    intervention_patch._on_space()
+    intervention_patch._on_space()
+
+    assert spoken == ["Intervention"]
+
+
+def test_a_space_bar_outside_a_policy_episode_is_not_spoken(patch_env, spoken):
+    intervention_patch._on_space()
+
+    assert spoken == []
+
+
+def test_a_cue_that_cannot_be_spoken_never_raises(monkeypatch):
+    from lerobot.utils import utils
+
+    def broken(text, play_sounds):
+        raise OSError("no speech dispatcher")
+
+    monkeypatch.setattr(utils, "log_say", broken)
+    intervention_patch._say("Recording")  # must not raise

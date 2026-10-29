@@ -107,6 +107,13 @@ SERIAL_ENCODING: bool = (
     os.environ.get("LEROBOT_INTERVENTION_SERIAL_ENCODING", "") == "1"
 )
 
+# Spoken cues at each hand-over boundary (space bar, reset, recording, saving,
+# discarding), as stage_runner speaks each stage start. Without them the only
+# sign that a boundary passed was the next stage's announcement, so a right
+# arrow read twice went unnoticed until then (robot2 r03 2026-10-29: a 3-frame
+# take). LEROBOT_INTERVENTION_SOUNDS=0 turns them off.
+PLAY_SOUNDS: bool = os.environ.get("LEROBOT_INTERVENTION_SOUNDS", "1") != "0"
+
 # The intervention dataset's label and its loop's fps. See the module
 # docstring, "Loop rate".
 DATASET_FPS: int = 30
@@ -163,13 +170,26 @@ def _on_space() -> None:
                 "Space bar ignored: an intervention starts only during a policy episode."
             )
             return
-        if not _requested:
+        first = not _requested
+        if first:
             _space_at = time.perf_counter()
         _requested = True
         events["exit_early"] = True
     print(
         "Space bar pressed. Stopping the policy and handing over to the leader arm..."
     )
+    if first:
+        _say("Intervention")
+
+
+def _say(text: str) -> None:
+    """Speak ``text`` in the background (lerobot's log_say). Never raises."""
+    try:
+        from lerobot.utils.utils import log_say
+
+        log_say(text, PLAY_SOUNDS)
+    except Exception:
+        logger.warning(f"intervention: could not speak {text!r}", exc_info=True)
 
 
 def _start_listener() -> None:
@@ -649,6 +669,7 @@ def _run_reset(original, reset_call: dict, events: dict) -> None:
         "Reset, not recording: take the leader arm. Recording starts with -> "
         f"(or by itself after {reset_call['control_time_s']:g}s); ESC stops the run."
     )
+    _say("Reset. Take the leader arm")
     original(**reset_call)
 
 
@@ -724,8 +745,12 @@ def _intervene(
                 f"Recording the intervention into {REPO_ID}: finish the stage with the "
                 "leader arm, then -> to save (<- to redo, ESC to save and stop)."
             )
+            _say("Recording")
             original(**call)
             if events.get("rerecord_episode"):
+                # Said when the left arrow ends the take, before the reset's cue;
+                # the buffer itself is cleared after the reset, as below.
+                _say("Discarded")
                 # As lerobot-record: the take is thrown away after the reset, so
                 # an ESC there throws it away too and stops the run.
                 _run_reset(original, reset_call, events)
@@ -741,6 +766,8 @@ def _intervene(
             _last_gripper_goals = goals
         frames = int(_dataset.episode_buffer["size"])
         if frames:
+            # At the key press, not after the encoding (15-50 s serial).
+            _say("Saving")
             index = _dataset.num_episodes
             save_started = time.perf_counter()
             _dataset.save_episode(parallel_encoding=not SERIAL_ENCODING)
@@ -752,6 +779,7 @@ def _intervene(
             )
         else:
             _dataset.clear_episode_buffer()
+            _say("Nothing saved")
             logger.warning("intervention: no frame recorded, nothing saved")
     finally:
         problem = _restore_base_torque(robot) if released else _zero_base(robot)
