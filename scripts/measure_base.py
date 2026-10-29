@@ -116,6 +116,13 @@ def _check_alive(base, axis: int, probe: float = 0.25, secs: float = 0.6) -> Non
         time.sleep(0.01)
     base.set_cmd_vel(0.0, 0.0)
     time.sleep(0.3)
+    if peak >= probe * 0.15:
+        # 같은 만큼 되돌린다 — 안 하면 스크립트를 띄울 때마다 ≈+2.3° 쌓였다(10/28 base_turn 8회 → 마커 +19°)
+        cmd[axis] = -probe
+        base.set_cmd_vel(*cmd)
+        time.sleep(secs)
+        base.set_cmd_vel(0.0, 0.0)
+        time.sleep(0.3)
     if peak < probe * 0.15:
         raise SystemExit(
             f"베이스가 명령에 반응하지 않는다 (명령 {probe}, 관측 최대 {peak:.4f}).\n"

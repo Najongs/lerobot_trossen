@@ -1,0 +1,19 @@
+{
+  "trossen_pc": "pc2",
+  "measured": "2026-10-27",
+  "ratio": {
+    "forward": 0.978,
+    "backward": 0.978,
+    "turn_pos": null,
+    "turn_neg": null
+  },
+  "detail": {
+    "forward": {"tape_m": 0.49, "odom_m": 0.501, "ratio": 0.978, "run": "outputs/depth_approach/20261027_212248"},
+    "backward": [
+      {"tape_m": 0.49, "odom_m": 0.503, "ratio": 0.974, "run": "outputs/depth_approach/20261027_212615"},
+      {"tape_m": 0.59, "odom_m": 0.601, "ratio": 0.982, "run": "outputs/depth_approach/20261027_212821"}
+    ],
+    "turn": "cam_high RGB-D VO 로 4회 반복: + 회전 합 실제/오도 1.001, − 회전 0.986 (구간 노이즈 ±1~2.5°) — 1.0 과 구별 안 돼 비움(=1.0). 방향 전환 직후 3.6° 지연은 비로 못 잡는다"
+  },
+  "note": "실제/오도메트리 (모터 구동). measure_base.py calib 가 아니라 docs/depth_cam_high_pc2_1027.md 의 줄자·VO 실측으로 손으로 만든 파일. 직진 0.08 m/s 저속·0.5~0.6 m·줄자 1 cm 읽기(±2%). test_ep1_replay.py --base_calib 가 읽는다"
+}
