@@ -27,4 +27,5 @@ apply_chunk_execution_patch()
 
 # Off by default; installed only when LEROBOT_INTERVENTION_REPO_ID is set. Must
 # run last: the intervention loop it starts goes through the wrappers above.
+# LEROBOT_INTERVENTION_SERIAL_ENCODING=1 alone works without the repo id.
 apply_intervention_patch()

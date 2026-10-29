@@ -103,6 +103,8 @@ REPO_ID: str = os.environ.get(_ENV_VAR, "").strip()
 # after another in this process instead of in three forked workers
 # (save_episode(parallel_encoding=False)). Tests whether forking the large
 # recording process mid-run is what stalls a RealSense stream (r01/r02 10/25).
+# Since 2026-10-28 it works without LEROBOT_INTERVENTION_REPO_ID as well: a plain
+# eval run (pi0 base baseline) stalled 13 s after a forked save.
 SERIAL_ENCODING: bool = (
     os.environ.get("LEROBOT_INTERVENTION_SERIAL_ENCODING", "") == "1"
 )
@@ -877,7 +879,15 @@ def apply_intervention_patch() -> bool:
     Installed last, outside the other record_loop wrappers, so the intervention
     loop it starts runs through them too. Never raises: lerobot imports this
     package automatically and treats any exception as a failed plugin.
+
+    ``LEROBOT_INTERVENTION_SERIAL_ENCODING=1`` is honoured with or without the
+    repo id, so a plain eval run can stop forking on every save too.
     """
+    if SERIAL_ENCODING:
+        try:
+            _force_serial_encoding()
+        except Exception:  # a plugin import must never raise
+            logger.exception("Could not force serial encoding.")
     if not REPO_ID:
         return False
     try:
@@ -907,8 +917,6 @@ def apply_intervention_patch() -> bool:
             f"the leader arm and records into that dataset at {DATASET_FPS} fps, as "
             "acquisition does."
         )
-        if SERIAL_ENCODING:
-            _force_serial_encoding()
         return True
     except Exception:
         logger.exception(
