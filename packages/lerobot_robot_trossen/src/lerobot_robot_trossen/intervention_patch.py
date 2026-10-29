@@ -98,15 +98,16 @@ logger = logging.getLogger(__name__)
 _ENV_VAR = "LEROBOT_INTERVENTION_REPO_ID"
 REPO_ID: str = os.environ.get(_ENV_VAR, "").strip()
 
-# TEMPORARY robot-PC patch (2026-10-25, user-approved): with
-# LEROBOT_INTERVENTION_SERIAL_ENCODING=1 a take's three videos are encoded one
-# after another in this process instead of in three forked workers
-# (save_episode(parallel_encoding=False)). Tests whether forking the large
-# recording process mid-run is what stalls a RealSense stream (r01/r02 10/25).
-# Since 2026-10-28 it works without LEROBOT_INTERVENTION_REPO_ID as well: a plain
-# eval run (pi0 base baseline) stalled 13 s after a forked save.
+# Serial video encoding, on by default since 2026-10-30: a take's three videos
+# are encoded one after another in this process instead of in three forked
+# workers (save_episode(parallel_encoding=False)). Forking the large recording
+# process mid-run stalls a RealSense stream (r01/r02 10/25, pi0 base baseline
+# 10/28, expert-only control 10/30 -- each killed the run right after a forked
+# save). A save takes longer, but a stalled camera ends the whole run.
+# LEROBOT_INTERVENTION_SERIAL_ENCODING=0 restores parallel encoding. Applies to
+# every lerobot-record run, with or without LEROBOT_INTERVENTION_REPO_ID.
 SERIAL_ENCODING: bool = (
-    os.environ.get("LEROBOT_INTERVENTION_SERIAL_ENCODING", "") == "1"
+    os.environ.get("LEROBOT_INTERVENTION_SERIAL_ENCODING", "1").strip() != "0"
 )
 
 # Spoken cues at each hand-over boundary (space bar, reset, recording, saving,
@@ -850,11 +851,10 @@ def is_installed(function) -> bool:
 
 
 def _force_serial_encoding() -> None:
-    """TEMPORARY robot-PC patch (2026-10-25, user-approved): every save_episode in
-    this process -- the eval dataset's too, not only the intervention take's --
-    encodes without forking (parallel_encoding=False). The 09:55 stall came
-    16 s after an eval save that still forked, so the take-only switch left a
-    fork in every lerobot-record episode."""
+    """Every save_episode in this process -- the eval dataset's too, not only the
+    intervention take's -- encodes without forking (parallel_encoding=False).
+    The 09:55 stall (10/25) came 16 s after an eval save that still forked, so
+    a take-only switch left a fork in every lerobot-record episode."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     original = LeRobotDataset.save_episode
@@ -868,8 +868,9 @@ def _force_serial_encoding() -> None:
     save_episode._serial_encoding_wrapper = True
     LeRobotDataset.save_episode = save_episode
     logger.warning(
-        "LEROBOT_INTERVENTION_SERIAL_ENCODING=1: every dataset in this process "
-        "encodes its videos serially, without forked workers."
+        "Serial encoding (default; LEROBOT_INTERVENTION_SERIAL_ENCODING=0 turns "
+        "it off): every dataset in this process encodes its videos serially, "
+        "without forked workers."
     )
 
 
@@ -880,14 +881,20 @@ def apply_intervention_patch() -> bool:
     loop it starts runs through them too. Never raises: lerobot imports this
     package automatically and treats any exception as a failed plugin.
 
-    ``LEROBOT_INTERVENTION_SERIAL_ENCODING=1`` is honoured with or without the
-    repo id, so a plain eval run can stop forking on every save too.
+    Serial encoding is forced first, with or without the repo id, so a plain
+    eval run does not fork on every save either; only
+    ``LEROBOT_INTERVENTION_SERIAL_ENCODING=0`` leaves the parallel default.
     """
     if SERIAL_ENCODING:
         try:
             _force_serial_encoding()
         except Exception:  # a plugin import must never raise
             logger.exception("Could not force serial encoding.")
+    else:
+        logger.warning(
+            "LEROBOT_INTERVENTION_SERIAL_ENCODING=0: videos are encoded in "
+            "parallel forked workers (camera stalls after a save are possible)."
+        )
     if not REPO_ID:
         return False
     try:

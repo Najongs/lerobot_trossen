@@ -135,7 +135,8 @@ LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run python -m 
 - 개입 데이터셋만 필요한 회차 = 체인 녹화 저장 끔 — 설정 `dataset:` 블록에 `save: false`
 	- 마지막 저장·인코딩 없이 마지막 단계 직후 종료(카메라 3대 순차 인코딩이면 약 4분 단축), 체인 데이터셋은 0 에피소드
 	- 프레임은 실행 중 계속 버퍼에 쌓임 — 베이스 단계가 그리퍼 목표를 녹화 버퍼의 마지막 명령에서 가져오기 때문. 끝에 카메라 PNG까지 삭제
-- 개입 저장을 fork 없이 순차 인코딩 — `LEROBOT_INTERVENTION_SERIAL_ENCODING=1`(카메라 끊김 진단용). 개입 하나 저장 약 6초 → 15~18초
+- 영상 저장은 기본이 fork 없는 순차 인코딩 — 모든 `lerobot-record`에 적용(개입 유무 무관). 병렬 저장 직후 카메라 끊김으로 run이 죽던 것을 막는 대신 개입 하나 저장 약 6초 → 15~18초
+	- 병렬로 되돌리기 — `LEROBOT_INTERVENTION_SERIAL_ENCODING=0`
 
 ## 정책 단계 동안 베이스 토크 끄기 (release_base_torque)
 
