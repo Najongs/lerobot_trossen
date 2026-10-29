@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sys
+import types
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -37,7 +39,15 @@ import pytest
 import yaml
 from lerobot.robots import Robot
 from lerobot.robots.config import RobotConfig
-from stage_runner import aggregate, cli, config, mock_policy, preflight, record_adapter
+from stage_runner import (
+    aggregate,
+    cli,
+    config,
+    executors,
+    mock_policy,
+    preflight,
+    record_adapter,
+)
 from stage_runner.config import StageConfig, StartPoseConfig, TerminatorConfig
 from stage_runner.mock_robot import MockRobot, MockRobotConfig
 from stage_runner.mock_teleop import MockTeleop, MockTeleopConfig
@@ -453,6 +463,96 @@ def test_a_reset_grip_expires_once_a_policy_stage_records_frames(
     assert replay["gripper_hold_source"] == "recorded"
     for key in GRIPPERS:
         assert replay["held_arm_positions"][key] == pytest.approx(opened, abs=1e-6)
+
+
+POLICY_THEN_REPLAY = RESET_THEN_REPLAY.replace(
+    """  - id: reset_mid
+    name: hand the tube over
+    executor: leader_reset
+    terminator: {type: timeout, timeout_s: 0.5}
+""",
+    "",
+)
+
+
+def test_an_intervened_stages_grip_is_held_through_the_next_base_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """policy (grippers at A, operator takes over and ends at B) -> replay holds B.
+
+    The take's frames go to the intervention dataset, so the episode buffer's
+    last row is the policy's A from before the space bar. Holding A re-opened
+    the grippers between stages on robot2 (2026-10-29 r02).
+    """
+    pose = _write_pose_dataset(
+        tmp_path / "pose",
+        {0: [[0.0] * 14 + [s, t] for s, t in _path(30, 0.001, 0.3)]},
+    )
+    chain = tmp_path / "chain.yaml"
+    text = POLICY_THEN_REPLAY.replace("POSE", str(pose))
+    assert "leader_reset" not in text, "the chain rewrite did not apply"
+    chain.write_text(text)
+
+    operator_grip = {
+        "left_left_carriage_joint.pos": 0.011,
+        "right_left_carriage_joint.pos": 0.012,
+    }
+    pending = [dict(operator_grip)]
+    # The patch's surface as executors looks it up: once after the stage it
+    # ran in, then nothing.
+    monkeypatch.setitem(
+        sys.modules,
+        executors.INTERVENTION_PATCH_MODULE,
+        types.SimpleNamespace(
+            take_last_gripper_goals=lambda: pending.pop() if pending else None
+        ),
+    )
+
+    result = _run(tmp_path, config_path=chain)
+    assert result["exit_code"] == cli.EXIT_OK, result["raised"]
+    (replay,) = _of(result, "stage_base_replay")
+    assert replay["outcome"] == "settled"
+    assert replay["gripper_hold_source"] == "reset"
+    for key in GRIPPERS:
+        assert replay["held_arm_positions"][key] == pytest.approx(operator_grip[key])
+
+    starts = {e["stage_id"]: e["frame_idx"] for e in _of(result, "stage_start")}
+    ends = {e["stage_id"]: e["frame_idx"] for e in _of(result, "stage_end")}
+    names = list(result["robot"].action_features)
+    import pyarrow.parquet as pq
+
+    (data,) = sorted((tmp_path / "dataset" / "data").rglob("*.parquet"))
+    actions = pq.read_table(data, columns=["action"]).column("action").to_pylist()
+    s1_last = dict(zip(names, actions[ends["s1"] - 1], strict=True))
+    assert all(
+        s1_last[key] != pytest.approx(operator_grip[key], abs=1e-3) for key in GRIPPERS
+    ), "the test needs s1's goal A to differ from the operator's B"
+    for row in actions[starts["s3"] : ends["s3"]]:
+        values = dict(zip(names, row, strict=True))
+        for key in GRIPPERS:
+            assert values[key] == pytest.approx(operator_grip[key], abs=1e-6)
+
+
+def test_a_policy_stage_without_an_intervention_hands_no_grip_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No take: the replay holds the policy's own last command, as before."""
+    pose = _write_pose_dataset(
+        tmp_path / "pose",
+        {0: [[0.0] * 14 + [s, t] for s, t in _path(30, 0.001, 0.3)]},
+    )
+    chain = tmp_path / "chain.yaml"
+    chain.write_text(POLICY_THEN_REPLAY.replace("POSE", str(pose)))
+    monkeypatch.setitem(
+        sys.modules,
+        executors.INTERVENTION_PATCH_MODULE,
+        types.SimpleNamespace(take_last_gripper_goals=lambda: None),
+    )
+
+    result = _run(tmp_path, config_path=chain)
+    assert result["exit_code"] == cli.EXIT_OK, result["raised"]
+    (replay,) = _of(result, "stage_base_replay")
+    assert replay["gripper_hold_source"] == "recorded"
 
 
 def test_the_right_arrow_ends_a_reset_and_the_chain_goes_on(tmp_path: Path) -> None:

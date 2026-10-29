@@ -138,6 +138,13 @@ _listener_started: bool = False
 _dataset: Any = None
 _saved_this_run: int = 0
 _finalized: bool = False
+# The gripper goals the leader last sent the follower in the latest
+# intervention, until stage_runner takes them (take_last_gripper_goals). The
+# intervention's frames go to its own dataset, so the eval episode buffer's
+# last row is still the policy's command from before the space bar; a base
+# stage after the hand-over that re-sent it would open the grippers on what
+# the operator just grasped (robot2 r02, 2026-10-29).
+_last_gripper_goals: dict[str, float] | None = None
 
 
 class InterventionError(RuntimeError):
@@ -288,6 +295,50 @@ def _restore_base_torque(robot: Any) -> str:
 
 def _is_gripper(key: str) -> bool:
     return "carriage" in key
+
+
+def last_sent_gripper_goals(teleop: Any) -> dict[str, float] | None:
+    """The gripper goals the leader last sent the follower, or None. Never raises.
+
+    The take's last recorded action when it has frames: record_loop records the
+    action it sends, so that row IS the last command. Without frames (Esc in a
+    reset, or a take thrown away and not redone) the leader's current reading,
+    which every reset tick copied to the follower.
+    """
+    try:
+        # The leader's keys are the follower's (see follower_targets).
+        keys = [key for key in teleop.action_features if _is_gripper(key)]
+        if not keys:
+            return None
+        if _dataset is not None and int(_dataset.episode_buffer["size"]) > 0:
+            names = list(_dataset.features["action"]["names"])
+            row = _dataset.episode_buffer["action"][-1]
+            values = dict(zip(names, (float(value) for value in row), strict=True))
+        else:
+            values = {key: float(value) for key, value in teleop.get_action().items()}
+        goals = {key: values[key] for key in keys}
+        if not all(math.isfinite(value) for value in goals.values()):
+            raise ValueError(f"no finite gripper goal: {goals}")
+        return goals
+    except Exception:
+        logger.warning(
+            "intervention: could not read the leader's last gripper goals; the next "
+            "base stage re-sends the policy's last gripper command instead",
+            exc_info=True,
+        )
+        return None
+
+
+def take_last_gripper_goals() -> dict[str, float] | None:
+    """The latest intervention's last gripper goals, once; None if there was none.
+
+    stage_runner calls this after every policy stage and hands the goals on as
+    StageResult.gripper_goals, the path a leader_reset stage already uses.
+    """
+    global _last_gripper_goals
+    with _lock:
+        goals, _last_gripper_goals = _last_gripper_goals, None
+    return goals
 
 
 def follower_targets(robot: Any, teleop: Any) -> dict[str, float]:
@@ -608,7 +659,7 @@ def _intervene(
     space_at: float | None = None,
     stopped_at: float | None = None,
 ) -> None:
-    global _dataset, _saved_this_run
+    global _dataset, _saved_this_run, _last_gripper_goals
     robot = kwargs["robot"]
     teleop = kwargs.get("teleop")
     events = kwargs["events"]
@@ -684,6 +735,10 @@ def _intervene(
                 print("Intervention discarded.")
                 continue
             break
+        # Before save_episode, which empties the buffer this reads.
+        goals = last_sent_gripper_goals(teleop)
+        with _lock:
+            _last_gripper_goals = goals
         frames = int(_dataset.episode_buffer["size"])
         if frames:
             index = _dataset.num_episodes
@@ -719,7 +774,7 @@ def _wrap_record_loop(original):
 
     @functools.wraps(original)
     def record_loop(*args, **kwargs):
-        global _policy_events, _requested, _space_at
+        global _policy_events, _requested, _space_at, _last_gripper_goals
         events = kwargs.get("events")
         eval_dataset = kwargs.get("dataset")
         if (
@@ -734,6 +789,8 @@ def _wrap_record_loop(original):
             _requested = False
             _space_at = None
             _policy_events = events
+            # An untaken value belongs to an earlier episode, never to this one.
+            _last_gripper_goals = None
         try:
             result = original(*args, **kwargs)
         finally:

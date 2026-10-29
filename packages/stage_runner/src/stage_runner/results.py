@@ -101,8 +101,10 @@ class StageResult:
     reason: str = ""
     # The gripper goals this stage last SENT, for a stage whose commands never
     # reach the episode buffer -- a leader_reset stage records nothing, so
-    # runner._recorded_gripper_goals has no row to read them back from. None for
-    # a policy stage, whose goals the runner reads from the buffer as before.
+    # runner._recorded_gripper_goals has no row to read them back from; a policy
+    # stage the operator took over with the space bar recorded the take into
+    # the intervention dataset instead. None for a policy stage that ran to its
+    # end, whose goals the runner reads from the buffer as before.
     # The runner holds them through a following start pose move, so an object
     # the operator handed the robot stays held.
     gripper_goals: dict[str, float] | None = None

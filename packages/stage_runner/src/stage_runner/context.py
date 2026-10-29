@@ -68,7 +68,9 @@ class StageContext:
     # base_replay or base_align right after a reset keeps that grip instead of
     # re-opening the grippers to an older command. run_trial writes it at every
     # boundary: set after a reset, cleared after any stage that recorded frames
-    # (the buffer is the newer source again). Mutable on purpose, like
+    # (the buffer is the newer source again). A policy stage the operator took
+    # over with the space bar hands its take's last grip over the same way, set
+    # here even though it recorded frames. Mutable on purpose, like
     # `events`: the dict is fixed, its contents follow the chain.
     reset_gripper_goals: dict[str, float] = field(default_factory=dict)
     # stage id -> completion.CompletionModel, for each `terminator.type:

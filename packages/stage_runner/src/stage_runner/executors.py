@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import sys
 import time
 from collections.abc import Callable
 
@@ -35,6 +36,36 @@ logger = logging.getLogger(__name__)
 # argument order (context, stage) is frozen -- every future executor is one dict
 # entry plus one function with this signature.
 StageExecutor = Callable[[StageContext, StageConfig], StageResult]
+
+# lerobot_robot_trossen's space bar hand-over, looked up by NAME so this package
+# imports nothing from it (as base_loop does for the base fault states). Absent
+# when the patch is not installed, and then no stage was handed over.
+INTERVENTION_PATCH_MODULE: str = "lerobot_robot_trossen.intervention_patch"
+
+
+def _intervention_gripper_goals(stage: StageConfig) -> dict[str, float] | None:
+    """The gripper goals the leader last sent in this stage's intervention, or None.
+
+    An intervention's frames go to the intervention dataset, not to this
+    chain's episode buffer, so runner._recorded_gripper_goals would read the
+    policy's command from before the space bar. Never raises: this runs between
+    record_loop and the boundary's base stop.
+    """
+    module = sys.modules.get(INTERVENTION_PATCH_MODULE)
+    take = getattr(module, "take_last_gripper_goals", None)
+    if take is None:
+        return None
+    try:
+        goals = take()
+    except Exception:
+        logger.exception(f"stage {stage.id!r}: could not read the intervention's grip")
+        return None
+    if goals is not None:
+        logger.info(
+            f"stage {stage.id!r}: the operator's intervention left the grippers at "
+            f"{goals}; the following stages hold that grip"
+        )
+    return goals
 
 
 def run_lerobot_policy_stage(context: StageContext, stage: StageConfig) -> StageResult:
@@ -151,6 +182,7 @@ def run_lerobot_policy_stage(context: StageContext, stage: StageConfig) -> Stage
         raise
     elapsed_s = time.perf_counter() - started
     frames = context.buffered_frame_count() - frames_before
+    gripper_goals = _intervention_gripper_goals(stage)
     restore_problem = (
         leader_reset.restore_base_torque(context.robot) if released else ""
     )
@@ -221,6 +253,7 @@ def run_lerobot_policy_stage(context: StageContext, stage: StageConfig) -> Stage
         elapsed_s=elapsed_s,
         frames=frames,
         reason=reason,
+        gripper_goals=gripper_goals,
     )
 
 

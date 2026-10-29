@@ -297,9 +297,10 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 context.reset_gripper_goals.clear()
             if uses_start_poses:
                 if result.gripper_goals is not None:
-                    # A leader_reset stage: its commands never reached the
-                    # episode buffer, so it hands its last gripper goal over
-                    # directly -- the grip the operator just set.
+                    # A leader_reset stage, or a policy stage the operator
+                    # finished with the leader arm: those commands never
+                    # reached the episode buffer, so the stage hands its last
+                    # gripper goal over directly -- the grip the operator set.
                     last_gripper_goals = dict(result.gripper_goals)
                 elif result.frames > 0:
                     # This stage's policy sent the latest gripper goal; a stage
