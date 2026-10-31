@@ -80,9 +80,9 @@ def test_fine_yaw_recovers_the_turn_with_its_sign(reference, yaw):
     assert m.inliers >= landmark_align.MIN_INLIERS
     assert m.heading_valid and m.heading_mode == landmark_align.HEADING_FINE
     assert m.heading_yaw_deg == m.yaw_deg
-    assert m.coarse_yaw_deg is None, (
-        "fine이 쓸 만하면 coarse는 계산하지 않는다(현장과 같게)"
-    )
+    assert (
+        m.coarse_yaw_deg is None
+    ), "fine이 쓸 만하면 coarse는 계산하지 않는다(현장과 같게)"
 
 
 def test_sign_convention_left_turn_is_positive_and_corrected_by_minus_yaw(reference):
@@ -116,9 +116,9 @@ def test_the_arms_are_masked_and_would_pull_the_yaw_to_zero_if_not(
     assert masked[0] == pytest.approx(6.0, abs=0.3)
     monkeypatch.setattr(landmark_align, "robot_mask", _no_mask)
     unmasked = landmark_align.yaw_between(sparse_ref, sparse_live, K, ZERO_DIST, UP)
-    assert abs(unmasked[0]) < 1.0, (
-        "마스크 없이도 맞으면 이 시험이 팔 함정을 재현하지 못한 것"
-    )
+    assert (
+        abs(unmasked[0]) < 1.0
+    ), "마스크 없이도 맞으면 이 시험이 팔 함정을 재현하지 못한 것"
 
 
 def test_a_fit_beyond_twenty_degrees_is_not_usable_and_falls_to_coarse(reference):
@@ -350,3 +350,105 @@ def test_parity_with_the_field_script_on_the_demo_frames():
         assert m.heading_mode == landmark_align.HEADING_FINE
         assert m.yaw_deg == pytest.approx(FIELD_YAW_DEG[episode], abs=0.2)
         assert m.move_m * 100 == pytest.approx(FIELD_DIST_CM[episode], abs=0.2)
+
+
+# --------------------------------------------------------------------------
+# Edge heading (AlignParams.edge_heading): a plain white shelf with one clean
+# rail, where SIFT finds nothing to fit.
+
+
+def _rail(slope_deg: float = 0.0, y_mid: float = 160.0) -> np.ndarray:
+    """A featureless light frame with one dark near-horizontal rail across it."""
+    image = np.full((480, 640, 3), 205, np.uint8)
+    dy = np.tan(np.radians(slope_deg)) * 300.0
+    cv2.line(
+        image,
+        (20, int(round(y_mid - dy))),
+        (620, int(round(y_mid + dy))),
+        (60, 60, 60),
+        4,
+    )
+    return image
+
+
+def test_the_edge_line_is_found_with_its_slope_and_height() -> None:
+    line = landmark_align.edge_line(_rail(3.0, 170.0), (110, 225), 180)
+    assert line is not None
+    assert abs(line.slope_deg - 3.0) < 0.3
+    assert abs(line.y_px - 170.0) < 4.0
+    assert landmark_align.edge_line(_rail(30.0), (110, 225), 180) is None, "가파른 선"
+    assert landmark_align.edge_line(_rail(0.0, 300.0), (110, 225), 180) is None, "띠 밖"
+
+
+def test_the_edge_heading_takes_over_when_the_fine_fit_has_nothing() -> None:
+    reference = _rail(0.0)
+    live = _rail(-0.455 * 9.0)  # 9 deg to the right, at the measured gain
+    off = landmark_align.measure(
+        reference, live, _params(coarse_heading=False), None, 0
+    )
+    assert off.heading_mode is None and off.edge_yaw_deg is None, "끄면 예전 그대로"
+    on = landmark_align.measure(
+        reference, live, _params(coarse_heading=False, edge_heading=True), None, 0
+    )
+    assert not on.heading_valid
+    assert on.heading_mode == landmark_align.HEADING_EDGE
+    assert abs(on.heading_yaw_deg - (-9.0)) < 0.8
+    assert on.edge_yaw_deg == on.heading_yaw_deg
+    assert abs(on.edge_ref_slope_deg) < 0.3
+
+
+def test_the_edge_heading_refuses_a_different_line() -> None:
+    reference = _rail(0.0, 160.0)
+    live = _rail(0.0, 160.0 + 100.0)  # the table's far edge, not the rail
+    params = _params(coarse_heading=False, edge_heading=True, edge_band_px=(110, 300))
+    m = landmark_align.measure(reference, live, params, None, 0)
+    assert m.heading_mode is None and m.edge_yaw_deg is None
+
+
+def test_a_usable_fine_estimate_still_wins_over_the_edge(reference) -> None:
+    params = _params(edge_heading=True)
+    m = landmark_align.measure(
+        reference, mock_scene.render_scene(view_yaw_deg=3.0), params, None, 0
+    )
+    assert m.heading_mode == landmark_align.HEADING_FINE
+    assert m.edge_yaw_deg is None, "정밀 추정이 되면 직선은 계산하지 않는다"
+
+
+def _strip(y_mid: float, slope_deg: float = 0.0) -> np.ndarray:
+    """A featureless frame with one 10 px dark strip (a rail with two edges)."""
+    image = np.full((480, 640, 3), 205, np.uint8)
+    dy = np.tan(np.radians(slope_deg)) * 300.0
+    for off in range(-5, 6):
+        cv2.line(
+            image,
+            (20, int(round(y_mid + off - dy))),
+            (620, int(round(y_mid + off + dy))),
+            (60, 60, 60),
+            1,
+        )
+    return image
+
+
+def test_the_edge_distance_reads_the_strip_and_its_sign() -> None:
+    params = _params(coarse_heading=False, edge_heading=True, edge_distance=True)
+    reference = _strip(160.0)
+    closer = landmark_align.measure(reference, _strip(185.4), params, None, 0)
+    assert closer.scale_source == landmark_align.SCALE_EDGE and closer.distance_valid
+    assert abs(closer.edge_dy_px - 25.4) < 1.5
+    # 25.4 px lower at 254 px/m = 10 cm too close: drive BACKWARD.
+    assert abs(closer.move_m - (-0.10)) < 0.006
+    farther = landmark_align.measure(reference, _strip(147.3), params, None, 0)
+    assert farther.move_m > 0, "선이 위로 가면(멀면) 앞으로"
+
+
+def test_an_edge_distance_beyond_ten_centimetres_is_still_given() -> None:
+    params = _params(coarse_heading=False, edge_distance=True)
+    m = landmark_align.measure(_strip(160.0), _strip(215.0), params, None, 0)
+    assert m.distance_valid and m.move_m < -landmark_align.MAX_ABS_MOVE_M
+
+
+def test_edge_distance_off_leaves_the_distance_unusable() -> None:
+    m = landmark_align.measure(
+        _strip(160.0), _strip(185.0), _params(coarse_heading=False), None, 0
+    )
+    assert not m.distance_valid and m.edge_dy_px is None

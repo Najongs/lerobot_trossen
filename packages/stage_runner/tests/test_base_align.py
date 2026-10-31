@@ -449,6 +449,15 @@ def test_an_unusable_heading_ends_the_stage_without_moving(
             id="heading-only",
         ),
         pytest.param(
+            # An EDGE heading is decided like a fine one: it turns when outside
+            # tolerance and, unlike a coarse one, counts once inside it.
+            [_measurement(5.0, mode="edge"), _measurement(0.5, mode="edge", move=None)],
+            6,
+            "heading_only",
+            ["turn", "heading_only"],
+            id="edge-heading-counts",
+        ),
+        pytest.param(
             # The field rule: a drive does not reset the turn baseline, so a
             # heading worse than before the LAST TURN is diverging even after it.
             [
@@ -688,9 +697,9 @@ def test_hold_frames_are_recorded_while_the_worker_measures(
     # are wait_capture too, so an off-by-one index would pass the first alone.
     for measurement in _align_event(tmp_path)["measurements"]:
         capture = measurement["capture_frame_idx"]
-        assert rows[capture]["state"] == "wait_capture", (
-            "the frame captured is recorded"
-        )
+        assert (
+            rows[capture]["state"] == "wait_capture"
+        ), "the frame captured is recorded"
         assert rows[capture + 1]["state"] == "measuring"
         assert capture + 1 == per_step[rows[capture + 1]["step"]][0]
 
@@ -1212,3 +1221,40 @@ def test_a_failed_align_measurement_goes_on_to_the_policy(tmp_path: Path) -> Non
     assert align_end["terminator"] == "converged"
     _assert_log_is_closed(result)
     assert isinstance(result["robot"].base, MockSlate)
+
+
+def test_an_edge_distance_drives_in_capped_steps_and_measures_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quick: None,
+) -> None:
+    """r51 at the beaker shelf read ~22 cm too close from the rail strip.
+
+    An edge distance past MAX_ABS_MOVE_M is not refused: the stage drives at
+    most 10 cm, measures again, and the measured distance (not the capped
+    step) is the divergence baseline, so 22 -> 12 -> 2 cm is progress.
+    """
+    import dataclasses
+
+    def edge(move: float) -> landmark_align.Measurement:
+        return dataclasses.replace(
+            _measurement(0.0, move=move), scale_source=landmark_align.SCALE_EDGE
+        )
+
+    _script(monkeypatch, [edge(-0.22), edge(-0.12), edge(-0.02), _measurement(0.0)])
+    context, stage = _direct(tmp_path)
+    result = _run(context, stage)
+    assert result.terminated_by == "converged", result.reason
+    event = _align_event(tmp_path)
+    assert event["outcome"] == "aligned", event["reason"]
+    assert [m["decision"] for m in event["measurements"]] == [
+        "drive",
+        "drive",
+        "drive",
+        "aligned",
+    ]
+    assert [move["commanded"] for move in event["moves"]] == pytest.approx(
+        [-0.10, -0.10, -0.02]
+    )
+    x, _, _ = context.robot.base.true_pose()
+    assert x == pytest.approx(-0.22, abs=0.01)

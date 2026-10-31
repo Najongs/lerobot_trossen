@@ -338,6 +338,28 @@ class BaseAlignConfig:
     # inliers, f1 +15.3 deg / 7 inliers) would have ended the stage. false = abort
     # whenever the fine estimate is unusable.
     coarse_heading: bool = True
+    # Edge heading, OFF by default: when the fine estimate is unusable, the
+    # slope of the longest near-horizontal line in edge_band_px (y from, y to,
+    # in a 480-high frame) against the same line in the reference gives the
+    # heading (landmark_align.edge_yaw), tried before the coarse estimate. For
+    # a plain landmark the SIFT fit cannot hold -- the white beaker shelf gave
+    # 2-7 inliers on 8 of 9 arrivals -- whose bottom rail is a clean line.
+    # Unlike the coarse estimate it can end the stage aligned.
+    edge_heading: bool = False
+    edge_band_px: list[int] = field(default_factory=lambda: [110, 225])
+    # Image slope (deg) per base heading (deg) of that line; 0.455 measured for
+    # the shelf rail at the beaker-shelf arrival (landmark_align constants).
+    edge_slope_per_deg: float = 0.455
+    edge_min_length_px: int = 180
+    # Refuse a live line this far (px) above or below the reference line.
+    edge_max_dy_px: int = 80
+    # Edge distance, OFF by default: when SIFT scale (and the width fallback)
+    # give no distance, the height of the same line's dark strip against the
+    # reference's gives it (landmark_align.edge_distance_move): px / edge_px_per_m
+    # metres, driven at most 0.10 m per step and measured again. 254 px/m
+    # measured for the shelf rail at the beaker-shelf arrival.
+    edge_distance: bool = False
+    edge_px_per_m: float = 254.0
 
 
 @dataclass
