@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 # stage (popping them would break the snapshot tests that compare against
 # draccus.dump with only start_pose and teleop filtered, and nothing reads
 # snapshots back).
+# And for DatasetConfig.record_reposition (2026-11-01): it defaults to false,
+# which records exactly the frames a YAML without it always recorded.
 LATEST_CONFIG_VERSION: int = 1
 
 TERMINATOR_TIMEOUT: str = "timeout"
@@ -396,6 +398,13 @@ class DatasetConfig:
     # width without one, which loosens a grip on a held beaker. For intervention
     # runs, whose intervention dataset is saved per take regardless.
     save: bool = True
+    # true: the arms' move to a stage's start_pose is recorded too -- one frame
+    # per 1/fps while it runs, task "start_pose_before_<stage id>", action = the
+    # goal in force (reposition_record.py) -- so the chain's video runs without
+    # the ~3 s cut before every posed stage. false (the default): nothing is
+    # recorded during the move, as before. Opt-in, so an older YAML records the
+    # same frames it always did.
+    record_reposition: bool = False
     num_image_writer_processes: int = 0
     num_image_writer_threads_per_camera: int = 4
 

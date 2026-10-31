@@ -62,6 +62,20 @@ uv run python -m stage_runner --config_path configs/chain_task45.yaml
 - `reached`가 아니면 그 단계 정책은 **돌지 않고** 시행이 중단된다(종료 코드 `1`) — `reason`에 어느 관절이 얼마나 어긋났는지 → [stage_reposition 이벤트](#stage_reposition-이벤트)
 - 자세가 잘못돼 있으면 connect 전에 종료 코드 `2` → [preflight 거부](#preflight-거부)
 
+### 4. 자세 이동도 녹화 — 선택
+
+기본은 자세 이동 동안(단계마다 약 3초) 녹화하지 않아 체인 영상이 단계마다 끊긴다. 이어서 녹화하려면 설정 `dataset:` 블록에 한 줄.
+
+```yaml
+dataset:
+  record_reposition: true
+```
+
+- 통과 기준 = `stage_reposition`에 `frames`(약 이동 시간 × fps)·`record_error: null`, 그 단계 `stage_start`의 `frame_idx`가 `stage_reposition`의 `frame_idx`와 같음
+- 학습에 쓸 땐 작업 이름 `start_pose_before_<단계 id>` 프레임 제외 — 행동이 정책 출력이 아님 → [자세 이동 녹화의 프레임](#자세-이동-녹화의-프레임)
+- 관측 읽기 실패 시 그 이동의 녹화만 중단, 이동·시행은 계속(`record_error`에 이유)
+- `save: false`(개입 취득 회차)에선 효과 없음
+
 ## 리더암 리셋 단계 (leader_reset)
 
 `stages:` 목록 **아무 자리에나** 넣는 단계 종류. 정책 없이 리더암으로 팔을 움직여 튜브·비커를 쥐여 주고 자세를 잡은 뒤 `→`로 끝낸다 — `lerobot-record`의 리셋 구간과 같다. 기록하지 않는다.
@@ -306,12 +320,22 @@ connect 전, 체크포인트를 내려받기 전에 종료 코드 `2`로 막는 
 | `gripper_commanded` | 항상 `false` — 이동 자체는 그리퍼에 명령하지 않는다 |
 | `gripper_goal_source` | 이동 중 그리퍼 목표의 출처 — `previous_command`(앞 단계 마지막 명령, 정상)·`measured`(마지막 명령을 못 읽어 측정 위치 — 쥔 힘이 약할 수 있음, 경고 로그)·`unchanged`(첫 단계, 또는 베이스 정지가 팔 명령 없는 대체 경로로 감) |
 | `gripper_goal` | 그 그리퍼 목표 값, `unchanged`면 `null` |
+| `frames`·`frame_idx_start`·`recorded_task`·`record_error` | `record_reposition: true`일 때만 — 이동 중 녹화한 프레임 수·첫 프레임 번호·작업 이름·녹화가 멈춘 이유(`null`이면 끝까지 녹화) |
 
 ### 집계에서의 이동 시간
 
 - `stage_end_to_stage_start_residual_s`·`boundary_cost_s`는 **이동 시간을 빼고** 잰다 — 이동이 그 창 안에서 일어나므로 `reposition_s`를 빼서, 자세가 없던 회차와 같은 뜻을 유지한다.
 - 뺀 결과가 0보다 1 ms 이내로 작으면 0으로 본다 — `wall_clock_iso`가 ms 단위로 잘려 생기는 오차라 시계 경고를 내지 않는다(그보다 작으면 경고)
 - 이동 시간은 따로 `stage_reposition_s`(도착한 이동만, 직전 궤적 대기 포함), 미도달은 `stage_reposition_failed`로 집계한다. 경계 전체 정지 시간이 필요하면 `boundary_cost_s + stage_reposition_s`.
+
+### 자세 이동 녹화의 프레임
+
+`dataset.record_reposition: true`일 때. 구현 = `src/stage_runner/reposition_record.py`.
+
+- 이동 자체는 녹화하지 않을 때와 같은 궤적이다. 기본은 오른팔 호출을 차단으로 걸어 그 호출이 기다림이 되는데, 녹화할 땐 두 팔 모두 비차단으로 같은 이동 시간을 걸고 그 시간을 녹화 루프가 기다린다. 도착 판정은 그 뒤 그대로 한다
+- 녹화 루프는 직전 궤적 대기·이동·도착 확인 대기 내내 1/fps마다 `get_observation` 한 번과 `add_frame` 한 번만 한다 — `send_action`은 보내지 않는다(드라이버 궤적을 덮어쓰므로)
+- 프레임의 행동 = 그때 걸려 있던 목표: 팔은 이동 명령 전엔 경계 정지값(첫 단계면 측정 위치), 명령 뒤엔 시작 자세 · 그리퍼는 경계 정지값(앞 단계 마지막 명령) · 베이스 0
+- 프레임은 앞 단계 `stage_end`와 이 단계 `stage_start` 사이에만 들어간다 — 단계마다 `frame_idx` 차이 = `frames`라는 집계의 대조는 그대로 맞는다
 
 ### 설정 판 번호
 
