@@ -231,10 +231,10 @@ stages:
 ### 3. 실행
 
 ```shell
-env LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4 HF_HUB_OFFLINE=1 uv run python -m stage_runner --config_path configs/chain_stage12_align.yaml
+env LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=8 HF_HUB_OFFLINE=1 uv run python -m stage_runner --config_path configs/chain_stage12_align.yaml
 ```
 
-- `env …` 스위치 셋 = 10/24 pi0 단계 2 eval 조건(정책 단계에만 걸린다) — ACT 체인이면 빼도 된다 → [Chunk Seam Smoothing](../../README.md#chunk-seam-smoothing)
+- `env …` 스위치 셋 = 10/24 pi0 단계 2 eval 조건, 섞기만 11/1부터 8틱(정책 단계에만 걸린다) — ACT 체인이면 빼도 된다 → [Chunk Seam Smoothing](../../README.md#chunk-seam-smoothing)
 - 통과 기준 = `events.jsonl`에서
 	- 재생 단계 `stage_base_replay` 한 줄, `outcome: "settled"`
 	- 정렬 단계 `stage_base_align` 한 줄, `outcome: "aligned"`(또는 `"heading_only"` — 헤딩만 맞고 거리를 못 읽음, 체인은 계속)

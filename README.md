@@ -329,7 +329,7 @@ LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run lerobot-re
 ```
 
 - `<개입_데이터셋>` = **단계마다 따로**, eval repo와 다른 이름. 있으면 이어 쓰고 없으면 새로 만듦
-- pi0면 `LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4`도 같은 줄 앞에 → [Chunk Seam Smoothing](#chunk-seam-smoothing)
+- pi0면 `LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=8`도 같은 줄 앞에 → [Chunk Seam Smoothing](#chunk-seam-smoothing)
 - 시작 로그에 `LEROBOT_INTERVENTION_REPO_ID=… space bar during a policy episode …` 한 줄이면 켜진 것
 
 | 키 | 언제 | 동작 |
@@ -1011,13 +1011,13 @@ where a prefetched chunk takes over. Use them together with the prefetch:
 | `LEROBOT_CHUNK_SEAM_BLEND_TICKS=<m>` | At every swap, adds to the arm joints of the new chunk an offset that starts at the gap to the last sent command (position and per-tick velocity) and fades out along a quintic over at least `m` ticks — longer when the gap is large, up to 20 ticks (or `m` if larger), aiming to move no joint more than 0.1 rad per tick; a gap too large for that window exceeds it. Grippers and base are untouched. |
 
 ```bash
-LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4 \
+LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=8 \
 LEROBOT_CHUNK_EXECUTION_LOG=~/eval_logs/pi0_rtc_blend.csv \
 uv run lerobot-record ... --dataset.fps=21 --dataset.repo_id=<user>/eval_<task>_rtc_blend \
   2>&1 | tee ~/eval_logs/pi0_rtc_blend.log
 ```
 
-- Pass criterion: the banner shows `RTC guidance on the first 12 steps` and `seam blend >= 4 ticks
+- Pass criterion: the banner shows `RTC guidance on the first 12 steps` and `seam blend >= 8 ticks
   on 12 arm joints` (`grep "Base latency switches" <log>`).
 - Compare with a run that has only `LEROBOT_CHUNK_PREFETCH_TICKS=12` and the execution log: the
   columns below are logged either way.
