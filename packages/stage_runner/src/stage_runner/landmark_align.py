@@ -127,6 +127,14 @@ BLOB_MAX_AREA: int = 40000
 BLOB_MIN_Y: int = 100
 BLOB_MAX_BOTTOM: int = 400
 BLOB_MIN_W: int = 40
+# coarse_yaw_from_rack: a live blob wider or taller than this times the
+# reference rack box is not the rack. Robot PC 1 2026-11-02 (issue 110): the
+# floor shadow under the table, larger than the rack, was taken for it and the
+# base turned 27 deg the wrong way. Over the 389 saved rack-align frames the
+# rack box was 0.86-1.18 x the reference width and 0.84-1.24 x its height; the
+# 11 wrong blobs were >= 1.9 x wide. No lower bound: a far or blurred rack
+# looks smaller and the coarse estimate should still use it.
+BLOB_MAX_SIZE_RATIO: float = 1.5
 
 # The 10/24 constants of heading_align.py. FOR LOGGING ONLY: the stage computes
 # with the intrinsics read off the device at stage start (or given in YAML) and
@@ -407,10 +415,15 @@ def heading_valid(result: tuple[float, int, int] | None) -> bool:
     return inliers >= MIN_INLIERS and abs(yaw) <= MAX_ABS_YAW_DEG
 
 
-def dark_blob_box(image: np.ndarray) -> tuple[int, int, int, int] | None:
+def dark_blob_box(
+    image: np.ndarray, like: tuple[int, int, int, int] | None = None
+) -> tuple[int, int, int, int] | None:
     """Largest near-black blob not touching the top edge (the arms do) - the stage-2 tube rack.
 
-    heading_align.py:139-151, verbatim. (x, y, w, h) or None.
+    heading_align.py:139-151, verbatim. (x, y, w, h) or None. With ``like`` (the
+    reference rack box) a blob wider or taller than BLOB_MAX_SIZE_RATIO times
+    it does not count, so a larger dark patch elsewhere is not taken for the
+    rack.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     dark = cv2.morphologyEx(
@@ -431,6 +444,10 @@ def dark_blob_box(image: np.ndarray) -> tuple[int, int, int, int] | None:
             or w < BLOB_MIN_W
         ):
             continue
+        if like is not None and (
+            w > like[2] * BLOB_MAX_SIZE_RATIO or h > like[3] * BLOB_MAX_SIZE_RATIO
+        ):
+            continue
         if best is None or area > best[4]:
             best = (int(x), int(y), int(w), int(h), int(area))
     return best[:4] if best else None
@@ -445,9 +462,11 @@ def coarse_yaw_from_rack(
     argument. For when SIFT finds too few matches far from the reference. A
     sideways offset of the base is folded in, and the camera pitch is ignored,
     so it only gets the base close enough for the fine estimate (10/24: it
-    agreed with SIFT within 2 deg on 10 frames that were 7-27 deg off).
+    agreed with SIFT within 2 deg on 10 frames that were 7-27 deg off). The
+    live blob may not be much larger than the reference rack (``like``).
     """
-    box_ref, box_live = dark_blob_box(reference), dark_blob_box(live)
+    box_ref = dark_blob_box(reference)
+    box_live = None if box_ref is None else dark_blob_box(live, like=box_ref)
     if box_ref is None or box_live is None:
         return None
 

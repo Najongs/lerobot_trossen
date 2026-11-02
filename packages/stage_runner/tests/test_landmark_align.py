@@ -143,6 +143,31 @@ def test_too_few_inliers_falls_to_the_rack_blob(reference):
     assert m.heading_yaw_deg == pytest.approx(6.0, abs=2.0)
 
 
+def test_a_larger_dark_patch_is_not_taken_for_the_rack(reference):
+    # Robot PC 1 2026-11-02 (issue 110): the floor shadow under the table, wider
+    # than the rack, was the largest dark blob; the coarse heading followed it
+    # to the right side and the base turned 27 deg the wrong way.
+    live = cv2.GaussianBlur(mock_scene.render_scene(view_yaw_deg=6.0), (0, 0), 14)
+    shadow = (420, 290, 190, 95)
+    x, y, w, h = shadow
+    live[y : y + h, x : x + w] = 20
+    assert landmark_align.dark_blob_box(live) == shadow, (
+        "크기 비교 없이 그림자가 뽑히지 않으면 이 시험이 함정을 재현하지 못한 것"
+    )
+    rack = landmark_align.dark_blob_box(live, like=ROI)
+    assert rack is not None and rack != shadow
+    m = landmark_align.measure(reference, live, _params(), None, 0)
+    assert m.heading_mode == landmark_align.HEADING_COARSE
+    assert m.heading_yaw_deg == pytest.approx(6.0, abs=2.0)
+
+
+def test_no_blob_of_the_rack_size_gives_no_coarse_heading(reference):
+    live = mock_scene.render_scene(view_yaw_deg=6.0)
+    live[100:400] = 200
+    live[290:385, 420:610] = 20
+    assert landmark_align.coarse_yaw_from_rack(reference, live, K) is None
+
+
 def test_coarse_off_leaves_an_unusable_fine_estimate_unusable(reference):
     live = cv2.GaussianBlur(mock_scene.render_scene(view_yaw_deg=6.0), (0, 0), 14)
     m = landmark_align.measure(reference, live, _params(coarse_heading=False), None, 0)
