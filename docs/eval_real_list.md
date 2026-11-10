@@ -3,6 +3,32 @@
 > **사용자(10/10)**: 「오프라인 평가를 너무 신뢰하지 말고 Eval 실제로 다 돌려보게 리스트에 표로 정리해둬」. 오프라인 열은 **순서를 정하는 참고**일 뿐이고 판정은 이 표의 실기 결과다. 회차 상세·명령 정본은 [`eval_queue_1008.md`](eval_queue_1008.md)(O·A·R·S·V·N·C·E 번호)와 [`model_selection_1009.md`](model_selection_1009.md) §3, 누적 성공률은 [`eval_scoreboard.md`](eval_scoreboard.md). 학습 쪽 종합 표는 sim `docs/loop_board.md`.
 > 서버: 1호기 = DGX1 · 2호기 = sandia · 실기 = Trossen PC1(사람이 실행, Claude 는 명령·기록).
 
+## ▶ 11/11~ — 1단계 기준선: 흔든 자리 10회 (추가 녹화 **전에**, DGX1 → Trossen PC1, 2026-11-10 KST)
+> **소유자(11-10)**: 목표 「가」 = 1단계 이동을 흔든 시작에서 70%. 성공은 **정책 단독**과 **도착 보정기 포함**을 따로 센다. 기준선은 추가 녹화 전에 같은 장면에서 잰다.
+> 흔든 자리 실기는 지금까지 0회이고, 10-30 의 6/20 은 조건을 몰라 기준으로 못 쓴다. 근거·배경: [`najy_synthesis_1110.md`](najy_synthesis_1110.md) 11·12절.
+
+| 항목 | 값 |
+|---|---|
+| 모델 | #76 `kiroaiseoul/NAJY_act_task01_c100_gist30_soloall_16D_60k_s1000` (청크 100 · 16D · 원핫 없음) |
+| exec | **100** (10-20 비교에서 도착이 가장 정확, 10-29 보정기 회차와 같음) |
+| 실행 스위치 | 전부 끔 — 회전 예산·블렌딩·다듬기, **도착 보정기 끔**. 로그에 `zero-pad only` 가 있고 `[base_budget] 켜짐`·블렌딩/다듬기 줄이 없어야 한다 |
+| 기준 자리 | 재생 ep30 자리 + 바닥 표시. **세션 시작에 재생 1회**로 그날의 도착값(멈춘 곳 실측 θ·x)을 잰다 — 성공 판정의 기준 |
+| 흔든 자리 10곳 | 기준 자리에서 ① 그대로 ② +15° ③ −15° ④ 왼쪽 15 cm ⑤ 오른쪽 15 cm ⑥ 앞 15 cm ⑦ 뒤 15 cm ⑧ 왼쪽 15 cm·+15° ⑨ 오른쪽 15 cm·−15° ⑩ 뒤 15 cm·+15° (각도는 로봇 머리 방향, 왼쪽이 +) |
+| 끊는 시점 | 멈춘 뒤 3 s 또는 **20 s 에 ESC**. 충돌·이탈이면 바로 ESC 하고 시각을 적는다. e-stop 대기 |
+| 판정 | ✓ = 재생 도착값 대비 **5 cm·±5° 안에서 정지**(사람이 보고, `basevel.csv` 실측으로 확인) |
+
+```bash
+# 세션 시작: 예행 1회(로봇 무접촉) → 재생 1회(10/16 절 재생 명령 그대로, ep30)
+env -u BASE_BUDGET_DEG -u LEROBOT_BASE_THETA_BUDGET_DEG -u LEROBOT_CHUNK_SEAM_BLEND_TICKS -u LEROBOT_CHUNK_SMOOTH_TICKS \
+  DRY_RUN=1 scripts/eval_najy.sh kiroaiseoul/NAJY_act_task01_c100_gist30_soloall_16D_60k_s1000 1 100 1
+# 흔든 자리마다 1회 (①~⑩, 회차 이름 꼬리로 자리 번호를 남긴다)
+env -u BASE_BUDGET_DEG -u LEROBOT_BASE_THETA_BUDGET_DEG -u LEROBOT_CHUNK_SEAM_BLEND_TICKS -u LEROBOT_CHUNK_SMOOTH_TICKS \
+  RUN_SUFFIX=shake<번호> scripts/eval_najy.sh kiroaiseoul/NAJY_act_task01_c100_gist30_soloall_16D_60k_s1000 1 100 1
+```
+- **기록(회차마다 한 줄)**: 자리 번호 · 사람 판정 · 멈춘 곳 실측 θ·x(재생 대비 Δθ·Δx) · 도착 뒤 추가 회전량 · 루프 Hz · 로그 확인 줄 통과 여부. 결과는 `eval_najy_results_<MMDD>.md`, 성적표 B 표에 「#76 e100 정책 단독」 열.
+- **보정기 포함 집계**(선택, 시간이 남으면): 같은 10곳을 로봇 PC 의 도착 보정기를 켜고 한 번 더 — 성적표에 「#76 e100 + 보정기」 열을 따로. 코드는 로봇 PC 쪽에 둔다(소유자 11-10).
+- 그다음이 아래 「t01 추가 녹화」 다.
+
 ## ▶ 10/21~ — t01 추가 녹화 (ADD, 14D)
 > **사용자(10/20)**: 「리커버리 및 천천히 동작해서 찍는 데이터셋 찍어야할듯함 … 학습만으로는 해결방법이 잘 안보임」. 녹화안 · 규칙 · 에피소드 기록 형식은 [`recording_t01_add_1021.md`](recording_t01_add_1021.md). 묶음은 흔든 출발 30 · 회전 중간 출발 9 · 과회전 리커버리 12 · 천천히 10~15 이다. 녹화가 끝나면 DGX 가 「원본 + ADD」 로 #76 레시피를 학습해 이 표에 올린다.
 
