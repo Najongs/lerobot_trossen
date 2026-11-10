@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+@STATUS.md
+
 > **세션 시작 확인** — 이 레포는 Trossen PC1 공용 계정(`trossen-ai`)에 있다. Claude 는
 > `source ~/NAJY/.tools/env.sh && claude` 로 연다. `echo $CLAUDE_CONFIG_DIR` 가
 > `/home/trossen-ai/NAJY/.claude-najy` 가 아니면 공용 `~/.claude` 로 뜬 것이다 —
