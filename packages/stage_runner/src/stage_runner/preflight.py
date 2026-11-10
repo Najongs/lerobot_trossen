@@ -632,6 +632,31 @@ def _base_stage_problems(where: str, stage: StageConfig) -> list[str]:
             problems.append(f"{here}: `align.{name}: {value}` must be positive.")
     if not (_is_int(align.max_moves) and align.max_moves >= 1):
         problems.append(f"{here}: `align.max_moves: {align.max_moves}` must be >= 1.")
+    if align.edge_distance and not _is_positive(align.edge_px_per_m):
+        problems.append(
+            f"{here}: `align.edge_px_per_m: {align.edge_px_per_m}` must be positive "
+            "(254 measured at the beaker shelf)."
+        )
+    if align.edge_heading or align.edge_distance:
+        band = align.edge_band_px
+        if not (
+            len(band) == 2
+            and all(_is_int(value) for value in band)
+            and 0 <= band[0] < band[1]
+        ):
+            problems.append(
+                f"{here}: `align.edge_band_px: {list(band)}` must be [y from, y to] "
+                "integers with 0 <= from < to (in a 480-high frame)."
+            )
+        if align.edge_heading and not _is_positive(align.edge_slope_per_deg):
+            problems.append(
+                f"{here}: `align.edge_slope_per_deg: {align.edge_slope_per_deg}` "
+                "must be positive (0.455 measured at the beaker shelf)."
+            )
+        for name in ("edge_min_length_px", "edge_max_dy_px"):
+            value = getattr(align, name)
+            if not (_is_int(value) and value > 0):
+                problems.append(f"{here}: `align.{name}: {value}` must be > 0.")
     up = align.camera_up
     if not (len(up) == 3 and all(math.isfinite(value) for value in up)) or not (
         0.9 <= math.hypot(*up) <= 1.1

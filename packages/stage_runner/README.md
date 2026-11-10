@@ -62,6 +62,20 @@ uv run python -m stage_runner --config_path configs/chain_task45.yaml
 - `reached`가 아니면 그 단계 정책은 **돌지 않고** 시행이 중단된다(종료 코드 `1`) — `reason`에 어느 관절이 얼마나 어긋났는지 → [stage_reposition 이벤트](#stage_reposition-이벤트)
 - 자세가 잘못돼 있으면 connect 전에 종료 코드 `2` → [preflight 거부](#preflight-거부)
 
+### 4. 자세 이동도 녹화 — 선택
+
+기본은 자세 이동 동안(단계마다 약 3초) 녹화하지 않아 체인 영상이 단계마다 끊긴다. 이어서 녹화하려면 설정 `dataset:` 블록에 한 줄.
+
+```yaml
+dataset:
+  record_reposition: true
+```
+
+- 통과 기준 = `stage_reposition`에 `frames`(약 이동 시간 × fps)·`record_error: null`, 그 단계 `stage_start`의 `frame_idx`가 `stage_reposition`의 `frame_idx`와 같음
+- 학습에 쓸 땐 작업 이름 `start_pose_before_<단계 id>` 프레임 제외 — 행동이 정책 출력이 아님 → [자세 이동 녹화의 프레임](#자세-이동-녹화의-프레임)
+- 관측 읽기 실패 시 그 이동의 녹화만 중단, 이동·시행은 계속(`record_error`에 이유)
+- `save: false`(개입 취득 회차)에선 효과 없음
+
 ## 리더암 리셋 단계 (leader_reset)
 
 `stages:` 목록 **아무 자리에나** 넣는 단계 종류. 정책 없이 리더암으로 팔을 움직여 튜브·비커를 쥐여 주고 자세를 잡은 뒤 `→`로 끝낸다 — `lerobot-record`의 리셋 구간과 같다. 기록하지 않는다.
@@ -135,7 +149,8 @@ LEROBOT_INTERVENTION_REPO_ID=kiroaiseoul/<개입_데이터셋> uv run python -m 
 - 개입 데이터셋만 필요한 회차 = 체인 녹화 저장 끔 — 설정 `dataset:` 블록에 `save: false`
 	- 마지막 저장·인코딩 없이 마지막 단계 직후 종료(카메라 3대 순차 인코딩이면 약 4분 단축), 체인 데이터셋은 0 에피소드
 	- 프레임은 실행 중 계속 버퍼에 쌓임 — 베이스 단계가 그리퍼 목표를 녹화 버퍼의 마지막 명령에서 가져오기 때문. 끝에 카메라 PNG까지 삭제
-- 개입 저장을 fork 없이 순차 인코딩 — `LEROBOT_INTERVENTION_SERIAL_ENCODING=1`(카메라 끊김 진단용). 개입 하나 저장 약 6초 → 15~18초
+- 영상 저장은 기본이 fork 없는 순차 인코딩 — 모든 `lerobot-record`에 적용(개입 유무 무관). 병렬 저장 직후 카메라 끊김으로 run이 죽던 것을 막는 대신 개입 하나 저장 약 6초 → 15~18초
+	- 병렬로 되돌리기 — `LEROBOT_INTERVENTION_SERIAL_ENCODING=0`
 
 ## 정책 단계 동안 베이스 토크 끄기 (release_base_torque)
 
@@ -216,10 +231,10 @@ stages:
 ### 3. 실행
 
 ```shell
-env LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4 HF_HUB_OFFLINE=1 uv run python -m stage_runner --config_path configs/chain_stage12_align.yaml
+env LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=8 HF_HUB_OFFLINE=1 uv run python -m stage_runner --config_path configs/chain_stage12_align.yaml
 ```
 
-- `env …` 스위치 셋 = 10/24 pi0 단계 2 eval 조건(정책 단계에만 걸린다) — ACT 체인이면 빼도 된다 → [Chunk Seam Smoothing](../../README.md#chunk-seam-smoothing)
+- `env …` 스위치 셋 = 10/24 pi0 단계 2 eval 조건, 섞기만 11/1부터 8틱(정책 단계에만 걸린다) — ACT 체인이면 빼도 된다 → [Chunk Seam Smoothing](../../README.md#chunk-seam-smoothing)
 - 통과 기준 = `events.jsonl`에서
 	- 재생 단계 `stage_base_replay` 한 줄, `outcome: "settled"`
 	- 정렬 단계 `stage_base_align` 한 줄, `outcome: "aligned"`(또는 `"heading_only"` — 헤딩만 맞고 거리를 못 읽음, 체인은 계속)
@@ -305,12 +320,22 @@ connect 전, 체크포인트를 내려받기 전에 종료 코드 `2`로 막는 
 | `gripper_commanded` | 항상 `false` — 이동 자체는 그리퍼에 명령하지 않는다 |
 | `gripper_goal_source` | 이동 중 그리퍼 목표의 출처 — `previous_command`(앞 단계 마지막 명령, 정상)·`measured`(마지막 명령을 못 읽어 측정 위치 — 쥔 힘이 약할 수 있음, 경고 로그)·`unchanged`(첫 단계, 또는 베이스 정지가 팔 명령 없는 대체 경로로 감) |
 | `gripper_goal` | 그 그리퍼 목표 값, `unchanged`면 `null` |
+| `frames`·`frame_idx_start`·`recorded_task`·`record_error` | `record_reposition: true`일 때만 — 이동 중 녹화한 프레임 수·첫 프레임 번호·작업 이름·녹화가 멈춘 이유(`null`이면 끝까지 녹화) |
 
 ### 집계에서의 이동 시간
 
 - `stage_end_to_stage_start_residual_s`·`boundary_cost_s`는 **이동 시간을 빼고** 잰다 — 이동이 그 창 안에서 일어나므로 `reposition_s`를 빼서, 자세가 없던 회차와 같은 뜻을 유지한다.
 - 뺀 결과가 0보다 1 ms 이내로 작으면 0으로 본다 — `wall_clock_iso`가 ms 단위로 잘려 생기는 오차라 시계 경고를 내지 않는다(그보다 작으면 경고)
 - 이동 시간은 따로 `stage_reposition_s`(도착한 이동만, 직전 궤적 대기 포함), 미도달은 `stage_reposition_failed`로 집계한다. 경계 전체 정지 시간이 필요하면 `boundary_cost_s + stage_reposition_s`.
+
+### 자세 이동 녹화의 프레임
+
+`dataset.record_reposition: true`일 때. 구현 = `src/stage_runner/reposition_record.py`.
+
+- 이동 자체는 녹화하지 않을 때와 같은 궤적이다. 기본은 오른팔 호출을 차단으로 걸어 그 호출이 기다림이 되는데, 녹화할 땐 두 팔 모두 비차단으로 같은 이동 시간을 걸고 그 시간을 녹화 루프가 기다린다. 도착 판정은 그 뒤 그대로 한다
+- 녹화 루프는 직전 궤적 대기·이동·도착 확인 대기 내내 1/fps마다 `get_observation` 한 번과 `add_frame` 한 번만 한다 — `send_action`은 보내지 않는다(드라이버 궤적을 덮어쓰므로)
+- 프레임의 행동 = 그때 걸려 있던 목표: 팔은 이동 명령 전엔 경계 정지값(첫 단계면 측정 위치), 명령 뒤엔 시작 자세 · 그리퍼는 경계 정지값(앞 단계 마지막 명령) · 베이스 0
+- 프레임은 앞 단계 `stage_end`와 이 단계 `stage_start` 사이에만 들어간다 — 단계마다 `frame_idx` 차이 = `frames`라는 집계의 대조는 그대로 맞는다
 
 ### 설정 판 번호
 
@@ -404,6 +429,10 @@ mock 드라이버는 즉시·정확하게 도착하므로 아래는 첫 실기 �
 | `yaw_tol_deg`·`dist_tol_cm` | `2.0`·`1.0` | 정렬 판정 허용 오차 |
 | `max_moves` | `6` | 보정 이동 최대 횟수(측정은 최대 `max_moves + 1`번) |
 | `coarse_heading` | `true` | 정밀 추정이 안 될 때 고정물 덩어리 위치로 대략 돌린 뒤 다시 잼 → [정렬 단계가 하는 일](#정렬-단계가-하는-일) |
+| `edge_heading` | `false` | 정밀 추정이 안 될 때 화면 띠 안의 수평에 가까운 가장 긴 직선(선반 아랫단) 기울기로 헤딩 — 대략 헤딩보다 먼저, 오차 안이면 정렬로 끝냄 → [정렬 단계가 하는 일](#정렬-단계가-하는-일) |
+| `edge_band_px` · `edge_slope_per_deg` | `[110, 225]` · `0.455` | 직선을 찾는 화면 높이 범위(480 높이 기준) · 헤딩 1°당 화면 기울기(°), 비커 선반 도착에서 잰 값 |
+| `edge_min_length_px` · `edge_max_dy_px` | `180` · `80` | 직선 최소 길이 · 기준 화면 직선과 높이 차 상한(넘으면 다른 선으로 보고 버림) |
+| `edge_distance` · `edge_px_per_m` | `false` · `254` | SIFT 거리를 못 읽을 때 같은 직선의 짙은 띠 높이 차 ÷ `edge_px_per_m`으로 거리, 한 번에 최대 10 cm씩 직진 후 다시 잼 → [정렬 단계가 하는 일](#정렬-단계가-하는-일) |
 | `camera_up` | 10/24 추정값 | 카메라 좌표의 로봇 세로축(제자리 회전으로 산출) |
 | `camera_matrix`·`dist_coeffs` | `null` | 렌즈값. `null` = RealSense 장치에서 읽음. RealSense가 아닌 카메라면 둘 다 필수 |
 | `turn_kp`·`min_turn_rate_rad_s` | `2.0`·`0.0` | 작은 회전이 덜 도는 것을 보완하는 손잡이 — 기본값이 10/24 동작 |
@@ -428,7 +457,15 @@ mock 드라이버는 즉시·정확하게 도착하므로 아래는 첫 실기 �
 2. 헤딩 먼저 — `|헤딩| > yaw_tol_deg`면 `-헤딩`만큼 회전(0.6 rad/s 램프 + 1초 유지).
 3. 헤딩이 맞으면 거리 — 고정물 상자 크기 비율로 `|거리| > dist_tol_cm`면 직진(0.1 m/s 램프 + 1초 유지, 헤딩 유지).
 4. 둘 다 맞으면 `aligned`. 헤딩은 맞는데 거리를 못 읽으면 `heading_only`(10/24 `RESULT=HEADING_ONLY`와 같음, 체인 계속).
-5. **대략 헤딩**(`coarse_heading: true`) — 정밀 추정이 안 되고(맞는 점 15개 미만 또는 20° 초과) 고정물 덩어리가 보이면 그 위치로 대략 회전하고 다시 잰다. 대략 추정은 오차 안이어도 정렬로 끝내지 않는다. 대략 회전도 `max_moves`에 들어가고, 3번째 대략 회전이 필요하면 `estimate_unusable`. 랙 덩어리가 안 보이는 곳(비커 쪽·냉장고 앞·선반)에선 정밀 추정이 맞는 점 8개 이상·20° 이내면 그 값을 대략 헤딩으로 쓴다. 정밀·대략 둘 다 안 되면 그 자리에서 `estimate_unusable`. 측정마다 `heading_mode`(`fine`·`coarse`)가 기록된다.
+5. **대략 헤딩**(`coarse_heading: true`) — 정밀 추정이 안 되고(맞는 점 15개 미만 또는 20° 초과) 고정물 덩어리가 보이면 그 위치로 대략 회전하고 다시 잰다. 대략 추정은 오차 안이어도 정렬로 끝내지 않는다. 대략 회전도 `max_moves`에 들어가고, 3번째 대략 회전이 필요하면 `estimate_unusable`. 랙 덩어리가 안 보이는 곳(비커 쪽·냉장고 앞·선반)에선 정밀 추정이 맞는 점 8개 이상·20° 이내면 그 값을 대략 헤딩으로 쓴다. 정밀·대략 둘 다 안 되면 그 자리에서 `estimate_unusable`. 측정마다 `heading_mode`(`fine`·`edge`·`coarse`)가 기록된다.
+	- **직선 헤딩**(`edge_heading: true`) — 정밀 추정이 안 되면 대략 헤딩보다 먼저, 기준 화면과 지금 화면에서 `edge_band_px` 띠 안의 가장 긴 수평 직선(기울기 12° 이내, 길이 `edge_min_length_px` 이상)을 찾아 `(지금 기울기 − 기준 기울기) ÷ edge_slope_per_deg`를 헤딩으로 쓴다. 정밀 추정처럼 판정한다(오차 안이면 정렬로 끝냄). 지금 직선이 기준 직선보다 `edge_max_dy_px` 넘게 위아래면 다른 선으로 보고 버린다.
+	- 무늬가 없는 고정물(흰 비커 선반 — 9회 중 8회 맞는 점 2~7개)용. 비커 선반 도착에서 잰 값 — 기울기 = 0.455 × 헤딩 − 1.38°, 잔차 0.15°(replay `1025c` 프레임 2050~2315, 위치 라벨 대조), chain r03 도착에서 정밀 추정 −9.26°·−0.76°일 때 직선 −9.3°·−0.9°
+	- 단계 시작 로그에 기준 화면 직선(기울기·높이)이 찍힌다 — 「NOT FOUND」면 이 단계에선 직선 헤딩이 동작하지 않는다
+	- 측정 이벤트에 `edge_yaw_deg`·`edge_slope_deg`·`edge_ref_slope_deg`·`edge_y_px`
+	- **직선 거리**(`edge_distance: true`) — SIFT 크기(와 상자 폭 대체)로 거리를 못 읽으면, 같은 직선 둘레에서 열마다 가장 어두운 줄(선반 아랫단의 짙은 띠 가운데)을 이은 높이를 기준 화면과 비교해 `−(높이 차) ÷ edge_px_per_m`을 직진 거리로 쓴다(`scale_source: edge`, 이벤트 `edge_dy_px`, 아래로 내려가면 가까움 → 뒤로).
+		- 10 cm 상한으로 버리지 않고, 한 번에 최대 10 cm만 움직인 뒤 헤딩부터 다시 잰다. 발산 판정의 기준은 잘린 이동량이 아니라 잰 거리.
+		- 띠 가운데를 쓰는 이유 — 직선 검출은 띠의 위·아래 모서리를 번갈아 잡아 서 있는 로봇에서도 높이가 14 px 오갔고, 띠 가운데는 0.7 px(replay `1025c` 프레임 2240~2315)
+		- 비커 선반 도착에서 잰 값 — 띠 높이 254 px/m(프레임 2175~2245, 위치 라벨 `x.pos` 대조, 잔차 0.75 px ≈ 0.3 cm), chain r01 도착 15.9 cm·r51 도착 22.8 cm 가까움, 정밀 추정이 되던 r03 도착 0.1 cm
 6. 같은 종류 보정의 오차가 직전보다 커지면(헤딩 +0.5°·거리 +5 mm 초과) `diverging`, `max_moves`를 다 쓰면 `not_converged`. 직진은 헤딩 기준을 초기화하지 않는다(10/24 규칙).
 7. 측정 실패 셋(`estimate_unusable`·`diverging`·`not_converged`)은 체인을 멈추지 않는다 — 그 자리에서 베이스를 세우고 다음 단계로 간다. 사유는 `stage_base_align`에 남는다(2026-10-25 실기 결정, 옆에서 보는 사람이 `ESC`로 끊을 수 있다). 안전 실패는 아래 표대로 시행 중단.
 8. 끝나면 베이스에 직접 0 명령, 작업 스레드는 기다리지 않고 종료 → `base/<단계 id>_align.csv` → `stage_base_align` 한 줄.

@@ -527,6 +527,7 @@ def _run(
     after_stage: Any = None,
     instrument: Any = None,
     preset_events: dict[str, bool] | None = None,
+    extra_args: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Drive cli.main once; patch only record_adapter's module-level seams."""
     captured: dict[str, Any] = {"robot": None, "base_at_encoder_flush": None}
@@ -573,6 +574,7 @@ def _run(
         str(config_path),
         f"--dataset.root={tmp_path / 'dataset'}",
         f"--output.root={tmp_path / 'outputs'}",
+        *extra_args,
     ]
     raised: BaseException | None = None
     exit_code: int | None = None
@@ -745,6 +747,143 @@ def test_both_stages_start_from_their_pose_and_the_gripper_is_never_commanded(
     assert trial.reposition_failed_stage_ids == ()
     assert len(trial.transition_gaps_s) == 1
     assert len(trial.stop_base_durations_s) == 2
+
+
+def test_record_reposition_records_the_move_between_the_stages(
+    tmp_path: Path,
+) -> None:
+    """dataset.record_reposition: the move is in the episode, the stages are as before.
+
+    Each move records frames between the previous stage_end and its own
+    stage_start, under its own task string, with the base at 0 and -- once the
+    move is commanded -- the arm action at the start pose. Every stage's own
+    frame accounting is untouched, and the grippers are still never commanded.
+    """
+    targets = _posed_targets()
+    result = _run(tmp_path, extra_args=("--dataset.record_reposition=true",))
+
+    assert result["raised"] is None, result["raised"]
+    assert result["exit_code"] == cli.EXIT_OK
+    _assert_log_is_closed(result)
+
+    moves = _of(result, "stage_reposition")
+    starts = _of(result, "stage_start")
+    ends = _of(result, "stage_end")
+    assert [move["outcome"] for move in moves] == ["reached", "reached"]
+    assert [move["recorded_task"] for move in moves] == [
+        "start_pose_before_s4",
+        "start_pose_before_s5",
+    ]
+    assert all(move["record_error"] is None for move in moves)
+    # The mock's goal_time is 3.0 s at 30 fps: about 90 frames a move. Loose
+    # bounds -- this is a CI box, not a timing measurement.
+    assert all(60 <= move["frames"] <= 110 for move in moves), [
+        move["frames"] for move in moves
+    ]
+    # Where they sit: from the previous stage_end (0 before the first stage) to
+    # this stage_start, and nowhere else.
+    assert moves[0]["frame_idx_start"] == 0
+    assert moves[1]["frame_idx_start"] == ends[0]["frame_idx"]
+    for move, start in zip(moves, starts, strict=True):
+        assert move["frame_idx"] == move["frame_idx_start"] + move["frames"]
+        assert start["frame_idx"] == move["frame_idx"]
+    for start, end in zip(starts, ends, strict=True):
+        assert end["frame_idx"] - start["frame_idx"] == end["frames"]
+
+    robot = result["robot"]
+    for arm in (robot.arms.left_arm, robot.arms.right_arm):
+        assert arm.driver.gripper_commands == [], "그리퍼에 명령이 갔다"
+        assert [
+            command["blocking"] for command in arm.driver.arm_position_commands
+        ] == [
+            False,
+            False,
+        ]
+
+    info = json.loads((result["dataset_root"] / "meta" / "info.json").read_text())
+    action_names = info["features"]["action"]["names"]
+    state_names = info["features"]["observation.state"]["names"]
+    frames = pd.concat(
+        [
+            pd.read_parquet(path)
+            for path in sorted(result["dataset_root"].glob("data/**/*.parquet"))
+        ]
+    ).sort_values("frame_index")
+    assert len(frames) == ends[-1]["frame_idx"]
+    tasks = pd.read_parquet(result["dataset_root"] / "meta" / "tasks.parquet")
+    task_of = {int(index): str(name) for name, index in tasks["task_index"].items()}
+    recorded_tasks = [task_of[int(index)] for index in frames["task_index"]]
+    for move, stage_id in zip(moves, ("s4", "s5"), strict=True):
+        span = range(move["frame_idx_start"], move["frame_idx"])
+        assert {recorded_tasks[index] for index in span} == {
+            f"start_pose_before_{stage_id}"
+        }
+        last = dict(zip(action_names, frames["action"].iloc[span[-1]], strict=True))
+        assert last["x.vel"] == 0.0 and last["theta.vel"] == 0.0
+        for key, value in targets[stage_id].items():
+            assert math.isclose(last[key], value, abs_tol=1e-6), (stage_id, key)
+        # The policy still starts from the pose: the stage's first frame.
+        first = dict(
+            zip(
+                state_names,
+                frames["observation.state"].iloc[move["frame_idx"]],
+                strict=True,
+            )
+        )
+        for key, value in targets[stage_id].items():
+            assert math.isclose(first[key], value, abs_tol=1e-6), (stage_id, key)
+
+    trial = aggregate.build_trial(aggregate.load_events(result["events_path"]))
+    assert trial.completed is True
+    assert len(trial.reposition_durations_s) == 2
+
+
+def test_a_recording_failure_does_not_fail_the_move(tmp_path: Path) -> None:
+    """get_observation raising mid-move: recording stops, the move and trial go on."""
+
+    def instrument(robot: Any, captured: dict[str, Any]) -> None:
+        original = robot.get_observation
+        calls = {"n": 0}
+
+        def get_observation() -> dict[str, Any]:
+            calls["n"] += 1
+            # A few frames into the first move, once.
+            if calls["n"] == 5:
+                raise RuntimeError("camera read failed")
+            return original()
+
+        robot.get_observation = get_observation
+
+    result = _run(
+        tmp_path,
+        instrument=instrument,
+        extra_args=("--dataset.record_reposition=true",),
+    )
+    assert result["raised"] is None, result["raised"]
+    assert result["exit_code"] == cli.EXIT_OK
+    moves = _of(result, "stage_reposition")
+    assert [move["outcome"] for move in moves] == ["reached", "reached"]
+    assert "camera read failed" in moves[0]["record_error"]
+    assert moves[0]["frames"] == 4
+    assert moves[1]["record_error"] is None and moves[1]["frames"] > 4
+
+
+def test_without_record_reposition_the_move_records_nothing_and_blocks(
+    tmp_path: Path,
+) -> None:
+    """The default: no frames during the move, the right arm's call is the wait."""
+    result = _run(tmp_path)
+    moves = _of(result, "stage_reposition")
+    assert all("frames" not in move and "recorded_task" not in move for move in moves)
+    robot = result["robot"]
+    assert [
+        command["blocking"]
+        for command in robot.arms.right_arm.driver.arm_position_commands
+    ] == [True, True]
+    assert [
+        command["blocking"]
+        for command in robot.arms.left_arm.driver.arm_position_commands
+    ] == [False, False]
 
 
 def test_a_pose_that_is_not_reached_ends_the_trial_without_running_the_stage(

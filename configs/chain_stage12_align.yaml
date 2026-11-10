@@ -10,7 +10,7 @@
 #
 # 실행 — 저장소 루트에서(README 3-4와 같은 자리):
 #
-#   env LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=4 \
+#   env LEROBOT_CHUNK_PREFETCH_TICKS=12 LEROBOT_CHUNK_RTC=1 LEROBOT_CHUNK_SEAM_BLEND_TICKS=8 \
 #     HF_HUB_OFFLINE=1 uv run python -m stage_runner --config_path configs/chain_stage12_align.yaml
 #
 # 회차마다 바꾸는 것은 dataset.repo_id 하나다. 사용법·이벤트·실패 종류는

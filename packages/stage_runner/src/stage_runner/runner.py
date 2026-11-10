@@ -9,7 +9,7 @@ import time
 # __version__ did not exist yet while runner was loading. __init__ is lazy now
 # (PEP 562) and imports nothing at package-import time, so the cycle is gone.
 from stage_runner import __version__ as stage_runner_version
-from stage_runner import record_adapter, reposition, transitions
+from stage_runner import record_adapter, reposition, reposition_record, transitions
 from stage_runner.config import StageConfig
 from stage_runner.context import StageContext
 from stage_runner.events import (
@@ -253,7 +253,8 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 # aggregate reads as "never ran" rather than as a slow stage --
                 # and with an ABORTING terminator, so the loop below ends the
                 # trial. NOT an exception: the episode buffer's state is known
-                # (nothing was added during the move), so the earlier stages'
+                # (nothing was added during the move, or with
+                # dataset.record_reposition only whole frames), so the earlier stages'
                 # frames are saved as a partial chain exactly like an operator
                 # abort, instead of being discarded with an unknown buffer.
                 result = StageResult(
@@ -297,9 +298,10 @@ def run_trial(context: StageContext) -> TrialOutcome:
                 context.reset_gripper_goals.clear()
             if uses_start_poses:
                 if result.gripper_goals is not None:
-                    # A leader_reset stage: its commands never reached the
-                    # episode buffer, so it hands its last gripper goal over
-                    # directly -- the grip the operator just set.
+                    # A leader_reset stage, or a policy stage the operator
+                    # finished with the leader arm: those commands never
+                    # reached the episode buffer, so the stage hands its last
+                    # gripper goal over directly -- the grip the operator set.
                     last_gripper_goals = dict(result.gripper_goals)
                 elif result.frames > 0:
                     # This stage's policy sent the latest gripper goal; a stage
@@ -579,9 +581,12 @@ def _reposition_before_stage(
     one the boundary's hold left: the previous stage's last command when the
     runner could read it (gripper_goal_source "previous_command"), the measured
     position when it could not ("measured"), and whatever was already standing
-    at stage 0 or after a fallback stop that commanded no arm ("unchanged"). No
-    frame is recorded: this sits between two record_loop calls, so frame_idx is
-    the same on both sides of the event.
+    at stage 0 or after a fallback stop that commanded no arm ("unchanged").
+    Without ``dataset.record_reposition`` no frame is recorded: this sits between
+    two record_loop calls, so frame_idx is the same on both sides of the event.
+    With it, the move's waits record frames (reposition_record.py), all of them
+    between the previous stage_end and this stage_start; the event's
+    ``frame_idx_start`` and ``frames`` say where and how many.
 
     reposition_s IS NOT TRANSITION TIME. It lands between the previous stage_end
     and this stage_start, i.e. inside the wall-clock window aggregate.build_trial
@@ -634,7 +639,17 @@ def _reposition_before_stage(
         ),
     }
 
+    recorder: reposition_record.RepositionFrameRecorder | None = None
+
     def emit(outcome: str, reason: str, **extra: object) -> None:
+        # With dataset.record_reposition, `frames` is how many frames the move
+        # recorded -- frame_idx minus frame_idx_start -- and record_error why
+        # recording stopped early, if it did (the move itself is unaffected).
+        recording = (
+            {}
+            if recorder is None
+            else {"frames": recorder.frames, "record_error": recorder.error}
+        )
         context.log.emit(
             EVENT_STAGE_REPOSITION,
             stage_id=stage.id,
@@ -642,6 +657,7 @@ def _reposition_before_stage(
             reason=reason,
             outcome=outcome,
             **fields,
+            **recording,
             **extra,
         )
 
@@ -670,6 +686,22 @@ def _reposition_before_stage(
         )
         return reason
 
+    # dataset.record_reposition: the move's waits record frames
+    # (reposition_record.py). Built only now, after the skip / refuse returns,
+    # so a move that never happens records nothing and its event is unchanged.
+    move_options: dict[str, object] = {}
+    if context.config.dataset.record_reposition:
+        recorder = reposition_record.RepositionFrameRecorder(
+            context, stage.id, None if boundary is None else boundary.action
+        )
+        move_options = {
+            "sleep": recorder.sleep,
+            "wait_with_sleep": True,
+            "on_commanded": recorder.commanded,
+        }
+        fields["recorded_task"] = reposition_record.reposition_task(stage.id)
+        fields["frame_idx_start"] = context.buffered_frame_count()
+
     started = time.perf_counter()
     try:
         moved = reposition.move_arms_to_start_pose(
@@ -677,6 +709,7 @@ def _reposition_before_stage(
             start_pose.positions,
             min_goal_time_s=start_pose.min_goal_time_s,
             position_tolerance_rad=start_pose.position_tolerance_rad,
+            **move_options,
         )
     except Exception as error:
         reason = f"start pose move failed: {error!r}"

@@ -505,6 +505,8 @@ def move_arms_to_start_pose(
     position_tolerance_rad: float,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.perf_counter,
+    wait_with_sleep: bool = False,
+    on_commanded: Callable[[Mapping[str, float]], None] | None = None,
 ) -> RepositionResult:
     """Drive both arms' joints to ``positions`` and wait until they are there.
 
@@ -529,8 +531,20 @@ def move_arms_to_start_pose(
     positions are read AFTER the wait, so the goal_time is paced from where the
     hold left the arms. The wait sends nothing.
 
-    No frame is recorded here: this runs between record_loop calls, so the
-    episode buffer does not grow and frame_idx is the same before and after.
+    ``wait_with_sleep=True`` WAITS THROUGH ``sleep`` INSTEAD: every arm is
+    commanded with ``blocking=False`` and the move's goal_time is then spent in
+    one ``sleep(goal_time)`` before the settle check. The runner passes a sleep
+    that records frames while it waits (reposition_record.RepositionFrameRecorder,
+    ``dataset.record_reposition``), which a blocking driver call would not let it
+    do. The trajectories are the same either way -- both arms are started with the
+    same goal_time and only the wait changes hands -- and the settle check below
+    still decides "reached". ``on_commanded`` is called with the target right
+    after the last arm was commanded, so a recorder can switch the action it
+    writes from the boundary hold to the pose now in force.
+
+    This function records nothing itself. With the default sleep the episode
+    buffer does not grow and frame_idx is the same before and after; with a
+    recording sleep the frames are the recorder's.
     """
     handles = arm_handles(robot)
     problems = start_pose_problems(positions, handles)
@@ -554,8 +568,12 @@ def move_arms_to_start_pose(
             # config.joint_names, which is the driver's joint order.
             [target[key] for key in handle.keys],
             goal_time=goal_time,
-            blocking=last,
+            blocking=last and not wait_with_sleep,
         )
+    if on_commanded is not None:
+        on_commanded(target)
+    if wait_with_sleep:
+        sleep(goal_time)
 
     deadline = clock() + SETTLE_TIMEOUT_S
     while True:

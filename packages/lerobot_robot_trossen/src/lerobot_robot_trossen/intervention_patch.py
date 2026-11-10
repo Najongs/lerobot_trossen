@@ -98,14 +98,24 @@ logger = logging.getLogger(__name__)
 _ENV_VAR = "LEROBOT_INTERVENTION_REPO_ID"
 REPO_ID: str = os.environ.get(_ENV_VAR, "").strip()
 
-# TEMPORARY robot-PC patch (2026-10-25, user-approved): with
-# LEROBOT_INTERVENTION_SERIAL_ENCODING=1 a take's three videos are encoded one
-# after another in this process instead of in three forked workers
-# (save_episode(parallel_encoding=False)). Tests whether forking the large
-# recording process mid-run is what stalls a RealSense stream (r01/r02 10/25).
+# Serial video encoding, on by default since 2026-10-30: a take's three videos
+# are encoded one after another in this process instead of in three forked
+# workers (save_episode(parallel_encoding=False)). Forking the large recording
+# process mid-run stalls a RealSense stream (r01/r02 10/25, pi0 base baseline
+# 10/28, expert-only control 10/30 -- each killed the run right after a forked
+# save). A save takes longer, but a stalled camera ends the whole run.
+# LEROBOT_INTERVENTION_SERIAL_ENCODING=0 restores parallel encoding. Applies to
+# every lerobot-record run, with or without LEROBOT_INTERVENTION_REPO_ID.
 SERIAL_ENCODING: bool = (
-    os.environ.get("LEROBOT_INTERVENTION_SERIAL_ENCODING", "") == "1"
+    os.environ.get("LEROBOT_INTERVENTION_SERIAL_ENCODING", "1").strip() != "0"
 )
+
+# Spoken cues at each hand-over boundary (space bar, reset, recording, saving,
+# discarding), as stage_runner speaks each stage start. Without them the only
+# sign that a boundary passed was the next stage's announcement, so a right
+# arrow read twice went unnoticed until then (robot2 r03 2026-10-29: a 3-frame
+# take). LEROBOT_INTERVENTION_SOUNDS=0 turns them off.
+PLAY_SOUNDS: bool = os.environ.get("LEROBOT_INTERVENTION_SOUNDS", "1") != "0"
 
 # The intervention dataset's label and its loop's fps. See the module
 # docstring, "Loop rate".
@@ -138,6 +148,13 @@ _listener_started: bool = False
 _dataset: Any = None
 _saved_this_run: int = 0
 _finalized: bool = False
+# The gripper goals the leader last sent the follower in the latest
+# intervention, until stage_runner takes them (take_last_gripper_goals). The
+# intervention's frames go to its own dataset, so the eval episode buffer's
+# last row is still the policy's command from before the space bar; a base
+# stage after the hand-over that re-sent it would open the grippers on what
+# the operator just grasped (robot2 r02, 2026-10-29).
+_last_gripper_goals: dict[str, float] | None = None
 
 
 class InterventionError(RuntimeError):
@@ -156,13 +173,26 @@ def _on_space() -> None:
                 "Space bar ignored: an intervention starts only during a policy episode."
             )
             return
-        if not _requested:
+        first = not _requested
+        if first:
             _space_at = time.perf_counter()
         _requested = True
         events["exit_early"] = True
     print(
         "Space bar pressed. Stopping the policy and handing over to the leader arm..."
     )
+    if first:
+        _say("Intervention")
+
+
+def _say(text: str) -> None:
+    """Speak ``text`` in the background (lerobot's log_say). Never raises."""
+    try:
+        from lerobot.utils.utils import log_say
+
+        log_say(text, PLAY_SOUNDS)
+    except Exception:
+        logger.warning(f"intervention: could not speak {text!r}", exc_info=True)
 
 
 def _start_listener() -> None:
@@ -288,6 +318,50 @@ def _restore_base_torque(robot: Any) -> str:
 
 def _is_gripper(key: str) -> bool:
     return "carriage" in key
+
+
+def last_sent_gripper_goals(teleop: Any) -> dict[str, float] | None:
+    """The gripper goals the leader last sent the follower, or None. Never raises.
+
+    The take's last recorded action when it has frames: record_loop records the
+    action it sends, so that row IS the last command. Without frames (Esc in a
+    reset, or a take thrown away and not redone) the leader's current reading,
+    which every reset tick copied to the follower.
+    """
+    try:
+        # The leader's keys are the follower's (see follower_targets).
+        keys = [key for key in teleop.action_features if _is_gripper(key)]
+        if not keys:
+            return None
+        if _dataset is not None and int(_dataset.episode_buffer["size"]) > 0:
+            names = list(_dataset.features["action"]["names"])
+            row = _dataset.episode_buffer["action"][-1]
+            values = dict(zip(names, (float(value) for value in row), strict=True))
+        else:
+            values = {key: float(value) for key, value in teleop.get_action().items()}
+        goals = {key: values[key] for key in keys}
+        if not all(math.isfinite(value) for value in goals.values()):
+            raise ValueError(f"no finite gripper goal: {goals}")
+        return goals
+    except Exception:
+        logger.warning(
+            "intervention: could not read the leader's last gripper goals; the next "
+            "base stage re-sends the policy's last gripper command instead",
+            exc_info=True,
+        )
+        return None
+
+
+def take_last_gripper_goals() -> dict[str, float] | None:
+    """The latest intervention's last gripper goals, once; None if there was none.
+
+    stage_runner calls this after every policy stage and hands the goals on as
+    StageResult.gripper_goals, the path a leader_reset stage already uses.
+    """
+    global _last_gripper_goals
+    with _lock:
+        goals, _last_gripper_goals = _last_gripper_goals, None
+    return goals
 
 
 def follower_targets(robot: Any, teleop: Any) -> dict[str, float]:
@@ -598,6 +672,7 @@ def _run_reset(original, reset_call: dict, events: dict) -> None:
         "Reset, not recording: take the leader arm. Recording starts with -> "
         f"(or by itself after {reset_call['control_time_s']:g}s); ESC stops the run."
     )
+    _say("Reset. Take the leader arm")
     original(**reset_call)
 
 
@@ -608,7 +683,7 @@ def _intervene(
     space_at: float | None = None,
     stopped_at: float | None = None,
 ) -> None:
-    global _dataset, _saved_this_run
+    global _dataset, _saved_this_run, _last_gripper_goals
     robot = kwargs["robot"]
     teleop = kwargs.get("teleop")
     events = kwargs["events"]
@@ -673,8 +748,12 @@ def _intervene(
                 f"Recording the intervention into {REPO_ID}: finish the stage with the "
                 "leader arm, then -> to save (<- to redo, ESC to save and stop)."
             )
+            _say("Recording")
             original(**call)
             if events.get("rerecord_episode"):
+                # Said when the left arrow ends the take, before the reset's cue;
+                # the buffer itself is cleared after the reset, as below.
+                _say("Discarded")
                 # As lerobot-record: the take is thrown away after the reset, so
                 # an ESC there throws it away too and stops the run.
                 _run_reset(original, reset_call, events)
@@ -684,8 +763,14 @@ def _intervene(
                 print("Intervention discarded.")
                 continue
             break
+        # Before save_episode, which empties the buffer this reads.
+        goals = last_sent_gripper_goals(teleop)
+        with _lock:
+            _last_gripper_goals = goals
         frames = int(_dataset.episode_buffer["size"])
         if frames:
+            # At the key press, not after the encoding (15-50 s serial).
+            _say("Saving")
             index = _dataset.num_episodes
             save_started = time.perf_counter()
             _dataset.save_episode(parallel_encoding=not SERIAL_ENCODING)
@@ -697,6 +782,7 @@ def _intervene(
             )
         else:
             _dataset.clear_episode_buffer()
+            _say("Nothing saved")
             logger.warning("intervention: no frame recorded, nothing saved")
     finally:
         problem = _restore_base_torque(robot) if released else _zero_base(robot)
@@ -719,7 +805,7 @@ def _wrap_record_loop(original):
 
     @functools.wraps(original)
     def record_loop(*args, **kwargs):
-        global _policy_events, _requested, _space_at
+        global _policy_events, _requested, _space_at, _last_gripper_goals
         events = kwargs.get("events")
         eval_dataset = kwargs.get("dataset")
         if (
@@ -734,6 +820,8 @@ def _wrap_record_loop(original):
             _requested = False
             _space_at = None
             _policy_events = events
+            # An untaken value belongs to an earlier episode, never to this one.
+            _last_gripper_goals = None
         try:
             result = original(*args, **kwargs)
         finally:
@@ -763,11 +851,10 @@ def is_installed(function) -> bool:
 
 
 def _force_serial_encoding() -> None:
-    """TEMPORARY robot-PC patch (2026-10-25, user-approved): every save_episode in
-    this process -- the eval dataset's too, not only the intervention take's --
-    encodes without forking (parallel_encoding=False). The 09:55 stall came
-    16 s after an eval save that still forked, so the take-only switch left a
-    fork in every lerobot-record episode."""
+    """Every save_episode in this process -- the eval dataset's too, not only the
+    intervention take's -- encodes without forking (parallel_encoding=False).
+    The 09:55 stall (10/25) came 16 s after an eval save that still forked, so
+    a take-only switch left a fork in every lerobot-record episode."""
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     original = LeRobotDataset.save_episode
@@ -781,8 +868,9 @@ def _force_serial_encoding() -> None:
     save_episode._serial_encoding_wrapper = True
     LeRobotDataset.save_episode = save_episode
     logger.warning(
-        "LEROBOT_INTERVENTION_SERIAL_ENCODING=1: every dataset in this process "
-        "encodes its videos serially, without forked workers."
+        "Serial encoding (default; LEROBOT_INTERVENTION_SERIAL_ENCODING=0 turns "
+        "it off): every dataset in this process encodes its videos serially, "
+        "without forked workers."
     )
 
 
@@ -792,7 +880,21 @@ def apply_intervention_patch() -> bool:
     Installed last, outside the other record_loop wrappers, so the intervention
     loop it starts runs through them too. Never raises: lerobot imports this
     package automatically and treats any exception as a failed plugin.
+
+    Serial encoding is forced first, with or without the repo id, so a plain
+    eval run does not fork on every save either; only
+    ``LEROBOT_INTERVENTION_SERIAL_ENCODING=0`` leaves the parallel default.
     """
+    if SERIAL_ENCODING:
+        try:
+            _force_serial_encoding()
+        except Exception:  # a plugin import must never raise
+            logger.exception("Could not force serial encoding.")
+    else:
+        logger.warning(
+            "LEROBOT_INTERVENTION_SERIAL_ENCODING=0: videos are encoded in "
+            "parallel forked workers (camera stalls after a save are possible)."
+        )
     if not REPO_ID:
         return False
     try:
@@ -822,8 +924,6 @@ def apply_intervention_patch() -> bool:
             f"the leader arm and records into that dataset at {DATASET_FPS} fps, as "
             "acquisition does."
         )
-        if SERIAL_ENCODING:
-            _force_serial_encoding()
         return True
     except Exception:
         logger.exception(

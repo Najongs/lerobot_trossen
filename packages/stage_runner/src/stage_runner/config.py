@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 # stage (popping them would break the snapshot tests that compare against
 # draccus.dump with only start_pose and teleop filtered, and nothing reads
 # snapshots back).
+# And for DatasetConfig.record_reposition (2026-11-01): it defaults to false,
+# which records exactly the frames a YAML without it always recorded.
 LATEST_CONFIG_VERSION: int = 1
 
 TERMINATOR_TIMEOUT: str = "timeout"
@@ -336,6 +338,28 @@ class BaseAlignConfig:
     # inliers, f1 +15.3 deg / 7 inliers) would have ended the stage. false = abort
     # whenever the fine estimate is unusable.
     coarse_heading: bool = True
+    # Edge heading, OFF by default: when the fine estimate is unusable, the
+    # slope of the longest near-horizontal line in edge_band_px (y from, y to,
+    # in a 480-high frame) against the same line in the reference gives the
+    # heading (landmark_align.edge_yaw), tried before the coarse estimate. For
+    # a plain landmark the SIFT fit cannot hold -- the white beaker shelf gave
+    # 2-7 inliers on 8 of 9 arrivals -- whose bottom rail is a clean line.
+    # Unlike the coarse estimate it can end the stage aligned.
+    edge_heading: bool = False
+    edge_band_px: list[int] = field(default_factory=lambda: [110, 225])
+    # Image slope (deg) per base heading (deg) of that line; 0.455 measured for
+    # the shelf rail at the beaker-shelf arrival (landmark_align constants).
+    edge_slope_per_deg: float = 0.455
+    edge_min_length_px: int = 180
+    # Refuse a live line this far (px) above or below the reference line.
+    edge_max_dy_px: int = 80
+    # Edge distance, OFF by default: when SIFT scale (and the width fallback)
+    # give no distance, the height of the same line's dark strip against the
+    # reference's gives it (landmark_align.edge_distance_move): px / edge_px_per_m
+    # metres, driven at most 0.10 m per step and measured again. 254 px/m
+    # measured for the shelf rail at the beaker-shelf arrival.
+    edge_distance: bool = False
+    edge_px_per_m: float = 254.0
 
 
 @dataclass
@@ -396,6 +420,13 @@ class DatasetConfig:
     # width without one, which loosens a grip on a held beaker. For intervention
     # runs, whose intervention dataset is saved per take regardless.
     save: bool = True
+    # true: the arms' move to a stage's start_pose is recorded too -- one frame
+    # per 1/fps while it runs, task "start_pose_before_<stage id>", action = the
+    # goal in force (reposition_record.py) -- so the chain's video runs without
+    # the ~3 s cut before every posed stage. false (the default): nothing is
+    # recorded during the move, as before. Opt-in, so an older YAML records the
+    # same frames it always did.
+    record_reposition: bool = False
     num_image_writer_processes: int = 0
     num_image_writer_threads_per_camera: int = 4
 

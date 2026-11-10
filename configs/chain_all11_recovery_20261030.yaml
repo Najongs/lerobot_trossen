@@ -1,0 +1,651 @@
+# ===== 10/30 1호기 판 — 비커 교체 전 정렬 원본 복귀 =====
+# 출처: 로봇PC 1호기 공통 설정 outputs/chain_all11_recovery.yaml(2026-10-30 01:48)에서 조작 8단계 정책 경로만 10k로 바꾼 것
+#   = 10월 30일 rrun r21(01:54)·r22(02:17)가 실제로 돈 설정 — 회차 이름(repo_id)과 save: false만 rrun 함수가 넣었다
+# 10월 26일 시연판(configs/chain_all11_demo_20261026.yaml)과 다른 것은 비커 교체 전 정렬(s7_align) 셋과 정책 경로뿐
+#   - 기준 그림: 3° 합성(_cw3deg.png) → 원본(20261026_s8start_task08_ep156.png) — 「시계방향 3도」는 문 연 뒤 틀어진 관찰을 목표 자리로 잘못 읽은 것(10/30 확인)
+#   - 순서: s7_align → s7_fwd 를 s7_fwd → s7_align 으로, coarse_heading false → true(원본 기준으로 정렬에 성공한 10/26 회차의 조합)
+#   - 시연판은 그날 기록이라 고치지 않았다 — 그 파일의 3° 기준은 쓰지 말 것
+# 코드: main 5bf6ae5 + 순차 인코딩 스위치(PR #99 브랜치)에서 돌렸다 — 이 설정 자체는 main의 단계 실행기로 읽힌다
+# 실행: repo 루트에서 `uv run python -m stage_runner --config_path configs/chain_all11_recovery_20261030.yaml`
+#   repo_id는 r00 자리표시 — 로봇PC 함수(chain·rrun)가 sed로 회차 번호를 넣는다
+# ⚠ 기기별 경로 — 줄 끝에 「⚠ 기기별 경로」 표시한 줄은 그 기기에 받은 위치로 바꿀 것
+#   policy_path: HF kiroaiseoul/pi0full_bs32_all11_14D_ft1029_s10k — 새 체크포인트가 나오면 이 8줄만 바꾼다
+#   completion model_path: DGX /raid/kiro-ai/stage_classifier/20261025_models/<단계>
+#   reference_image: repo의 configs/align_refs/ (repo 루트에서 실행할 때 상대경로로 읽힘)
+# ⚠ 카메라 시리얼은 1호기 값 — 2호기는 자기 시리얼로, 정렬 기준 화면도 2호기는 아직 1호기 것
+# 이 판의 실기 결과(r21·r22, 1호기): 비커 교체 전 정렬 r21 정렬됨(0회 이동) · r22 대략 추정으로 돌다 벌어져 중단 · 선반 앞 정렬 두 회차 모두 추정 불가
+# ===== 아래는 원래 머리 주석 =====
+# stage_runner — 1~11단계 전체: 이동은 10/25 2차 베이스 데모(replay_base_chain_1025b, 도착을 다음 조작 단계 첫 화면에 맞춤) 재생 + 도착 화면 정렬, 조작은 pi0
+# 만든 곳: 로봇PC 세션 70f27ad1 (2026-10-25). 절차: vault-taskintel/_inbox/20261025-전체단계-재생정렬-실행-절차.md
+# 이동 단계(base_replay)마다 다음 정책 단계의 start_pose를 먼저 잡는다(임시 패치 preflight.py, 10/25 사용자 요청) — s1←s2 · s3←s4 · s6_move←s7 · s10←s11
+#   ⚠ 10/26부터 s4 start_pose는 리커버리 첫 프레임 기준(아래)이라 s3의 사본과 다르다 — s3은 옛 학습 데이터 자세 그대로 둠(팔을 실패 지점 자세로 뻗은 채 베이스가 다가가지 않게). s4 시작 때 그 자리에서 새 자세로 옮긴다
+# s4 start_pose = recovery_manipulation_14D에서 그 단계 지시문으로 거른 77개 에피소드 → ep 74의 첫 프레임, 같은 공식(first_frame_nearest_to_median_std_l2, stage_runner.start_pose 함수 재사용). 사용자 10/26 A안 「실패 지점 자세에서 시작」. 원래 대비 관절 최대 차 0.44 rad(오른팔 joint_3). 이전 값 = .bak_20261026_s2s4_startpose_train
+#   s2도 같은 방식(ep 18, 최대 차 1.21 rad)으로 바꿨다가 사용자 10/26 「2단계 초기자세 원래대로」로 되돌림 — 지금 s2는 원래 학습 데이터 자세(s1 사본과 같음)
+# s6_align yaw_tol_deg 3.5 (사용자 10/25 t06) — 냉장고 앞은 맞는 점이 적어 추정이 ±0.5° 흔들리고 3° 미만 보정 회전이 실제로 거의 안 돈다(t05). 나머지 정렬은 2.0
+# 10/26 완료 판별기(이슈 #85 커밋 c5b05ec cherry-pick, 사용자 「단계 판정기 적용해볼 수 있나? 타이머는 전체적으로 여유롭게」) — mode fire, timeout_s는 천장
+#   s2·s5·s7·s8·s9·s11 = type classifier, 모델 ~/stage_classifier/20261025_models/<단계>(DGX /raid/kiro-ai/stage_classifier/20261025_models에서 받음), 임계·유지·최소 시간은 각 completion.json. s2만 두 손 쥠 조건(grip 0.004~0.0101 m, 0.5 s)
+#   s6 = type grasp(오른손 닫힘 뒤 wait_s 9.1) + 토크 끔. s4 = 타이머 그대로(사용자 「4단계는 타이머 늘리지 말자」)
+#   천장 = 아래 타이머의 약 1.5배: s2 32.1→48→25(사용자 10/26 「2단계 타이머 25초」) · s5 15.2→31.3→12→8.5→12.75(8.5의 1.5배, 사용자 10/26 「튜브 버리는 단계 타이머 1.5배」 — r09·r10 실측 — 두 손이 튜브를 놓음 6.0·6.3초, 팔 정지 7.0·8.2초, 그 뒤는 대기. 사용자 「거의 8초면 끝나던데」) · s6 11.5→17→25(r10에서 14.1초에 다시 집어 대기가 처음부터 — 사용자 「아니라고 하면 타이머 더 늘려야」) · s7 25.1→38 · s8 26.3→40 · s9 18.9→28 · s11 17.1→26. 이전 설정 = .bak_20261026_before_classifier
+#   ⚠ 실기 미시험 — 판별기가 실패하면 채점만 멈추고 타이머(천장)로 끝난다. 로그 = 단계마다 events.jsonl `stage_completion`
+# (판별기 이전) 정책 단계는 타이머(학습 데이터 단계 길이 p95 프레임 ÷ 실측 루프 20 Hz, 10/20 방식). → 누르면 타이머 전에도 넘어감, 중단은 ESC.
+#   s2 32.1 (task02_14D) · s4 19.4 (task04) · s5 31.3 (task05) · s7 25.1 · s8 26.3 · s9 18.9 (10/20, all11 병합본) · s11 17.1 (task11_14D)
+#   s11 release_base_torque: true (사용자 10/26 「11단계도 꺼줘」 — s6에서 실기 작동 확인 뒤)
+#   display_data true (사용자 10/26 「display 켜줄 수 있나 rerun? rrun이랑 chain 모두」) — Rerun 로깅은 non-blocking이라 lerobot-record 정책 모드에서 루프 Hz가 거의 안 변했다(8.5→8.7~9.4, 96-Notes 루프 실주기 계측). ⚠ stage_runner 20 Hz 루프에서 켰을 때 영향은 미측정 — 각 단계 stage_end의 hertz로 확인
+#   s7_align (사용자 10/26 「문 열다 돌아가는게 문제」 — 비커 교체 전 보정 한 번 더, 「열린 화면 기준으로」) = 기준 화면 outputs/align_refs/20261026_s8start_task08_ep156.png(task08 데모 251개 중 시작 자세 대표 ep156의 첫 cam_high — 문 열림·냉장고 안 비커), 영역 [233,0,220,200], 방향만: yaw_tol 1.5°, dist_tol 100 cm(거리 이동 안 함 — 문이 열려 화면 크기가 달라 거리 추정이 틀리면 팔·비커를 든 채 냉장고로 다가갈 수 있어서). ⚠ 문 열린 화면이라 맞는 점이 부족하면 보정 없이 넘어감 · 3° 미만 회전이 실제로 덜 도는 문제(t05)는 그대로
+#   s7_align 기준을 ep156 화면을 시계방향 3° 돌린 합성 화면(_cw3deg.png)으로 교체(사용자 10/26 「매번은 아니지만 시계방향 3도 정도 틀어져야」) — 순수 회전 호모그래피 K·R(camera_up 축 −3°... 부호는 정렬 알고리즘으로 확인: yaw_between(새 기준, ep156)=+3.02° → 원래 자리면 −3.02° 명령, 양의 명령 = 반시계(10/26 실기 회전 전후 화면이 오른쪽으로 이동)). 원래 ep156 기준 = .bak_20261026_s7align_ep156
+#   ⚠ 10/30 s7_align 기준을 ep156 원본(20261026_s8start_task08_ep156.png)으로 복귀 — 위 3° 합성은 「문 연 뒤 시계방향 3°쯤 틀어져 있다」는 관찰을 목표 자리로 잘못 읽어 넣은 것(사용자 10/30). 바꾸기 전 = .bak_20261030_0146_before_s7_original
+#   ⚠ 10/30 순서도 s7_fwd → s7_align, coarse_heading true로 복귀 — 원본 기준으로 정렬에 성공한 두 회차(chain_new r03·rrun_new r03)의 조합(사용자 10/30). 바꾸기 전 = .bak_20261030_0151_before_s7_order_revert
+#   s7_fwd (사용자 10/26 「비커교체 시작전 5cm 가깝게」) = 1025c 위치 라벨 2104~2131행을 2103행 기준 상대로 재생 — 전진 +5.0 cm·방향 +1.15°(데모 전체에서 정지 출발 5 cm 직진 중 방향 변화가 가장 작은 구간, 선반 앞 마지막 직진 시작부). (10/26 순서 바꿈: s7_align → s7_fwd — 전진 뒤엔 시계 3° 기준과 맞는 점이 14개로 떨어져 방향 추정이 안 됐고(rec r03), 전진의 실제 방향 변화는 −0.4°로 작았다. s7_align은 coarse_heading false — 정밀 추정이 안 되면 돌지 않고 넘어감). 팔은 그대로 유지(start_pose 없음)
+#   s8_back (사용자 10/26 「냉장고 문 닫기 전 5cm 멀리」) = 1456~1508행을 1455행 기준 상대로 — 후진 −5.2 cm·방향 −0.33°(1025c 9단계 후진 초입). s8 → s8_back → s9
+# 선반 앞 10 cm 뒤 (사용자 10/26 「11단계 보정 위치 10cm 멀리」): s10 재생 끝 until_row 2250 → 2190, s10_align 기준 프레임 2255 → 2190, landmark_distance_m 0.9 → 1.0.
+#   1025c 위치 라벨(basepose) 실측 — 2110~2250은 마지막 직진(방향 변화 1° 미만), 2190은 2250보다 x.pos −10.1 cm·방향 +0.65°. 정렬은 오늘 r05에서 맞는 점 4/22로 보정 안 됨이라 재생 끝을 같이 당긴다
+#   ⚠ 2190은 데모가 약 5.5 cm/s로 움직이던 행이라 거기서 멈추는 재생은 미시험
+#   s5 15.2 (사용자 10/26 「너무 길다」) = task05_tube_disposal(n=74)에서 팔 움직임이 끝나는 프레임 p95 315 ÷ 20.7 Hz — 31.3은 에피소드 길이 p95 625라 끝난 뒤 정지 꼬리(중앙 약 75프레임)까지 셌다. 움직임 끝 = 팔 12관절 속도 노름 5프레임 평균 > 0.002~0.008 rad/프레임의 마지막 프레임(임계 바꿔도 p95 313~316)
+#   s6 11.5 + release_base_torque: true (사용자 10/26 「토크 끌 수 있으면 길게, 11.5」 — 이슈 #85 커밋 c4cb748을 eval/recovery에 cherry-pick) — 정책이 내는 베이스 명령은 그 단계 동안 무시된다. ⚠ 토크가 꺼진 동안 바퀴가 풀려 손으로 밀린다
+#   (이전) s6 6.0 (사용자 10/26 「흔들기 없게」) = 단계 6 데이터(task06_..._14D)에서 흔들기 시작 프레임 p5 130·p10 136·p50 167(n=256, 오른팔 R2·R3·R4 왕복 시작) ÷ 오늘 chain 실측 루프 20.7 Hz → p5 약 6.3초, 그 앞에서 끊는다. 이전 값 11.5(아래)
+#   (이전) s6 11.5 = t01에서 pi0가 11.6초부터 베이스 명령을 냄(그 전까지 |cmd| 0.03 이하) — 그 직전에서 끊는다. 옛 값 14.5 = 단계 6 데이터(task06_..._14D, n=306)에서 베이스가 움직이기 시작하는 프레임 중앙 290 ÷ 20 Hz — 흔들기까지만 돌리고 이동은 s6_move가 맡게
+# start_pose 출처: s2 = configs/chain_stage12_align.yaml, s4·s5 = outputs/chain_task45_par_t01.yaml(ACT 체크포인트 기준 생성),
+#   s6~s9 = outputs/chain_pi0_s6789_t05.yaml, s11 = stage_runner.start_pose로 10/25 생성(task11_place_beaker_on_the_shelf_14D)
+# 정렬 landmark_roi: s1 = dark_blob_box(랙), s3·s6·s10 = 기준 화면을 보고 손으로 잡은 상자. landmark_distance_m: s1 = 10/24 역산 0.60,
+#   나머지는 ⚠ 눈대중 추정 — 거리 보정이 멈추는 자리(기준 화면과 같은 크기)는 이 값과 무관, 한 번에 움직이는 양만 비례해 틀린다
+# 7단계 앞 리더암 리셋(reset_s7)은 10/26 00:3x 사용자 요청으로 다시 뺌
+# 베이스 데모를 3차 replay_base_chain_1025c(10/25 22:25 재녹화)로 교체 — 사용자 10/25. 재생 끝 = 도착 정지가 자리 잡은 행 +5, 정렬 기준 = 그 +5. 냉장고 앞 영역을 탁자 모서리 → 냉장고 몸통(과거 도착 3건 맞는 점 13~17), 기준 거리 s1 0.69·s6 0.85는 새 데모 접근 구간 실측
+# 냉장고 앞 정렬 기준 프레임 1390 → 1507(사용자 10/26 「5 cm만 더 멀리서 멈추게」): 1025c 9단계 후진 초입, 1390보다 4.9 cm 뒤·방향 −0.3°, 화면 크기로도 −4.9 cm. 재생은 1385행(데모 거리)까지 그대로, 정렬이 뒤로 물러난다
+version: 1
+robot:
+  type: mobileai_robot
+  id: follower
+  left_arm_ip_address: 192.168.1.5
+  right_arm_ip_address: 192.168.1.4
+  enable_base_motor_torque: true
+  include_base_in_state: false
+  cameras:
+    cam_high:
+      type: intelrealsense
+      serial_number_or_name: '230422273501'
+      width: 640
+      height: 480
+      fps: 30
+    cam_left_wrist:
+      type: intelrealsense
+      serial_number_or_name: '230422271234'
+      width: 640
+      height: 480
+      fps: 30
+    cam_right_wrist:
+      type: intelrealsense
+      serial_number_or_name: '230322274369'
+      width: 640
+      height: 480
+      fps: 30
+dataset:
+  repo_id: kiroaiseoul/eval_chain_all11_recovery_r00
+  fps: 21
+defaults:
+  executor: lerobot_policy
+  manual_ceiling_s: 120.0
+output:
+  root: outputs/stage_runner
+display_data: true
+stages:
+- id: s1
+  name: move_to_tube_rack
+  executor: base_replay
+  terminator:
+    type: timeout
+    timeout_s: 40
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.06656748056411743
+      left_joint_1.pos: 1.2827115058898926
+      left_joint_2.pos: 0.6311513185501099
+      left_joint_3.pos: 0.5308232307434082
+      left_joint_4.pos: -0.1024261862039566
+      left_joint_5.pos: 0.1504921019077301
+      right_joint_0.pos: 0.13065537810325623
+      right_joint_1.pos: 1.3025482892990112
+      right_joint_2.pos: 0.613603413105011
+      right_joint_3.pos: 0.5510414242744446
+      right_joint_4.pos: -0.05054550990462303
+      right_joint_5.pos: -0.056267641484737396
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/task02_pickup_tubes_14D
+      dataset_revision: null
+      dataset_commit: null
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 70
+      n_episodes: 133
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.7195268853888213
+  replay:
+    dataset: kiroaiseoul/replay_base_chain_1025c_basepose
+    episode: 0
+    from_row: 0
+    until_row: 410
+    row_period_s: 0.04907
+- id: s1_align
+  name: align_at_tube_rack
+  executor: base_align
+  terminator:
+    type: timeout
+    timeout_s: 60
+  align:
+    reference_dataset: kiroaiseoul/replay_base_chain_1025c
+    episode: 0
+    frame: 415
+    camera: cam_high
+    landmark_roi: [281, 190, 90, 58]
+    landmark_distance_m: 0.69
+    yaw_tol_deg: 2.0
+    dist_tol_cm: 1.0
+    max_moves: 6
+    coarse_heading: true
+    distance_width_fallback: true
+- id: s2
+  name: pickup_tubes
+  executor: lerobot_policy
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Pick up the two tubes from the rack with both hands
+  terminator:
+    type: classifier
+    timeout_s: 25.0
+    model_path: /home/trossen-ai/stage_classifier/20261025_models/s2  # ⚠ 기기별 경로
+    mode: fire
+    grip:
+      state_names: [left_left_carriage_joint.pos, right_left_carriage_joint.pos]
+      hold_min_m: 0.004
+      hold_max_m: 0.0101
+      settle_s: 0.5
+  precondition: null
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.06656748056411743
+      left_joint_1.pos: 1.2827115058898926
+      left_joint_2.pos: 0.6311513185501099
+      left_joint_3.pos: 0.5308232307434082
+      left_joint_4.pos: -0.1024261862039566
+      left_joint_5.pos: 0.1504921019077301
+      right_joint_0.pos: 0.13065537810325623
+      right_joint_1.pos: 1.3025482892990112
+      right_joint_2.pos: 0.613603413105011
+      right_joint_3.pos: 0.5510414242744446
+      right_joint_4.pos: -0.05054550990462303
+      right_joint_5.pos: -0.056267641484737396
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/task02_pickup_tubes_14D
+      dataset_revision: null
+      dataset_commit: null
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 70
+      n_episodes: 133
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.7195268853888213
+- id: s3
+  name: turn_to_face_beaker
+  executor: base_replay
+  terminator:
+    type: timeout
+    timeout_s: 30
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.290112167596817
+      left_joint_1.pos: 1.358243703842163
+      left_joint_2.pos: 0.44766154885292053
+      left_joint_3.pos: 0.5018310546875
+      left_joint_4.pos: 0.4510948359966278
+      left_joint_5.pos: 0.3229190409183502
+      right_joint_0.pos: 0.5300602912902832
+      right_joint_1.pos: 1.3376439809799194
+      right_joint_2.pos: 0.5220493078231812
+      right_joint_3.pos: 0.4018844962120056
+      right_joint_4.pos: -0.2450980395078659
+      right_joint_5.pos: -0.26951247453689575
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/task04_pour_liquid_from_tubes_to_beaker
+      dataset_revision: v3.0
+      dataset_commit: 6178e4e51f3ed5a089100b5c9b85611ab3ec2dd2
+      policy_path: kiroaiseoul/act_task04_pour_liquid_from_tubes_to_beaker_60000
+      episode_index: 39
+      n_episodes: 130
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.4852680273007755
+  replay:
+    dataset: kiroaiseoul/replay_base_chain_1025c_basepose
+    episode: 0
+    from_row: 506
+    until_row: 730
+    row_period_s: 0.04907
+- id: s3_align
+  name: align_at_beaker
+  executor: base_align
+  terminator:
+    type: timeout
+    timeout_s: 60
+  align:
+    reference_dataset: kiroaiseoul/replay_base_chain_1025c
+    episode: 0
+    frame: 735
+    camera: cam_high
+    landmark_roi: [240, 108, 170, 85]
+    landmark_distance_m: 0.8
+    yaw_tol_deg: 2.0
+    dist_tol_cm: 1.0
+    max_moves: 6
+    coarse_heading: true
+- id: s4
+  name: pour_liquid_from_tubes_to_beaker
+  executor: lerobot_policy
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Pour the liquid from the tubes into the leftmost beaker
+  terminator:
+    type: timeout
+    timeout_s: 19.4
+  precondition: null
+  start_pose:
+    # generated by `python -m stage_runner.start_pose` at 2026-10-26T11:47:38+09:00.
+    # Regenerate instead of hand-editing: the values are episode 74's first frame.
+    # Arm joints only -- the grippers and the base are never commanded by a start pose.
+    positions:
+      left_joint_0.pos: -0.404173344373703
+      left_joint_1.pos: 1.7000458240509033
+      left_joint_2.pos: 0.5098420977592468
+      left_joint_3.pos: 0.7639048099517822
+      left_joint_4.pos: 0.20466163754463196
+      left_joint_5.pos: 0.41294726729393005
+      right_joint_0.pos: 0.5292972922325134
+      right_joint_1.pos: 1.6763943433761597
+      right_joint_2.pos: 0.47589075565338135
+      right_joint_3.pos: 0.8432517051696777
+      right_joint_4.pos: -0.09822995215654373
+      right_joint_5.pos: -0.3114747703075409
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: "kiroaiseoul/recovery_manipulation_14D"
+      dataset_revision: null
+      dataset_commit: null
+      policy_path: "kiroaiseoul/pi0full_bs32_s30k_all11_14D"
+      episode_index: 74
+      n_episodes: 77
+      method: "first_frame_nearest_to_median_std_l2"
+      distance: 1.045695635347852
+      # 리커버리 데이터셋에서 이 단계 지시문으로 거른 77개 에피소드(사람이 넘겨받은 순간의 자세) — 사용자 10/26 「2, 4단계 초기자세를 리커버리 데이터 기준으로」 A안
+      # read from the local copy /home/trossen-ai/.cache/huggingface/lerobot/kiroaiseoul/recovery_manipulation_14D
+- id: s5
+  name: tube_disposal
+  executor: lerobot_policy
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Drop the two empty tubes into the tube disposal tray
+  terminator:
+    type: classifier
+    timeout_s: 12.75
+    model_path: /home/trossen-ai/stage_classifier/20261025_models/s5  # ⚠ 기기별 경로
+    mode: fire
+  precondition: null
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.2630273997783661
+      left_joint_1.pos: 1.3345922231674194
+      left_joint_2.pos: 0.3892957866191864
+      left_joint_3.pos: 0.8230335116386414
+      left_joint_4.pos: -0.1993209719657898
+      left_joint_5.pos: -0.07000076025724411
+      right_joint_0.pos: 0.2294575423002243
+      right_joint_1.pos: 1.413939118385315
+      right_joint_2.pos: 0.4381246566772461
+      right_joint_3.pos: 0.813878059387207
+      right_joint_4.pos: -0.23975738883018494
+      right_joint_5.pos: 0.0036240178160369396
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/task05_tube_disposal
+      dataset_revision: v3.0
+      dataset_commit: b0ac2d568cb5c41ed1b5baf3c9c05e2657f6641d
+      policy_path: kiroaiseoul/act_task05_tube_disposal_60000
+      episode_index: 39
+      n_episodes: 74
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.7712299585121103
+- id: s6
+  name: grab_shake_beaker
+  executor: lerobot_policy
+  release_base_torque: true
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Grab and shake the filled beaker, then move to the front of the fridge
+  terminator:
+    type: grasp
+    timeout_s: 25.0
+    wait_s: 9.1
+    mode: fire
+    grip:
+      state_names: [right_left_carriage_joint.pos]
+  precondition: null
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.30346378684043884
+      left_joint_1.pos: 1.4593347311019897
+      left_joint_2.pos: 0.3404669165611267
+      left_joint_3.pos: 0.7345311641693115
+      left_joint_4.pos: 0.2615014910697937
+      left_joint_5.pos: 0.10891126841306686
+      right_joint_0.pos: 0.39768826961517334
+      right_joint_1.pos: 1.5829328298568726
+      right_joint_2.pos: 0.4835202693939209
+      right_joint_3.pos: 0.6803616285324097
+      right_joint_4.pos: -0.18558785319328308
+      right_joint_5.pos: -0.07610437273979187
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/all11_merged_14D_1741data
+      dataset_revision: main
+      dataset_commit: 67d4dd6486ec1082e20d753c95025040bd1cd3a6
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 664
+      n_episodes: 177
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.0313316270668393
+- id: s6_move
+  name: move_to_the_front_of_the_fridge
+  executor: base_replay
+  terminator:
+    type: timeout
+    timeout_s: 60
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.3549630045890808
+      left_joint_1.pos: 1.5566109418869019
+      left_joint_2.pos: 0.4804684519767761
+      left_joint_3.pos: 0.7116426229476929
+      left_joint_4.pos: 0.44613564014434814
+      left_joint_5.pos: 0.18825818598270416
+      right_joint_0.pos: 0.36449989676475525
+      right_joint_1.pos: 1.3712139129638672
+      right_joint_2.pos: 0.3263523280620575
+      right_joint_3.pos: 0.8669031858444214
+      right_joint_4.pos: -0.06313420087099075
+      right_joint_5.pos: 0.002861066721379757
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/all11_merged_14D_1741data
+      dataset_revision: main
+      dataset_commit: 67d4dd6486ec1082e20d753c95025040bd1cd3a6
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 895
+      n_episodes: 269
+      method: first_frame_nearest_to_median_std_l2
+      distance: 0.8031569987817821
+  replay:
+    dataset: kiroaiseoul/replay_base_chain_1025c_basepose
+    episode: 0
+    from_row: 798
+    until_row: 1385
+    row_period_s: 0.04907
+- id: s6_align
+  name: align_at_fridge
+  executor: base_align
+  terminator:
+    type: timeout
+    timeout_s: 60
+  align:
+    reference_dataset: kiroaiseoul/replay_base_chain_1025c
+    episode: 0
+    frame: 1507
+    camera: cam_high
+    landmark_roi: [185, 0, 290, 195]
+    landmark_distance_m: 0.85
+    yaw_tol_deg: 3.5
+    dist_tol_cm: 1.0
+    max_moves: 6
+    coarse_heading: true
+- id: s7
+  name: open_fridge_door_holding_beaker
+  executor: lerobot_policy
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Open the fridge door while holding the beaker
+  terminator:
+    type: classifier
+    timeout_s: 38.0
+    model_path: /home/trossen-ai/stage_classifier/20261025_models/s7  # ⚠ 기기별 경로
+    mode: fire
+  precondition: null
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.3549630045890808
+      left_joint_1.pos: 1.5566109418869019
+      left_joint_2.pos: 0.4804684519767761
+      left_joint_3.pos: 0.7116426229476929
+      left_joint_4.pos: 0.44613564014434814
+      left_joint_5.pos: 0.18825818598270416
+      right_joint_0.pos: 0.36449989676475525
+      right_joint_1.pos: 1.3712139129638672
+      right_joint_2.pos: 0.3263523280620575
+      right_joint_3.pos: 0.8669031858444214
+      right_joint_4.pos: -0.06313420087099075
+      right_joint_5.pos: 0.002861066721379757
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/all11_merged_14D_1741data
+      dataset_revision: main
+      dataset_commit: 67d4dd6486ec1082e20d753c95025040bd1cd3a6
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 895
+      n_episodes: 269
+      method: first_frame_nearest_to_median_std_l2
+      distance: 0.8031569987817821
+- id: s7_fwd
+  name: forward_5cm_before_beaker_swap
+  executor: base_replay
+  terminator:
+    type: timeout
+    timeout_s: 15
+  replay:
+    dataset: kiroaiseoul/replay_base_chain_1025c_basepose
+    episode: 0
+    from_row: 2104
+    until_row: 2131
+    row_period_s: 0.04907
+- id: s7_align
+  name: align_before_beaker_swap
+  executor: base_align
+  terminator:
+    type: timeout
+    timeout_s: 60
+  align:
+    reference_image: configs/align_refs/20261026_s8start_task08_ep156.png  # repo 루트 기준
+    camera: cam_high
+    landmark_roi: [233, 0, 220, 200]
+    landmark_distance_m: 0.85
+    yaw_tol_deg: 1.5
+    dist_tol_cm: 100.0
+    max_moves: 6
+    coarse_heading: true
+- id: s8
+  name: takeout_and_put_beaker
+  executor: lerobot_policy
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Take out the stored beaker and put the held beaker into the fridge
+  terminator:
+    type: classifier
+    timeout_s: 40.0
+    model_path: /home/trossen-ai/stage_classifier/20261025_models/s8  # ⚠ 기기별 경로
+    mode: fire
+  precondition: null
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.698291003704071
+      left_joint_1.pos: 1.6081101894378662
+      left_joint_2.pos: 0.291638046503067
+      left_joint_3.pos: 1.2876707315444946
+      left_joint_4.pos: -0.4499503970146179
+      left_joint_5.pos: -0.07801175117492676
+      right_joint_0.pos: 0.4655908942222595
+      right_joint_1.pos: 1.3002593517303467
+      right_joint_2.pos: 0.1371404528617859
+      right_joint_3.pos: 1.0465781688690186
+      right_joint_4.pos: 0.5693522691726685
+      right_joint_5.pos: 0.08182650804519653
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/all11_merged_14D_1741data
+      dataset_revision: main
+      dataset_commit: 67d4dd6486ec1082e20d753c95025040bd1cd3a6
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 1188
+      n_episodes: 251
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.2860232390673612
+- id: s8_back
+  name: back_5cm_before_closing_door
+  executor: base_replay
+  terminator:
+    type: timeout
+    timeout_s: 15
+  replay:
+    dataset: kiroaiseoul/replay_base_chain_1025c_basepose
+    episode: 0
+    from_row: 1456
+    until_row: 1508
+    row_period_s: 0.04907
+- id: s9
+  name: close_fridge_door_holding_beaker
+  executor: lerobot_policy
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Close the fridge door while holding the beaker
+  terminator:
+    type: classifier
+    timeout_s: 28.0
+    model_path: /home/trossen-ai/stage_classifier/20261025_models/s9  # ⚠ 기기별 경로
+    mode: fire
+  precondition: null
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.7860303521156311
+      left_joint_1.pos: 1.3773174285888672
+      left_joint_2.pos: 0.06008239835500717
+      left_joint_3.pos: 1.2273975610733032
+      left_joint_4.pos: -0.7337682247161865
+      left_joint_5.pos: -0.05893797054886818
+      right_joint_0.pos: 0.84897381067276
+      right_joint_1.pos: 1.3643473386764526
+      right_joint_2.pos: 0.10929274559020996
+      right_joint_3.pos: 1.1057069301605225
+      right_joint_4.pos: 0.7539864182472229
+      right_joint_5.pos: 0.1340886503458023
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/all11_merged_14D_1741data
+      dataset_revision: main
+      dataset_commit: 67d4dd6486ec1082e20d753c95025040bd1cd3a6
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 1424
+      n_episodes: 250
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.0843730440934327
+- id: s10
+  name: move_to_beaker_shelf
+  executor: base_replay
+  terminator:
+    type: timeout
+    timeout_s: 45
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.2969787120819092
+      left_joint_1.pos: 1.5493628978729248
+      left_joint_2.pos: 0.5403600931167603
+      left_joint_3.pos: 0.8688105344772339
+      left_joint_4.pos: 0.20847637951374054
+      left_joint_5.pos: 0.11654078215360641
+      right_joint_0.pos: 0.3381780683994293
+      right_joint_1.pos: 1.5249484777450562
+      right_joint_2.pos: 0.481612890958786
+      right_joint_3.pos: 0.9782940149307251
+      right_joint_4.pos: -0.13218127191066742
+      right_joint_5.pos: -0.08297093212604523
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/task11_place_beaker_on_the_shelf_14D
+      dataset_revision: null
+      dataset_commit: null
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 37
+      n_episodes: 101
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.2494805324825564
+  replay:
+    dataset: kiroaiseoul/replay_base_chain_1025c_basepose
+    episode: 0
+    from_row: 1623
+    until_row: 2190
+    row_period_s: 0.04907
+- id: s10_align
+  name: align_at_beaker_shelf
+  executor: base_align
+  terminator:
+    type: timeout
+    timeout_s: 60
+  align:
+    reference_dataset: kiroaiseoul/replay_base_chain_1025c
+    episode: 0
+    frame: 2190
+    camera: cam_high
+    landmark_roi: [80, 85, 450, 115]
+    landmark_distance_m: 1.0
+    yaw_tol_deg: 2.0
+    dist_tol_cm: 1.0
+    max_moves: 6
+    coarse_heading: true
+- id: s11
+  name: place_beaker_on_the_shelf
+  executor: lerobot_policy
+  release_base_torque: true
+  policy_path: /home/trossen-ai/models/pi0full_bs32_all11_14D_ft1029_s10k  # ⚠ 기기별 경로
+  instruction: Place the beaker on the shelf
+  terminator:
+    type: classifier
+    timeout_s: 26.0
+    model_path: /home/trossen-ai/stage_classifier/20261025_models/s11  # ⚠ 기기별 경로
+    mode: fire
+  precondition: null
+  start_pose:
+    positions:
+      left_joint_0.pos: -0.2969787120819092
+      left_joint_1.pos: 1.5493628978729248
+      left_joint_2.pos: 0.5403600931167603
+      left_joint_3.pos: 0.8688105344772339
+      left_joint_4.pos: 0.20847637951374054
+      left_joint_5.pos: 0.11654078215360641
+      right_joint_0.pos: 0.3381780683994293
+      right_joint_1.pos: 1.5249484777450562
+      right_joint_2.pos: 0.481612890958786
+      right_joint_3.pos: 0.9782940149307251
+      right_joint_4.pos: -0.13218127191066742
+      right_joint_5.pos: -0.08297093212604523
+    min_goal_time_s: 3.0
+    position_tolerance_rad: 0.05
+    source:
+      dataset_repo_id: kiroaiseoul/task11_place_beaker_on_the_shelf_14D
+      dataset_revision: null
+      dataset_commit: null
+      policy_path: kiroaiseoul/pi0full_bs32_s30k_all11_14D
+      episode_index: 37
+      n_episodes: 101
+      method: first_frame_nearest_to_median_std_l2
+      distance: 1.2494805324825564
+teleop:
+  type: mobileai_leader_teleop
+  id: leader
+  left_arm_ip_address: 192.168.1.3
+  right_arm_ip_address: 192.168.1.2

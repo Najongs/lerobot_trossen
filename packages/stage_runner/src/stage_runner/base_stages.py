@@ -1122,7 +1122,43 @@ class _Align:
             landmark_distance_m=float(self.align.landmark_distance_m),
             width_fallback=bool(self.align.distance_width_fallback),
             coarse_heading=bool(self.align.coarse_heading),
+            edge_heading=bool(self.align.edge_heading),
+            edge_band_px=(
+                int(self.align.edge_band_px[0]),
+                int(self.align.edge_band_px[1]),
+            ),
+            edge_slope_per_deg=float(self.align.edge_slope_per_deg),
+            edge_min_length_px=int(self.align.edge_min_length_px),
+            edge_max_dy_px=int(self.align.edge_max_dy_px),
+            edge_distance=bool(self.align.edge_distance),
+            edge_px_per_m=float(self.align.edge_px_per_m),
         )
+        if self.align.edge_heading or self.align.edge_distance:
+            ref_line = landmark_align.edge_line(
+                self.reference.image,
+                self.params.edge_band_px,
+                self.params.edge_min_length_px,
+            )
+            ref_strip = (
+                None
+                if ref_line is None
+                else landmark_align.edge_strip_y(self.reference.image, ref_line)
+            )
+            # Said at stage start, not at the first measurement: without a line
+            # in the reference the edge estimates can never fire.
+            logger.info(
+                f"stage {self.stage.id!r}: edge heading "
+                f"{'on' if self.align.edge_heading else 'off'}, edge distance "
+                f"{'on' if self.align.edge_distance else 'off'}, band "
+                f"{list(self.params.edge_band_px)} px, reference line "
+                + (
+                    "NOT FOUND -- edge estimates cannot fire"
+                    if ref_line is None
+                    else f"slope {ref_line.slope_deg:+.2f} deg at y {ref_line.y_px:.0f} px, "
+                    f"strip y "
+                    + ("NOT FOUND" if ref_strip is None else f"{ref_strip:.1f} px")
+                )
+            )
         auto = landmark_align.dark_blob_box(self.reference.image)
         self.auto_roi = None if auto is None else [int(value) for value in auto]
         if self.auto_roi != list(roi):
@@ -1318,7 +1354,15 @@ class _Align:
             f"{self._fmt_deg(measurement.heading_yaw_deg)} "
             f"[{measurement.heading_mode}] (fine "
             f"{self._fmt_deg(measurement.yaw_deg)}, {measurement.inliers}/"
-            f"{measurement.matches} inliers), distance "
+            f"{measurement.matches} inliers"
+            + (
+                ""
+                if measurement.edge_slope_deg is None
+                else f"; edge {self._fmt_deg(measurement.edge_yaw_deg)}, slope "
+                f"{measurement.edge_slope_deg:+.2f} vs "
+                f"{measurement.edge_ref_slope_deg:+.2f} deg"
+            )
+            + "), distance "
             f"{self._fmt_cm(measurement.move_m)} "
             f"[{measurement.scale_source}, {measurement.scale_inliers} inliers] "
             f"-> {record['decision']} ({measurement.measure_s:.2f}s)"
@@ -1356,6 +1400,11 @@ class _Align:
         the base still ~10 cm away. Closer, the fine estimate comes back; the
         drive is a correction like any other (divergence, max_moves), and only
         a fine heading can still end the stage aligned.
+
+        An EDGE heading (align.edge_heading) is decided like a fine one: it is
+        a measured slope, not a folded bearing, and on the beaker shelf it
+        agreed with the fine estimate within 0.4 deg (robot PC 1, 2026-11-01),
+        so inside tolerance it can end the stage heading_only or aligned.
         """
         align = self.align
         if not m.heading_usable:
@@ -1375,10 +1424,16 @@ class _Align:
                     f"coarse {m.coarse_yaw_deg:+.2f} deg beyond "
                     f"{self.landmark.MAX_ABS_COARSE_YAW_DEG:.0f} deg"
                 )
+            edge = (
+                "no usable edge line (none in the band, a different line, or "
+                f"beyond {self.landmark.MAX_ABS_YAW_DEG:.0f} deg); "
+                if align.edge_heading
+                else ""
+            )
             return _Ended(
                 OUTCOME_ESTIMATE_UNUSABLE,
                 f"heading not usable at step {len(self.measurements)}: {fine}; "
-                f"{coarse}. Align by hand",
+                f"{edge}{coarse}. Align by hand",
             )
         yaw = float(m.heading_yaw_deg)
         coarse = m.heading_mode == self.landmark.HEADING_COARSE
@@ -1440,7 +1495,16 @@ class _Align:
                     f"distance {move_m * 100:+.1f} cm still outside "
                     f"+-{align.dist_tol_cm:.1f} cm after {self.move_count} moves",
                 )
+            # The divergence baseline is the MEASURED distance, so a capped
+            # step that leaves the base still far reads as progress, not as
+            # "worse than the last drive".
             self.last_drive_move = move_m
+            if m.scale_source == self.landmark.SCALE_EDGE:
+                # An edge distance is not refused past MAX_ABS_MOVE_M (the line
+                # check already guards it): drive at most that much, then
+                # measure heading and distance again (trap 4).
+                cap = self.landmark.MAX_ABS_MOVE_M
+                return MOVE_DRIVE, max(-cap, min(cap, move_m))
             return MOVE_DRIVE, move_m
         return _Ended(
             OUTCOME_ALIGNED,
@@ -1694,6 +1758,11 @@ class _Align:
             "min_turn_rate_rad_s": align.min_turn_rate_rad_s,
             "distance_width_fallback": align.distance_width_fallback,
             "coarse_heading": align.coarse_heading,
+            "edge_heading": align.edge_heading,
+            "edge_band_px": list(align.edge_band_px),
+            "edge_slope_per_deg": align.edge_slope_per_deg,
+            "edge_distance": align.edge_distance,
+            "edge_px_per_m": align.edge_px_per_m,
             "control_time_s": self.plan.control_time_s,
             "measurements": self.measurements,
             "moves": self.moves,

@@ -127,6 +127,14 @@ BLOB_MAX_AREA: int = 40000
 BLOB_MIN_Y: int = 100
 BLOB_MAX_BOTTOM: int = 400
 BLOB_MIN_W: int = 40
+# coarse_yaw_from_rack: a live blob wider or taller than this times the
+# reference rack box is not the rack. Robot PC 1 2026-11-02 (issue 110): the
+# floor shadow under the table, larger than the rack, was taken for it and the
+# base turned 27 deg the wrong way. Over the 389 saved rack-align frames the
+# rack box was 0.86-1.18 x the reference width and 0.84-1.24 x its height; the
+# 11 wrong blobs were >= 1.9 x wide. No lower bound: a far or blurred rack
+# looks smaller and the coarse estimate should still use it.
+BLOB_MAX_SIZE_RATIO: float = 1.5
 
 # The 10/24 constants of heading_align.py. FOR LOGGING ONLY: the stage computes
 # with the intrinsics read off the device at stage start (or given in YAML) and
@@ -145,12 +153,47 @@ FIELD_UP: np.ndarray = np.array([-0.06288349, -0.84574326, -0.52987169])
 # reader branch on them.
 HEADING_FINE: str = "fine"
 HEADING_COARSE: str = "coarse"
-HEADING_MODES: tuple[str, ...] = (HEADING_FINE, HEADING_COARSE)
+HEADING_EDGE: str = "edge"
+HEADING_MODES: tuple[str, ...] = (HEADING_FINE, HEADING_COARSE, HEADING_EDGE)
+
+# Edge heading (AlignParams.edge_heading): the longest near-horizontal line in a
+# band of the frame -- the shelf's bottom rail in front of the beaker shelf --
+# whose image slope turns with the base heading. Measured on the replay run
+# replay_base_chain_1025c frames 2050-2315 against its odometry theta (robot
+# PC 1, 2026-11-01): slope = 0.455 x heading - 1.38 deg, residual sd 0.15 deg,
+# found in 258 of 266 frames. On chain r03's shelf arrival it read -9.3 then
+# -0.9 deg where the fine estimate read -9.26 then -0.76 deg.
+# Lines steeper than this are not the rail (deg).
+EDGE_MAX_ABS_SLOPE_DEG: float = 12.0
+# Canny and probabilistic Hough as measured above.
+EDGE_BLUR: int = 5
+EDGE_CANNY_LOW: int = 30
+EDGE_CANNY_HIGH: int = 90
+EDGE_HOUGH_THRESHOLD: int = 60
+EDGE_HOUGH_MAX_GAP_PX: int = 25
+# The frame height the band and the lengths are given in; other heights scale.
+EDGE_FRAME_HEIGHT_PX: int = 480
+
+# Edge distance (AlignParams.edge_distance): the height of the rail's DARK
+# STRIP, not of the Hough line -- the strip has two edges ~10 px apart and the
+# longest Hough segment flips between them, which moved a standing base's line
+# by 14 px (sd 5.6) on the replay run. The darkest row near the line, column by
+# column, moved 0.7 px (sd 0.11) on the same frames. Against odometry x the
+# strip height moved 254 px/m (frames 2175-2245, residual sd 0.75 px).
+# Rows searched above and below the Hough line, per column (px at 480 high).
+EDGE_STRIP_WINDOW_PX: int = 12
+# Columns sampled every this many px across the middle 70 % of the frame.
+EDGE_STRIP_STEP_PX: int = 4
+# A column with less contrast than this in its window has no strip (grey levels).
+EDGE_STRIP_MIN_CONTRAST: float = 15.0
+# Fewer usable columns than this and no strip height is given.
+EDGE_STRIP_MIN_COLUMNS: int = 20
 
 # scale_source values. Closed for the same reason.
 SCALE_SIFT: str = "sift"
 SCALE_BOX_WIDTH: str = "box_width"
-SCALE_SOURCES: tuple[str, ...] = (SCALE_SIFT, SCALE_BOX_WIDTH)
+SCALE_EDGE: str = "edge"
+SCALE_SOURCES: tuple[str, ...] = (SCALE_SIFT, SCALE_BOX_WIDTH, SCALE_EDGE)
 
 
 @dataclass(frozen=True)
@@ -172,6 +215,27 @@ class AlignParams:
     width_fallback: bool = False
     # Rack-blob heading when the fine estimate is not usable (field f3 on).
     coarse_heading: bool = True
+    # Edge heading when the fine estimate is not usable (off by default): the
+    # slope of the longest near-horizontal line in edge_band_px (y from, y to,
+    # at EDGE_FRAME_HEIGHT_PX) against the same line in the reference, divided
+    # by edge_slope_per_deg (image slope deg per base heading deg). Tried before
+    # the coarse estimate and, unlike it, can end the stage aligned.
+    edge_heading: bool = False
+    edge_band_px: tuple[int, int] = (110, 225)
+    edge_slope_per_deg: float = 0.455
+    edge_min_length_px: int = 180
+    # The live line is refused when its height differs from the reference
+    # line's by more than this (px): a different line (the table's far edge)
+    # has a different slope-per-degree.
+    edge_max_dy_px: int = 80
+    # Edge distance when neither SIFT scale nor the width fallback gives one
+    # (off by default): the rail strip's height against the reference's,
+    # divided by edge_px_per_m (image px per m of forward distance). Its move is
+    # not refused past MAX_ABS_MOVE_M -- the stage drives at most that much per
+    # step and measures again -- because edge_max_dy_px already rejects a
+    # different line.
+    edge_distance: bool = False
+    edge_px_per_m: float = 254.0
 
 
 @dataclass(frozen=True)
@@ -183,7 +247,9 @@ class Measurement:
     usable. ``heading_mode`` and ``heading_yaw_deg`` are what a decision acts on:
     the fine estimate when it is usable, else the coarse one when that is on and
     usable, else None. ``coarse_yaw_deg`` is filled only when the coarse
-    estimate was computed (fine not usable, coarse on).
+    estimate was computed (fine not usable, coarse on). With edge heading on,
+    the edge estimate comes between the two (``edge_*`` fields, filled whenever
+    it was computed: fine not usable, edge on).
 
     ``sift_scale`` is the raw similarity scale whatever its inlier count;
     ``scale`` is the scale the move was computed from (None when distance is not
@@ -207,10 +273,21 @@ class Measurement:
     measure_s: float
     live_png: str | None
     overlay_png: str | None
+    # Edge heading (AlignParams.edge_heading), None when not computed or no
+    # usable line: the yaw it gives, the live and reference line slopes (deg)
+    # and the live line's height at the frame centre (px).
+    edge_yaw_deg: float | None = None
+    edge_slope_deg: float | None = None
+    edge_ref_slope_deg: float | None = None
+    edge_y_px: float | None = None
+    # Edge distance (AlignParams.edge_distance), None when not computed: the
+    # rail strip's height in the live frame minus the reference's (px; positive
+    # = lower in the frame = closer).
+    edge_dy_px: float | None = None
 
     @property
     def heading_usable(self) -> bool:
-        """True when there is SOME heading to act on (fine or coarse)."""
+        """True when there is SOME heading to act on (fine, edge or coarse)."""
         return self.heading_mode is not None
 
     def as_event(self) -> dict[str, Any]:
@@ -338,10 +415,15 @@ def heading_valid(result: tuple[float, int, int] | None) -> bool:
     return inliers >= MIN_INLIERS and abs(yaw) <= MAX_ABS_YAW_DEG
 
 
-def dark_blob_box(image: np.ndarray) -> tuple[int, int, int, int] | None:
+def dark_blob_box(
+    image: np.ndarray, like: tuple[int, int, int, int] | None = None
+) -> tuple[int, int, int, int] | None:
     """Largest near-black blob not touching the top edge (the arms do) - the stage-2 tube rack.
 
-    heading_align.py:139-151, verbatim. (x, y, w, h) or None.
+    heading_align.py:139-151, verbatim. (x, y, w, h) or None. With ``like`` (the
+    reference rack box) a blob wider or taller than BLOB_MAX_SIZE_RATIO times
+    it does not count, so a larger dark patch elsewhere is not taken for the
+    rack.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     dark = cv2.morphologyEx(
@@ -362,6 +444,10 @@ def dark_blob_box(image: np.ndarray) -> tuple[int, int, int, int] | None:
             or w < BLOB_MIN_W
         ):
             continue
+        if like is not None and (
+            w > like[2] * BLOB_MAX_SIZE_RATIO or h > like[3] * BLOB_MAX_SIZE_RATIO
+        ):
+            continue
         if best is None or area > best[4]:
             best = (int(x), int(y), int(w), int(h), int(area))
     return best[:4] if best else None
@@ -376,9 +462,11 @@ def coarse_yaw_from_rack(
     argument. For when SIFT finds too few matches far from the reference. A
     sideways offset of the base is folded in, and the camera pitch is ignored,
     so it only gets the base close enough for the fine estimate (10/24: it
-    agreed with SIFT within 2 deg on 10 frames that were 7-27 deg off).
+    agreed with SIFT within 2 deg on 10 frames that were 7-27 deg off). The
+    live blob may not be much larger than the reference rack (``like``).
     """
-    box_ref, box_live = dark_blob_box(reference), dark_blob_box(live)
+    box_ref = dark_blob_box(reference)
+    box_live = None if box_ref is None else dark_blob_box(live, like=box_ref)
     if box_ref is None or box_live is None:
         return None
 
@@ -391,15 +479,168 @@ def coarse_yaw_from_rack(
     return angle(box_live) - angle(box_ref)
 
 
+@dataclass(frozen=True)
+class EdgeLine:
+    """The longest near-horizontal line in a band: slope (deg), height at centre (px)."""
+
+    slope_deg: float
+    y_px: float
+    length_px: float
+
+
+def edge_line(
+    image: np.ndarray,
+    band_px: tuple[int, int],
+    min_length_px: int,
+) -> EdgeLine | None:
+    """The longest line within EDGE_MAX_ABS_SLOPE_DEG of horizontal in ``band_px``.
+
+    ``image`` is RGB. ``band_px`` and ``min_length_px`` are at
+    EDGE_FRAME_HEIGHT_PX and scale with the frame height. The slope is
+    ``atan2(dy, dx)`` in image coordinates (y down), ``y_px`` the line's height
+    at the frame's horizontal centre. None when no line qualifies.
+    """
+    height, width = image.shape[:2]
+    k = height / EDGE_FRAME_HEIGHT_PX
+    y0 = max(0, int(round(band_px[0] * k)))
+    y1 = min(height, int(round(band_px[1] * k)))
+    if y1 - y0 < 3:
+        return None
+    gray = cv2.cvtColor(image[y0:y1], cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(
+        cv2.GaussianBlur(gray, (EDGE_BLUR, EDGE_BLUR), 0),
+        EDGE_CANNY_LOW,
+        EDGE_CANNY_HIGH,
+    )
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 720,
+        threshold=EDGE_HOUGH_THRESHOLD,
+        minLineLength=max(1, int(round(min_length_px * k))),
+        maxLineGap=max(1, int(round(EDGE_HOUGH_MAX_GAP_PX * k))),
+    )
+    if lines is None:
+        return None
+    best: EdgeLine | None = None
+    for xa, ya, xb, yb in lines[:, 0]:
+        if xb == xa:
+            continue
+        slope = float(np.degrees(np.arctan2(yb - ya, xb - xa)))
+        if abs(slope) > EDGE_MAX_ABS_SLOPE_DEG:
+            continue
+        length = float(np.hypot(xb - xa, yb - ya))
+        if best is None or length > best.length_px:
+            y_mid = (ya + (yb - ya) * (width / 2.0 - xa) / (xb - xa)) + y0
+            best = EdgeLine(slope_deg=slope, y_px=float(y_mid), length_px=length)
+    return best
+
+
+def edge_yaw(
+    reference: np.ndarray, live: np.ndarray, params: AlignParams
+) -> tuple[float, EdgeLine, EdgeLine] | None:
+    """(yaw deg, live line, reference line) from the edge slopes, or None.
+
+    yaw = (live slope - reference slope) / ``params.edge_slope_per_deg``, the
+    same sign as the fine estimate (and odometry theta), so the correction is a
+    turn of ``-yaw``. None when either image has no line, the live line sits
+    more than ``params.edge_max_dy_px`` from the reference line's height (a
+    different line), or the yaw is beyond MAX_ABS_YAW_DEG.
+    """
+    if params.edge_slope_per_deg <= 0:
+        return None
+    ref = edge_line(reference, params.edge_band_px, params.edge_min_length_px)
+    if ref is None:
+        return None
+    cur = edge_line(live, params.edge_band_px, params.edge_min_length_px)
+    if cur is None:
+        return None
+    k = live.shape[0] / EDGE_FRAME_HEIGHT_PX
+    if abs(cur.y_px - ref.y_px) > params.edge_max_dy_px * k:
+        return None
+    yaw = (cur.slope_deg - ref.slope_deg) / params.edge_slope_per_deg
+    if abs(yaw) > MAX_ABS_YAW_DEG:
+        return None
+    return yaw, cur, ref
+
+
+def edge_strip_y(image: np.ndarray, line: EdgeLine) -> float | None:
+    """The rail's dark strip height at the frame centre (px), or None.
+
+    In each sampled column the darkest row within EDGE_STRIP_WINDOW_PX of
+    ``line``; a least-squares line through those rows, refitted without
+    outliers, evaluated at the frame's horizontal centre.
+    """
+    height, width = image.shape[:2]
+    k = height / EDGE_FRAME_HEIGHT_PX
+    window = max(2, int(round(EDGE_STRIP_WINDOW_PX * k)))
+    gray = cv2.GaussianBlur(
+        cv2.cvtColor(image, cv2.COLOR_RGB2GRAY), (EDGE_BLUR, EDGE_BLUR), 0
+    ).astype(float)
+    tilt = np.tan(np.radians(line.slope_deg))
+    xs: list[float] = []
+    ys: list[float] = []
+    step = max(1, int(round(EDGE_STRIP_STEP_PX * k)))
+    for x in range(int(width * 0.15), int(width * 0.85), step):
+        centre = line.y_px + tilt * (x - width / 2.0)
+        top = int(max(0, centre - window))
+        bottom = int(min(height, centre + window + 1))
+        if bottom - top < 5:
+            continue
+        column = gray[top:bottom, x]
+        if column.max() - column.min() < EDGE_STRIP_MIN_CONTRAST:
+            continue
+        xs.append(x - width / 2.0)
+        ys.append(top + float(np.argmin(column)))
+    if len(xs) < EDGE_STRIP_MIN_COLUMNS:
+        return None
+    x_arr, y_arr = np.asarray(xs), np.asarray(ys)
+    a, b = np.polyfit(x_arr, y_arr, 1)
+    residual = np.abs(y_arr - (a * x_arr + b))
+    keep = residual <= max(2.0, float(np.median(residual)) * 3.0)
+    if keep.sum() < EDGE_STRIP_MIN_COLUMNS:
+        return None
+    a, b = np.polyfit(x_arr[keep], y_arr[keep], 1)
+    return float(b)
+
+
+def edge_distance_move(
+    reference: np.ndarray, live: np.ndarray, params: AlignParams
+) -> tuple[float, float] | None:
+    """(forward move m, strip dy px) from the rail strip heights, or None.
+
+    Positive move = drive forward (the strip sits higher in the live frame: the
+    base is farther than in the reference), the sign of distance_move. None when
+    either frame has no line or strip, or the live line is more than
+    ``params.edge_max_dy_px`` from the reference line (a different line).
+    """
+    if params.edge_px_per_m <= 0:
+        return None
+    ref = edge_line(reference, params.edge_band_px, params.edge_min_length_px)
+    cur = edge_line(live, params.edge_band_px, params.edge_min_length_px)
+    if ref is None or cur is None:
+        return None
+    k = live.shape[0] / EDGE_FRAME_HEIGHT_PX
+    if abs(cur.y_px - ref.y_px) > params.edge_max_dy_px * k:
+        return None
+    y_ref = edge_strip_y(reference, ref)
+    y_cur = edge_strip_y(live, cur)
+    if y_ref is None or y_cur is None:
+        return None
+    dy = (y_cur - y_ref) / k
+    return -dy / params.edge_px_per_m, dy
+
+
 def heading_for_step(
     reference: np.ndarray, live: np.ndarray, params: AlignParams
 ) -> tuple[tuple[float, int, int] | None, float | None, str | None, float | None]:
     """(fine result, coarse yaw, mode, yaw to act on) -- heading_align.py:170-185.
 
-    mode "fine" = the SIFT rotation is usable; "coarse" = it is not but the rack
-    blob is (computed only then, and only with ``params.coarse_heading`` on);
-    None = neither. A fine fit that is usable on inliers but beyond
-    MAX_ABS_YAW_DEG also falls through to coarse, as in the field.
+    mode "fine" = the SIFT rotation is usable; "edge" = it is not but the edge
+    line is (only with ``params.edge_heading`` on); "coarse" = neither, but the
+    rack blob is (computed only then, and only with ``params.coarse_heading``
+    on); None = none. A fine fit that is usable on inliers but beyond
+    MAX_ABS_YAW_DEG also falls through, as in the field.
     """
     fine = yaw_between(
         reference, live, params.camera_matrix, params.dist_coeffs, params.up
@@ -407,6 +648,10 @@ def heading_for_step(
     if heading_valid(fine):
         assert fine is not None
         return fine, None, HEADING_FINE, fine[0]
+    if params.edge_heading:
+        edge = edge_yaw(reference, live, params)
+        if edge is not None:
+            return fine, None, HEADING_EDGE, edge[0]
     if not params.coarse_heading:
         return fine, None, None, None
     coarse = coarse_yaw_from_rack(reference, live, params.camera_matrix)
@@ -525,6 +770,13 @@ def measure(
             overlay_png = str(overlay_path)
 
     fine, coarse, mode, heading_yaw = heading_for_step(reference, live, params)
+    # The edge estimate's numbers for the event, whenever it was in play
+    # (recomputed: heading_for_step returns only the yaw it acted on).
+    edge = (
+        edge_yaw(reference, live, params)
+        if params.edge_heading and not heading_valid(fine)
+        else None
+    )
 
     sift = landmark_scale(reference, live, params.landmark_roi)
     sift_scale = None if sift is None else sift[0]
@@ -548,6 +800,15 @@ def measure(
             scale, scale_source = live_box[2] / params.landmark_roi[2], SCALE_BOX_WIDTH
     move_m = None if scale is None else distance_move(scale, params.landmark_distance_m)
     distance_valid = move_m is not None and abs(move_m) <= MAX_ABS_MOVE_M
+    edge_dy_px: float | None = None
+    if not distance_valid and params.edge_distance:
+        # The rail strip, only when the landmark scale gave nothing usable. Not
+        # capped at MAX_ABS_MOVE_M: the stage drives at most that per step.
+        edge_move = edge_distance_move(reference, live, params)
+        if edge_move is not None:
+            move_m, edge_dy_px = edge_move
+            scale, scale_source = None, SCALE_EDGE
+            distance_valid = True
 
     return Measurement(
         yaw_deg=None if fine is None else fine[0],
@@ -567,4 +828,9 @@ def measure(
         measure_s=time.perf_counter() - started,
         live_png=live_png,
         overlay_png=overlay_png,
+        edge_yaw_deg=None if edge is None else float(edge[0]),
+        edge_slope_deg=None if edge is None else edge[1].slope_deg,
+        edge_ref_slope_deg=None if edge is None else edge[2].slope_deg,
+        edge_y_px=None if edge is None else edge[1].y_px,
+        edge_dy_px=edge_dy_px,
     )

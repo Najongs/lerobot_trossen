@@ -162,6 +162,9 @@ def patch_env(tmp_path, monkeypatch):
     monkeypatch.setattr(intervention_patch, "_dataset", None)
     monkeypatch.setattr(intervention_patch, "_saved_this_run", 0)
     monkeypatch.setattr(intervention_patch, "_finalized", False)
+    monkeypatch.setattr(intervention_patch, "_last_gripper_goals", None)
+    # Never speak out loud from a test run on the robot PC.
+    monkeypatch.setattr(intervention_patch, "PLAY_SOUNDS", False)
     # No real align delay in tests.
     monkeypatch.setattr(intervention_patch, "LEADER_ALIGN_MIN_GOAL_TIME_S", 0.0)
     # A short reset that ends by itself unless a test presses a key in it.
@@ -335,6 +338,75 @@ def test_esc_while_recording_saves_and_stops(patch_env):
     assert leader.stage_loops == {"reset": 1, "record": 1}
     assert intervention_patch._dataset.num_episodes == 1
     assert events["stop_recording"]
+
+
+# FakeRobot has no carriage joint; this one arm joint stands in for a gripper.
+STAND_IN_GRIPPER = "right_joint_0.pos"
+OPERATOR_GRIP = 0.012
+
+
+class GrippingLeader(FakeLeader):
+    """The operator closes the stand-in gripper to OPERATOR_GRIP once handed over."""
+
+    def get_action(self) -> dict:
+        if self.stage is not None:
+            self.pose[STAND_IN_GRIPPER] = OPERATOR_GRIP
+        return super().get_action()
+
+
+@pytest.fixture
+def stand_in_gripper(monkeypatch):
+    monkeypatch.setattr(
+        intervention_patch, "_is_gripper", lambda key: key == STAND_IN_GRIPPER
+    )
+
+
+def test_the_takes_last_grip_is_handed_on_once(patch_env, stand_in_gripper):
+    """The take's last command, not the policy's from before the space bar."""
+    robot, leader, events = TorqueRobot(), GrippingLeader(), new_events()
+    eval_dataset = run_policy_episode(robot, leader, SpacePolicy(press_at=5), events)
+
+    assert intervention_patch._dataset.num_episodes == 1
+    # The eval buffer's last row, which a base stage would otherwise re-send,
+    # is the policy's command -- not the operator's grip.
+    last_policy_row = dict(zip(ACTION_NAMES, eval_dataset.frames[-1]["action"]))
+    assert last_policy_row[STAND_IN_GRIPPER] != pytest.approx(OPERATOR_GRIP)
+    assert intervention_patch.take_last_gripper_goals() == {
+        STAND_IN_GRIPPER: pytest.approx(OPERATOR_GRIP)
+    }
+    assert intervention_patch.take_last_gripper_goals() is None
+
+
+def test_a_grip_set_in_the_reset_only_is_read_from_the_leader(
+    patch_env, stand_in_gripper
+):
+    """Esc in the first reset records nothing; the leader's reading is the grip."""
+    robot, events = TorqueRobot(), new_events()
+    leader = GrippingLeader(keys={("reset", 1, 2): "esc"})
+    run_policy_episode(robot, leader, SpacePolicy(press_at=3), events)
+
+    assert intervention_patch._dataset.num_episodes == 0
+    assert intervention_patch.take_last_gripper_goals() == {
+        STAND_IN_GRIPPER: pytest.approx(OPERATOR_GRIP)
+    }
+
+
+def test_no_space_bar_leaves_no_grip_to_hand_on(patch_env, stand_in_gripper):
+    robot, leader, events = TorqueRobot(), GrippingLeader(), new_events()
+    run_policy_episode(robot, leader, QueuePolicy(action_steps=10), events)
+
+    assert intervention_patch.take_last_gripper_goals() is None
+
+
+def test_an_untaken_grip_does_not_leak_into_the_next_episode(
+    patch_env, stand_in_gripper
+):
+    robot, leader, events = TorqueRobot(), GrippingLeader(), new_events()
+    run_policy_episode(robot, leader, SpacePolicy(press_at=5), events)
+    # Nobody took it; the next policy episode runs without a space bar.
+    run_policy_episode(robot, leader, QueuePolicy(action_steps=10), new_events())
+
+    assert intervention_patch.take_last_gripper_goals() is None
 
 
 def test_reset_time_comes_from_the_command_line():
@@ -522,3 +594,70 @@ def test_align_goal_time_ignores_grippers_and_has_a_floor(monkeypatch):
         intervention_patch.align_goal_time(start, {"left_left_carriage_joint.pos": 9.0})
         == 2.0
     )
+
+
+@pytest.fixture
+def spoken(monkeypatch):
+    """The cues _say was asked to speak, in order."""
+    said: list[str] = []
+    monkeypatch.setattr(intervention_patch, "_say", said.append)
+    return said
+
+
+RESET_CUE = "Reset. Take the leader arm"
+
+
+def test_each_boundary_of_a_take_is_spoken(patch_env, spoken):
+    robot, leader, events = TorqueRobot(), FakeLeader(), new_events()
+    run_policy_episode(robot, leader, SpacePolicy(press_at=5), events)
+
+    assert spoken == ["Intervention", RESET_CUE, "Recording", "Saving"]
+
+
+def test_a_discarded_take_is_spoken_before_its_reset(patch_env, spoken):
+    robot, events = TorqueRobot(), new_events()
+    leader = FakeLeader(keys={("record", 1, 2): "left"})
+    run_policy_episode(robot, leader, SpacePolicy(press_at=3), events)
+
+    assert spoken == [
+        "Intervention",
+        RESET_CUE,
+        "Recording",
+        "Discarded",
+        RESET_CUE,
+        "Recording",
+        "Saving",
+    ]
+
+
+def test_esc_in_the_first_reset_says_nothing_was_saved(patch_env, spoken):
+    robot, events = TorqueRobot(), new_events()
+    leader = FakeLeader(keys={("reset", 1, 1): "esc"})
+    run_policy_episode(robot, leader, SpacePolicy(press_at=3), events)
+
+    assert spoken == ["Intervention", RESET_CUE, "Nothing saved"]
+
+
+def test_a_second_space_bar_is_not_spoken_again(patch_env, spoken, monkeypatch):
+    monkeypatch.setattr(intervention_patch, "_policy_events", new_events())
+    monkeypatch.setattr(intervention_patch, "_requested", False)
+    intervention_patch._on_space()
+    intervention_patch._on_space()
+
+    assert spoken == ["Intervention"]
+
+
+def test_a_space_bar_outside_a_policy_episode_is_not_spoken(patch_env, spoken):
+    intervention_patch._on_space()
+
+    assert spoken == []
+
+
+def test_a_cue_that_cannot_be_spoken_never_raises(monkeypatch):
+    from lerobot.utils import utils
+
+    def broken(text, play_sounds):
+        raise OSError("no speech dispatcher")
+
+    monkeypatch.setattr(utils, "log_say", broken)
+    intervention_patch._say("Recording")  # must not raise
